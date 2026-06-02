@@ -149,7 +149,9 @@ export default function AdminPage() {
             <p className="text-xs uppercase tracking-[0.35em] text-[#bd7b83]">
               Sistema interno
             </p>
+
             <h1 className="mt-3 text-4xl font-light">Panel administrativo</h1>
+
             <p className="mt-2 text-[#6d5a58]">
               Sesión activa: {session.user.email}
             </p>
@@ -163,7 +165,7 @@ export default function AdminPage() {
           </button>
         </div>
 
-        <div className="grid gap-5 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
           <a
             href="/admin/clientas"
             className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
@@ -177,15 +179,31 @@ export default function AdminPage() {
             </p>
           </a>
 
-          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+          <a
+            href="/admin/servicios"
+            className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+          >
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-              Próximamente
+              Módulo
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Servicios</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Editar precios, duración, limpieza, descripción y servicios activos.
+            </p>
+          </a>
+
+          <a
+            href="/admin/agenda"
+            className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+          >
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Módulo
             </p>
             <h2 className="mt-3 text-2xl font-light">Agenda</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
-              Vista diaria, semanal y mensual por técnica.
+              Registrar citas, asignar técnica, anticipos y consultar agenda diaria.
             </p>
-          </div>
+          </a>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
@@ -194,6 +212,26 @@ export default function AdminPage() {
             <h2 className="mt-3 text-2xl font-light">Caja</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
               Pagos, anticipos, caja chica y cortes.
+            </p>
+          </div>
+
+          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Próximamente
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Membresías</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Servicios incluidos, vigencia, descuentos y usos por clienta.
+            </p>
+          </div>
+
+          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Próximamente
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Tarjetas de regalo</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Venta, códigos, saldos e historial de uso.
             </p>
           </div>
         </div>
