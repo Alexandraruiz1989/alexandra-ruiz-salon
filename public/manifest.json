@@ -1,0 +1,25 @@
+{
+  "name": "Alexandra Ruiz Salón",
+  "short_name": "AR Salón",
+  "description": "Calculadora de servicios y diseños de Alexandra Ruiz Salón",
+  "start_url": "/calculadora",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fdf8f6",
+  "theme_color": "#bd7b83",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/logo-alexandra-ruiz.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo-alexandra-ruiz.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
