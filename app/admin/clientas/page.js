@@ -406,7 +406,15 @@ export default function ClientasPage() {
                       </div>
 
                       <div className="flex flex-col gap-2 sm:flex-row md:flex-col">
+                        <a
+                          href={`/admin/clientas/${client.id}`}
+                          className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Ver historial
+                        </a>
+
                         <button
+                          type="button"
                           onClick={() => handleEdit(client)}
                           className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
                         >
@@ -416,6 +424,7 @@ export default function ClientasPage() {
                         <a
                           href={`https://wa.me/52${client.phone}`}
                           target="_blank"
+                          rel="noopener noreferrer"
                           className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
                         >
                           WhatsApp
