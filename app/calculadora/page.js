@@ -45,8 +45,8 @@ const baseServices = [
 ];
 
 const perNailExtras = [
-    { name: "Ojo de Gato", price: 5 },
   { name: "Francés / Micro Francés", price: 7 },
+  { name: "Ojo de Gato", price: 5 },
   { name: "Baby Boomer / Ombré", price: 10 },
   { name: "Cromo / Holográfico / Perla", price: 10 },
   { name: "Efecto Azúcar", price: 6 },
@@ -69,7 +69,7 @@ const perPieceExtras = [
 ];
 
 const setExtras = [
-  { name: "Ojo de Gato", price: 40 },
+  { name: "Ojo de Gato Set Completo", price: 40 },
   { name: "Francés Set Completo", price: 60 },
   { name: "Micro Francés Set Completo", price: 60 },
   { name: "Baby Boomer / Ombré Set Completo", price: 80 },
@@ -83,11 +83,20 @@ const setExtras = [
   { name: "Largo Extra", price: 50 },
 ];
 
+const removalExtras = [
+  { name: "Retiro gel externo", price: 70, hasQuantity: false },
+  { name: "Retiro Acrílico", price: 150, hasQuantity: false },
+  { name: "Retiro Acrílico por uña", price: 25, hasQuantity: true },
+  { name: "Retiro Sistema de Gel", price: 100, hasQuantity: false },
+  { name: "Retiro Sistema de Gel por uña", price: 20, hasQuantity: true },
+];
+
 export default function CalculadoraPage() {
   const [selectedService, setSelectedService] = useState(baseServices[0]);
   const [perNailSelected, setPerNailSelected] = useState([]);
   const [perPieceSelected, setPerPieceSelected] = useState([]);
   const [setSelected, setSetSelected] = useState([]);
+  const [removalSelected, setRemovalSelected] = useState([]);
   const [notes, setNotes] = useState("");
 
   const toggleExtra = (extra, list, setList) => {
@@ -135,7 +144,20 @@ export default function CalculadoraPage() {
     [setSelected]
   );
 
-  const extrasTotal = perNailTotal + perPieceTotal + setExtraTotal;
+  const removalTotal = useMemo(
+    () =>
+      removalSelected.reduce((sum, item) => {
+        if (item.hasQuantity) {
+          return sum + item.price * item.quantity;
+        }
+        return sum + item.price;
+      }, 0),
+    [removalSelected]
+  );
+
+  const extrasTotal =
+    perNailTotal + perPieceTotal + setExtraTotal + removalTotal;
+
   const total = serviceSubtotal + extrasTotal;
 
   const summary = `Cotización Alexandra Ruiz Salón
@@ -174,6 +196,19 @@ ${
     : "Sin extras por set"
 }
 
+Retiros:
+${
+  removalSelected.length
+    ? removalSelected
+        .map((item) =>
+          item.hasQuantity
+            ? `${item.name} x ${item.quantity} = $${item.price * item.quantity}`
+            : `${item.name} = $${item.price}`
+        )
+        .join("\n")
+    : "Sin retiros"
+}
+
 Notas:
 ${notes || "Sin notas"}
 
@@ -189,6 +224,7 @@ Total estimado: $${total}`;
     setPerNailSelected([]);
     setPerPieceSelected([]);
     setSetSelected([]);
+    setRemovalSelected([]);
     setNotes("");
   };
 
@@ -205,8 +241,8 @@ Total estimado: $${total}`;
                 Calculadora premium
               </h1>
               <p className="mt-4 max-w-2xl text-[#6d5a58]">
-                Cotiza servicios, diseños y extras de forma elegante, rápida y
-                clara para compartir con tus clientas.
+                Cotiza servicios, diseños, retiros y extras de forma elegante,
+                rápida y clara para compartir con tus clientas.
               </p>
             </div>
 
@@ -258,7 +294,7 @@ Total estimado: $${total}`;
                   setPerNailSelected
                 )
               }
-              showQuantity
+              quantityMode="all"
             />
 
             <ExtraGroup
@@ -277,23 +313,42 @@ Total estimado: $${total}`;
                   setPerPieceSelected
                 )
               }
-              showQuantity
+              quantityMode="all"
             />
 
             <ExtraGroup
               title="Extras por set"
-              description="Opciones que se cobran como un paquete completo."
+              description="Opciones que se cobran como paquete completo."
               extras={setExtras}
               selected={setSelected}
               toggle={(extra) => toggleExtra(extra, setSelected, setSetSelected)}
-              showQuantity={false}
+              quantityMode="none"
+            />
+
+            <ExtraGroup
+              title="Retiros"
+              description="Agrega retiro de gel, acrílico o sistema de gel. Los retiros por uña permiten indicar cantidad."
+              extras={removalExtras}
+              selected={removalSelected}
+              toggle={(extra) =>
+                toggleExtra(extra, removalSelected, setRemovalSelected)
+              }
+              updateQuantity={(name, quantity) =>
+                updateQuantity(
+                  name,
+                  quantity,
+                  removalSelected,
+                  setRemovalSelected
+                )
+              }
+              quantityMode="conditional"
             />
 
             <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
               <h2 className="mb-4 text-2xl font-light">Notas</h2>
               <textarea
                 className="min-h-32 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] p-4 outline-none"
-                placeholder="Ejemplo: tono nude, largo #3, corazones, diseño para evento..."
+                placeholder="Ejemplo: tono nude, largo #3, corazones, retiro por uña..."
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
               />
@@ -309,6 +364,7 @@ Total estimado: $${total}`;
               <p className="text-sm uppercase tracking-[0.25em] text-[#bd7b83]">
                 Total final
               </p>
+
               <p className="mt-2 text-5xl font-light text-[#b26d77]">
                 ${total}
               </p>
@@ -318,18 +374,27 @@ Total estimado: $${total}`;
                   <span>Servicio base</span>
                   <span>${serviceSubtotal}</span>
                 </div>
+
                 <div className="flex items-center justify-between border-b border-[#ead9d5] pb-2">
                   <span>Extras por uña</span>
                   <span>${perNailTotal}</span>
                 </div>
+
                 <div className="flex items-center justify-between border-b border-[#ead9d5] pb-2">
                   <span>Extras por pieza</span>
                   <span>${perPieceTotal}</span>
                 </div>
+
                 <div className="flex items-center justify-between border-b border-[#ead9d5] pb-2">
                   <span>Extras por set</span>
                   <span>${setExtraTotal}</span>
                 </div>
+
+                <div className="flex items-center justify-between border-b border-[#ead9d5] pb-2">
+                  <span>Retiros</span>
+                  <span>${removalTotal}</span>
+                </div>
+
                 <div className="flex items-center justify-between pt-1 font-medium text-[#352829]">
                   <span>Total extras</span>
                   <span>${extrasTotal}</span>
@@ -341,6 +406,7 @@ Total estimado: $${total}`;
               <h3 className="mb-3 text-lg font-medium text-[#352829]">
                 Resumen detallado
               </h3>
+
               <pre className="whitespace-pre-wrap font-sans">{summary}</pre>
             </div>
 
@@ -383,9 +449,16 @@ function ExtraGroup({
   selected,
   toggle,
   updateQuantity,
-  showQuantity,
+  quantityMode = "none",
 }) {
   const isSelected = (name) => selected.some((item) => item.name === name);
+
+  const shouldShowQuantity = (extra, selectedItem) => {
+    if (!selectedItem) return false;
+    if (quantityMode === "all") return true;
+    if (quantityMode === "conditional") return extra.hasQuantity;
+    return false;
+  };
 
   return (
     <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
@@ -423,7 +496,7 @@ function ExtraGroup({
                     </span>
                   </div>
 
-                  {showQuantity && selectedItem && (
+                  {shouldShowQuantity(extra, selectedItem) && (
                     <div className="mt-3 flex items-center gap-3">
                       <span className="text-sm text-[#6d5a58]">Cantidad:</span>
                       <input
