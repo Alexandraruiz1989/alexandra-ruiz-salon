@@ -11,15 +11,18 @@ export default function ClientasPage() {
   const [message, setMessage] = useState("");
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState("");
+  const [editingClientId, setEditingClientId] = useState(null);
 
-  const [form, setForm] = useState({
+  const emptyForm = {
     full_name: "",
     phone: "",
     email: "",
     birthday: "",
     gender: "",
     notes: "",
-  });
+  };
+
+  const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
     const getSession = async () => {
@@ -66,14 +69,24 @@ export default function ClientasPage() {
   };
 
   const resetForm = () => {
+    setForm(emptyForm);
+    setEditingClientId(null);
+  };
+
+  const handleEdit = (client) => {
+    setEditingClientId(client.id);
+    setMessage("");
+
     setForm({
-      full_name: "",
-      phone: "",
-      email: "",
-      birthday: "",
-      gender: "",
-      notes: "",
+      full_name: client.full_name || "",
+      phone: client.phone || "",
+      email: client.email || "",
+      birthday: client.birthday || "",
+      gender: client.gender || "",
+      notes: client.notes || "",
     });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleSubmit = async (event) => {
@@ -87,23 +100,39 @@ export default function ClientasPage() {
       return;
     }
 
-    const newClient = {
+    const clientData = {
       full_name: form.full_name.trim(),
       phone: form.phone.trim(),
       email: form.email.trim() || null,
       birthday: form.birthday || null,
       gender: form.gender || null,
       notes: form.notes.trim() || null,
+      updated_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase.from("clients").insert([newClient]);
+    if (editingClientId) {
+      const { error } = await supabase
+        .from("clients")
+        .update(clientData)
+        .eq("id", editingClientId);
 
-    if (error) {
-      setMessage(`No se pudo guardar la clienta: ${error.message}`);
+      if (error) {
+        setMessage(`No se pudo actualizar la clienta: ${error.message}`);
+      } else {
+        setMessage("Clienta actualizada correctamente ✨");
+        resetForm();
+        await loadClients();
+      }
     } else {
-      setMessage("Clienta registrada correctamente ✨");
-      resetForm();
-      await loadClients();
+      const { error } = await supabase.from("clients").insert([clientData]);
+
+      if (error) {
+        setMessage(`No se pudo guardar la clienta: ${error.message}`);
+      } else {
+        setMessage("Clienta registrada correctamente ✨");
+        resetForm();
+        await loadClients();
+      }
     }
 
     setSaving(false);
@@ -146,7 +175,7 @@ export default function ClientasPage() {
             </p>
             <h1 className="mt-3 text-4xl font-light">Clientas</h1>
             <p className="mt-2 text-sm text-[#6d5a58]">
-              Registra clientas, datos de contacto, cumpleaños y notas.
+              Registra, edita y consulta datos de clientas.
             </p>
           </div>
 
@@ -179,10 +208,18 @@ export default function ClientasPage() {
             className="h-fit rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]"
           >
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-              Nueva clienta
+              {editingClientId ? "Editar clienta" : "Nueva clienta"}
             </p>
 
-            <h2 className="mt-3 text-2xl font-light">Registrar datos</h2>
+            <h2 className="mt-3 text-2xl font-light">
+              {editingClientId ? "Actualizar datos" : "Registrar datos"}
+            </h2>
+
+            {editingClientId && (
+              <div className="mt-4 rounded-2xl bg-[#fcf0ef] p-4 text-sm text-[#8a5f63]">
+                Estás editando una clienta existente.
+              </div>
+            )}
 
             <div className="mt-6 space-y-4">
               <div>
@@ -272,13 +309,29 @@ export default function ClientasPage() {
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={saving}
-              className="mt-6 w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-            >
-              {saving ? "Guardando..." : "Guardar clienta"}
-            </button>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                {saving
+                  ? "Guardando..."
+                  : editingClientId
+                  ? "Guardar cambios"
+                  : "Guardar clienta"}
+              </button>
+
+              {editingClientId && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </form>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
@@ -352,13 +405,22 @@ export default function ClientasPage() {
                         )}
                       </div>
 
-                      <a
-                        href={`https://wa.me/52${client.phone}`}
-                        target="_blank"
-                        className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                      >
-                        WhatsApp
-                      </a>
+                      <div className="flex flex-col gap-2 sm:flex-row md:flex-col">
+                        <button
+                          onClick={() => handleEdit(client)}
+                          className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Editar
+                        </button>
+
+                        <a
+                          href={`https://wa.me/52${client.phone}`}
+                          target="_blank"
+                          className="h-fit rounded-full border border-[#bd7b83] px-4 py-2 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          WhatsApp
+                        </a>
+                      </div>
                     </div>
 
                     {client.notes && (
