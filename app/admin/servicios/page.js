@@ -96,7 +96,6 @@ export default function ServiciosPage() {
   const resetForm = () => {
     setForm(emptyForm);
     setEditingServiceId(null);
-    setMessage("");
   };
 
   const handleEdit = (service) => {
@@ -119,10 +118,9 @@ export default function ServiciosPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const handleSave = async () => {
     setSaving(true);
-    setMessage("");
+    setMessage("Guardando cambios...");
 
     if (!form.category.trim() || !form.name.trim()) {
       setMessage("La categoría y el nombre del servicio son obligatorios.");
@@ -152,28 +150,33 @@ export default function ServiciosPage() {
 
       if (error) {
         setMessage(`No se pudo actualizar el servicio: ${error.message}`);
-      } else {
-        setMessage("Servicio actualizado correctamente ✨");
-        resetForm();
-        await loadServices();
+        setSaving(false);
+        return;
       }
-    } else {
-      const { error } = await supabase.from("services").insert([serviceData]);
 
-      if (error) {
-        setMessage(`No se pudo crear el servicio: ${error.message}`);
-      } else {
-        setMessage("Servicio creado correctamente ✨");
-        resetForm();
-        await loadServices();
-      }
+      await loadServices();
+      resetForm();
+      setMessage("Servicio actualizado correctamente ✨");
+      setSaving(false);
+      return;
     }
 
+    const { error } = await supabase.from("services").insert([serviceData]);
+
+    if (error) {
+      setMessage(`No se pudo crear el servicio: ${error.message}`);
+      setSaving(false);
+      return;
+    }
+
+    await loadServices();
+    resetForm();
+    setMessage("Servicio creado correctamente ✨");
     setSaving(false);
   };
 
   const toggleActive = async (service) => {
-    setMessage("");
+    setMessage("Actualizando estado...");
 
     const { error } = await supabase
       .from("services")
@@ -185,9 +188,15 @@ export default function ServiciosPage() {
 
     if (error) {
       setMessage(`No se pudo cambiar el estado: ${error.message}`);
-    } else {
-      await loadServices();
+      return;
     }
+
+    await loadServices();
+    setMessage(
+      service.active
+        ? "Servicio desactivado correctamente."
+        : "Servicio activado correctamente ✨"
+    );
   };
 
   const handleLogout = async () => {
@@ -241,10 +250,7 @@ export default function ServiciosPage() {
         )}
 
         <div className="grid gap-8 xl:grid-cols-[0.85fr_1.15fr]">
-          <form
-            onSubmit={handleSubmit}
-            className="h-fit rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]"
-          >
+          <div className="h-fit rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
               {editingServiceId ? "Editar servicio" : "Nuevo servicio"}
             </p>
@@ -270,7 +276,6 @@ export default function ServiciosPage() {
                   onChange={handleChange}
                   className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
                   placeholder="Ej. Extensiones de Uñas"
-                  required
                 />
               </div>
 
@@ -284,7 +289,6 @@ export default function ServiciosPage() {
                   onChange={handleChange}
                   className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
                   placeholder="Ej. Softgel"
-                  required
                 />
               </div>
 
@@ -396,7 +400,8 @@ export default function ServiciosPage() {
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <button
-                type="submit"
+                type="button"
+                onClick={handleSave}
                 disabled={saving}
                 className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
               >
@@ -417,7 +422,7 @@ export default function ServiciosPage() {
                 </button>
               )}
             </div>
-          </form>
+          </div>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
