@@ -66,6 +66,13 @@ function timesOverlap(startA, endA, startB, endB) {
   return aStart < bEnd && bStart < aEnd;
 }
 
+function getDayOfWeek(dateString) {
+  if (!dateString) return null;
+
+  const date = new Date(`${dateString}T00:00:00`);
+  return date.getDay();
+}
+
 function getMessageType(message) {
   const text = message.toLowerCase();
 
@@ -77,7 +84,11 @@ function getMessageType(message) {
     text.includes("obligatorias") ||
     text.includes("agrega al menos") ||
     text.includes("validar disponibilidad") ||
-    text.includes("conflicto");
+    text.includes("conflicto") ||
+    text.includes("fuera de horario") ||
+    text.includes("descanso") ||
+    text.includes("bloqueo") ||
+    text.includes("no trabaja");
 
   const isSuccess = text.includes("correctamente");
 
@@ -125,6 +136,8 @@ export default function AgendaPage() {
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [staffSchedules, setStaffSchedules] = useState([]);
+  const [timeBlocks, setTimeBlocks] = useState([]);
   const [selectedDate, setSelectedDate] = useState(todayISO());
 
   const [activeSuggestion, setActiveSuggestion] = useState({});
@@ -159,7 +172,7 @@ export default function AgendaPage() {
 
   useEffect(() => {
     if (!loadingSession) {
-      loadAppointments(selectedDate);
+      loadDateData(selectedDate);
     }
   }, [selectedDate, loadingSession]);
 
@@ -167,7 +180,12 @@ export default function AgendaPage() {
     setLoadingData(true);
     setMessage("");
 
-    const [clientsResult, staffResult, servicesResult] = await Promise.all([
+    const [
+      clientsResult,
+      staffResult,
+      servicesResult,
+      schedulesResult,
+    ] = await Promise.all([
       supabase.from("clients").select("*").order("full_name"),
       supabase.from("staff").select("*").eq("active", true).order("full_name"),
       supabase
@@ -176,6 +194,7 @@ export default function AgendaPage() {
         .eq("active", true)
         .order("category", { ascending: true })
         .order("name", { ascending: true }),
+      supabase.from("staff_schedules").select("*"),
     ]);
 
     if (clientsResult.error) {
@@ -196,52 +215,71 @@ export default function AgendaPage() {
       setServices(servicesResult.data || []);
     }
 
-    await loadAppointments(selectedDate);
+    if (schedulesResult.error) {
+      setMessage(`Error al cargar horarios: ${schedulesResult.error.message}`);
+    } else {
+      setStaffSchedules(schedulesResult.data || []);
+    }
+
+    await loadDateData(selectedDate);
     setLoadingData(false);
   };
 
-  const loadAppointments = async (date) => {
+  const loadDateData = async (date) => {
     setMessage("");
 
-    const { data, error } = await supabase
-      .from("appointments")
-      .select(
-        `
-        *,
-        clients (
-          full_name,
-          phone
-        ),
-        appointment_services (
-          id,
-          service_id,
-          staff_id,
-          service_date,
-          start_time,
-          end_time,
-          duration_minutes,
-          cleanup_minutes,
-          price,
-          quantity,
-          notes,
-          status,
-          services (
-            name,
-            category
+    const [appointmentsResult, blocksResult] = await Promise.all([
+      supabase
+        .from("appointments")
+        .select(
+          `
+          *,
+          clients (
+            full_name,
+            phone
           ),
-          staff (
-            full_name
+          appointment_services (
+            id,
+            service_id,
+            staff_id,
+            service_date,
+            start_time,
+            end_time,
+            duration_minutes,
+            cleanup_minutes,
+            price,
+            quantity,
+            notes,
+            status,
+            services (
+              name,
+              category
+            ),
+            staff (
+              full_name
+            )
           )
+        `
         )
-      `
-      )
-      .eq("appointment_date", date)
-      .order("start_time", { ascending: true });
+        .eq("appointment_date", date)
+        .order("start_time", { ascending: true }),
+      supabase
+        .from("staff_time_blocks")
+        .select("*, staff(full_name)")
+        .eq("block_date", date)
+        .order("start_time", { ascending: true }),
+    ]);
 
-    if (error) {
-      setMessage(`Error al cargar citas: ${error.message}`);
+    if (appointmentsResult.error) {
+      setMessage(`Error al cargar citas: ${appointmentsResult.error.message}`);
     } else {
-      setAppointments(data || []);
+      setAppointments(appointmentsResult.data || []);
+    }
+
+    if (blocksResult.error) {
+      setMessage(`Error al cargar bloqueos: ${blocksResult.error.message}`);
+    } else {
+      setTimeBlocks(blocksResult.data || []);
     }
   };
 
@@ -486,6 +524,120 @@ export default function AgendaPage() {
     return { hasConflict: false, message: "" };
   };
 
+  const checkStaffScheduleConflicts = () => {
+    const appointmentDay = getDayOfWeek(form.appointment_date);
+
+    for (const line of validServiceLines) {
+      const staffName = getStaffName(line.staff_id);
+
+      const schedule = staffSchedules.find(
+        (item) =>
+          item.staff_id === line.staff_id &&
+          Number(item.day_of_week) === Number(appointmentDay)
+      );
+
+      if (!schedule || !schedule.is_active) {
+        return {
+          hasConflict: true,
+          message: `${staffName} no tiene horario activo para ese día. Marca “Forzar cita” si deseas guardarla de todos modos.`,
+        };
+      }
+
+      if (schedule.is_day_off) {
+        return {
+          hasConflict: true,
+          message: `${staffName} tiene marcado ese día como descanso. Marca “Forzar cita” si deseas guardarla de todos modos.`,
+        };
+      }
+
+      const startsBeforeSchedule =
+        timeToMinutes(line.start_time) < timeToMinutes(schedule.start_time);
+
+      const endsAfterSchedule =
+        timeToMinutes(line.end_time) > timeToMinutes(schedule.end_time);
+
+      if (startsBeforeSchedule || endsAfterSchedule) {
+        return {
+          hasConflict: true,
+          message: `${staffName} trabaja de ${formatTime(
+            schedule.start_time
+          )} a ${formatTime(
+            schedule.end_time
+          )}. El servicio ${getServiceName(line.service_id)} queda fuera de horario.`,
+        };
+      }
+
+      if (
+        schedule.has_break &&
+        schedule.break_start &&
+        schedule.break_end &&
+        timesOverlap(
+          line.start_time,
+          line.end_time,
+          schedule.break_start,
+          schedule.break_end
+        )
+      ) {
+        return {
+          hasConflict: true,
+          message: `${staffName} tiene descanso intermedio de ${formatTime(
+            schedule.break_start
+          )} a ${formatTime(
+            schedule.break_end
+          )}. El servicio ${getServiceName(
+            line.service_id
+          )} cae dentro de ese descanso.`,
+        };
+      }
+    }
+
+    return { hasConflict: false, message: "" };
+  };
+
+  const checkTimeBlockConflicts = async () => {
+    const { data, error } = await supabase
+      .from("staff_time_blocks")
+      .select("*, staff(full_name)")
+      .eq("block_date", form.appointment_date);
+
+    if (error) {
+      return {
+        hasConflict: true,
+        message: `No se pudo validar bloqueos: ${error.message}`,
+      };
+    }
+
+    const blocksForDate = data || [];
+
+    for (const line of validServiceLines) {
+      for (const block of blocksForDate) {
+        if (line.staff_id !== block.staff_id) continue;
+
+        const overlap = timesOverlap(
+          line.start_time,
+          line.end_time,
+          block.start_time,
+          block.end_time
+        );
+
+        if (overlap) {
+          return {
+            hasConflict: true,
+            message: `${
+              block.staff?.full_name || "La técnica"
+            } tiene bloqueo "${block.title}" de ${formatTime(
+              block.start_time
+            )} a ${formatTime(
+              block.end_time
+            )}. Marca “Forzar cita” si deseas guardarla de todos modos.`,
+          };
+        }
+      }
+    }
+
+    return { hasConflict: false, message: "" };
+  };
+
   const checkDatabaseConflicts = async () => {
     const { data, error } = await supabase
       .from("appointment_services")
@@ -594,6 +746,22 @@ export default function AgendaPage() {
       return;
     }
 
+    const scheduleConflict = checkStaffScheduleConflicts();
+
+    if (scheduleConflict.hasConflict && !form.force_created) {
+      setMessage(scheduleConflict.message);
+      setSaving(false);
+      return;
+    }
+
+    const timeBlockConflict = await checkTimeBlockConflicts();
+
+    if (timeBlockConflict.hasConflict && !form.force_created) {
+      setMessage(timeBlockConflict.message);
+      setSaving(false);
+      return;
+    }
+
     const databaseConflict = await checkDatabaseConflicts();
 
     if (databaseConflict.hasConflict && !form.force_created) {
@@ -662,7 +830,7 @@ export default function AgendaPage() {
     }
 
     setSelectedDate(form.appointment_date);
-    await loadAppointments(form.appointment_date);
+    await loadDateData(form.appointment_date);
     resetForm();
     setMessage("Cita registrada correctamente ✨");
     setSaving(false);
@@ -690,6 +858,20 @@ export default function AgendaPage() {
       });
     });
 
+    timeBlocks.forEach((block) => {
+      if (!result[block.staff_id]) {
+        result[block.staff_id] = [];
+      }
+
+      result[block.staff_id].push({
+        id: `block-${block.id}`,
+        isBlock: true,
+        start_time: block.start_time,
+        end_time: block.end_time,
+        block,
+      });
+    });
+
     Object.keys(result).forEach((staffId) => {
       result[staffId].sort((a, b) =>
         String(a.start_time || "").localeCompare(String(b.start_time || ""))
@@ -697,7 +879,7 @@ export default function AgendaPage() {
     });
 
     return result;
-  }, [appointments, staff]);
+  }, [appointments, staff, timeBlocks]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -722,7 +904,7 @@ export default function AgendaPage() {
             </p>
             <h1 className="mt-3 text-4xl font-light">Agenda</h1>
             <p className="mt-2 text-sm text-[#6d5a58]">
-              Agenda citas con varios servicios, técnicas y horarios por servicio.
+              Agenda citas validando horarios, descansos, bloqueos y empalmes.
             </p>
           </div>
 
@@ -1213,10 +1395,11 @@ export default function AgendaPage() {
                   Vista diaria
                 </p>
                 <h2 className="mt-3 text-2xl font-light">
-                  Servicios agendados
+                  Servicios, comidas y bloqueos
                 </h2>
                 <p className="mt-2 text-sm text-[#6d5a58]">
-                  Citas del día: {appointments.length}
+                  Citas del día: {appointments.length} · Bloqueos:{" "}
+                  {timeBlocks.length}
                 </p>
               </div>
 
@@ -1248,60 +1431,92 @@ export default function AgendaPage() {
                     <div className="mt-4 space-y-3">
                       {(appointmentsByStaff[person.id] || []).length === 0 ? (
                         <p className="rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
-                          Sin servicios agendados.
+                          Sin servicios ni bloqueos.
                         </p>
                       ) : (
-                        appointmentsByStaff[person.id].map((item) => (
-                          <div
-                            key={item.id}
-                            className="rounded-xl bg-white p-4 text-sm shadow-sm"
-                          >
-                            <p className="font-medium text-[#352829]">
-                              {formatTime(item.start_time)}
-                              {item.end_time
-                                ? ` - ${formatTime(item.end_time)}`
-                                : ""}
-                            </p>
+                        appointmentsByStaff[person.id].map((item) => {
+                          if (item.isBlock) {
+                            return (
+                              <div
+                                key={item.id}
+                                className="rounded-xl border border-[#f1c7c7] bg-red-50 p-4 text-sm shadow-sm"
+                              >
+                                <p className="font-medium text-red-700">
+                                  {formatTime(item.start_time)}
+                                  {item.end_time
+                                    ? ` - ${formatTime(item.end_time)}`
+                                    : ""}
+                                </p>
 
-                            <p className="mt-2 text-[#352829]">
-                              {item.appointment.clients?.full_name ||
-                                "Sin clienta"}
-                            </p>
+                                <p className="mt-2 text-red-700">
+                                  {item.block.title || "Bloqueo"}
+                                </p>
 
-                            <p className="text-[#6d5a58]">
-                              WhatsApp:{" "}
-                              {item.appointment.clients?.phone || "-"}
-                            </p>
+                                <p className="text-red-600">
+                                  Tipo: {item.block.block_type || "bloqueo"}
+                                </p>
 
-                            <p className="mt-2 text-[#352829]">
-                              {item.services?.name || "Servicio"}
-                            </p>
+                                {item.block.notes && (
+                                  <p className="mt-3 rounded-xl bg-white p-3 text-red-700">
+                                    {item.block.notes}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          }
 
-                            <p className="text-[#6d5a58]">
-                              ${item.total_price || item.price || 0}
-                            </p>
-
-                            {item.appointment.deposit_amount > 0 && (
-                              <p className="mt-2 text-[#6d5a58]">
-                                Anticipo cita: $
-                                {item.appointment.deposit_amount} ·{" "}
-                                {item.appointment.deposit_payment_method}
+                          return (
+                            <div
+                              key={item.id}
+                              className="rounded-xl bg-white p-4 text-sm shadow-sm"
+                            >
+                              <p className="font-medium text-[#352829]">
+                                {formatTime(item.start_time)}
+                                {item.end_time
+                                  ? ` - ${formatTime(item.end_time)}`
+                                  : ""}
                               </p>
-                            )}
 
-                            {item.appointment.force_created && (
-                              <p className="mt-2 rounded-full bg-[#fcf0ef] px-3 py-1 text-xs text-[#8a5f63]">
-                                Cita forzada
+                              <p className="mt-2 text-[#352829]">
+                                {item.appointment.clients?.full_name ||
+                                  "Sin clienta"}
                               </p>
-                            )}
 
-                            {item.notes && (
-                              <p className="mt-3 rounded-xl bg-[#fcf7f6] p-3 text-[#6d5a58]">
-                                {item.notes}
+                              <p className="text-[#6d5a58]">
+                                WhatsApp:{" "}
+                                {item.appointment.clients?.phone || "-"}
                               </p>
-                            )}
-                          </div>
-                        ))
+
+                              <p className="mt-2 text-[#352829]">
+                                {item.services?.name || "Servicio"}
+                              </p>
+
+                              <p className="text-[#6d5a58]">
+                                ${item.total_price || item.price || 0}
+                              </p>
+
+                              {item.appointment.deposit_amount > 0 && (
+                                <p className="mt-2 text-[#6d5a58]">
+                                  Anticipo cita: $
+                                  {item.appointment.deposit_amount} ·{" "}
+                                  {item.appointment.deposit_payment_method}
+                                </p>
+                              )}
+
+                              {item.appointment.force_created && (
+                                <p className="mt-2 rounded-full bg-[#fcf0ef] px-3 py-1 text-xs text-[#8a5f63]">
+                                  Cita forzada
+                                </p>
+                              )}
+
+                              {item.notes && (
+                                <p className="mt-3 rounded-xl bg-[#fcf7f6] p-3 text-[#6d5a58]">
+                                  {item.notes}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   </div>

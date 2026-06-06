@@ -175,7 +175,8 @@ export default function AdminPage() {
             </p>
             <h2 className="mt-3 text-2xl font-light">Clientas</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
-              Registrar clientas, teléfono, correo, cumpleaños y consultar historial.
+              Registrar clientas, teléfono, correo, cumpleaños y consultar
+              historial.
             </p>
           </a>
 
@@ -188,7 +189,8 @@ export default function AdminPage() {
             </p>
             <h2 className="mt-3 text-2xl font-light">Servicios</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
-              Editar precios, duración, limpieza, descripción y servicios activos.
+              Editar precios, duración, limpieza, descripción y servicios
+              activos.
             </p>
           </a>
 
@@ -201,7 +203,22 @@ export default function AdminPage() {
             </p>
             <h2 className="mt-3 text-2xl font-light">Agenda</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
-              Registrar citas, asignar técnica, anticipos y consultar agenda diaria.
+              Registrar citas, asignar técnica, anticipos y consultar agenda
+              diaria.
+            </p>
+          </a>
+
+          <a
+            href="/admin/tecnicas"
+            className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+          >
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Módulo
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Técnicas / Personal</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Colaboradores, horarios, descansos, vacaciones, permisos, retardos
+              e incidencias.
             </p>
           </a>
 
@@ -232,6 +249,27 @@ export default function AdminPage() {
             <h2 className="mt-3 text-2xl font-light">Tarjetas de regalo</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
               Venta, códigos, saldos e historial de uso.
+            </p>
+          </div>
+
+          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Próximamente
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Tareas</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Asignar tareas al personal, revisar pendientes y marcar avances.
+            </p>
+          </div>
+
+          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Próximamente
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Reportes</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Citas, servicios, ventas, anticipos, comisiones, clientas,
+              retardos, faltas, permisos, vacaciones y descansos.
             </p>
           </div>
         </div>
