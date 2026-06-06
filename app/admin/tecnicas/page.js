@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import AdminShell from "../components/AdminShell";
 
 const days = [
   { value: 1, label: "Lunes" },
@@ -23,6 +24,14 @@ const incidenceTypes = [
   { value: "incapacidad", label: "Incapacidad" },
   { value: "descanso_trabajado", label: "Descanso trabajado" },
   { value: "otro", label: "Otro" },
+];
+
+const staffMenuItems = [
+  { key: "colaboradores", label: "Colaboradores" },
+  { key: "agregar", label: "Agregar colaborador" },
+  { key: "horarios", label: "Horarios" },
+  { key: "bloqueos", label: "Bloqueos / comida" },
+  { key: "incidencias", label: "Incidencias" },
 ];
 
 function generateTimeOptions() {
@@ -189,7 +198,7 @@ function TimeSelect({ value, onChange }) {
     <select
       value={value}
       onChange={onChange}
-      className="w-full rounded-2xl border border-[#ead2cf] bg-white px-4 py-3 outline-none"
+      className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
     >
       <option value="">Hora</option>
       {timeOptions.map((time) => (
@@ -215,9 +224,37 @@ function SectionToast({ message }) {
   );
 }
 
+function Card({ children, className = "" }) {
+  return (
+    <div className={`rounded-[1.5rem] bg-white p-6 shadow-sm ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function SectionHeader({ eyebrow, title, description, action }) {
+  return (
+    <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+      <div>
+        <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
+          {eyebrow}
+        </p>
+        <h3 className="mt-2 text-2xl font-light">{title}</h3>
+        {description && (
+          <p className="mt-1 text-sm text-[#68777c]">{description}</p>
+        )}
+      </div>
+
+      {action}
+    </div>
+  );
+}
+
 export default function TecnicasPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
+
+  const [activeSection, setActiveSection] = useState("colaboradores");
 
   const [savingStaff, setSavingStaff] = useState(false);
   const [savingWeek, setSavingWeek] = useState(false);
@@ -241,7 +278,6 @@ export default function TecnicasPage() {
     new Date().toISOString().slice(0, 10)
   );
 
-  const [showStaffForm, setShowStaffForm] = useState(false);
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [editingIncidenceId, setEditingIncidenceId] = useState(null);
@@ -357,8 +393,7 @@ export default function TecnicasPage() {
 
     setLoadingData(false);
   };
-
-  const loadWeekScheduleForStaff = (staffId) => {
+    const loadWeekScheduleForStaff = (staffId) => {
     const personSchedules = schedules.filter(
       (schedule) => schedule.staff_id === staffId
     );
@@ -562,23 +597,22 @@ export default function TecnicasPage() {
     });
   };
 
-  const openNewStaffForm = () => {
-    resetStaffForm();
-    setShowStaffForm(true);
-    clearMessagesExcept("staff");
-    setStaffMessage("");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
   const resetStaffForm = () => {
     setStaffForm(emptyStaffForm);
     setEditingStaffId(null);
   };
 
+  const openNewStaffForm = () => {
+    resetStaffForm();
+    clearMessagesExcept("staff");
+    setStaffMessage("");
+    setActiveSection("agregar");
+  };
+
   const closeStaffForm = () => {
     resetStaffForm();
-    setShowStaffForm(false);
     setStaffMessage("");
+    setActiveSection("colaboradores");
   };
 
   const resetBlockForm = () => {
@@ -596,7 +630,6 @@ export default function TecnicasPage() {
 
   const handleEditStaff = (person) => {
     setEditingStaffId(person.id);
-    setShowStaffForm(true);
     clearMessagesExcept("staff");
     setStaffMessage("");
 
@@ -622,6 +655,7 @@ export default function TecnicasPage() {
     });
 
     setWeekStaffId(person.id);
+    setActiveSection("agregar");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -670,16 +704,18 @@ export default function TecnicasPage() {
         .eq("id", editingStaffId);
 
       if (error) {
-        setStaffMessage(`No se pudo actualizar el colaborador: ${error.message}`);
+        setStaffMessage(
+          `No se pudo actualizar el colaborador: ${error.message}`
+        );
         setSavingStaff(false);
         return;
       }
 
       await loadData();
       resetStaffForm();
-      setShowStaffForm(false);
       setStaffMessage("Colaborador actualizado correctamente ✨");
       setSavingStaff(false);
+      setActiveSection("colaboradores");
       return;
     }
 
@@ -693,9 +729,9 @@ export default function TecnicasPage() {
 
     await loadData();
     resetStaffForm();
-    setShowStaffForm(false);
     setStaffMessage("Colaborador creado correctamente ✨");
     setSavingStaff(false);
+    setActiveSection("colaboradores");
   };
 
   const toggleStaffActive = async (person) => {
@@ -722,7 +758,8 @@ export default function TecnicasPage() {
         : "Colaborador activado correctamente ✨"
     );
   };
-    const handleSaveWeekSchedule = async () => {
+
+  const handleSaveWeekSchedule = async () => {
     setSavingWeek(true);
     clearMessagesExcept("schedule");
     setScheduleMessage("Guardando horario semanal...");
@@ -790,6 +827,7 @@ export default function TecnicasPage() {
     });
 
     setBlockDateFilter(block.block_date || blockDateFilter);
+    setActiveSection("bloqueos");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -857,8 +895,7 @@ export default function TecnicasPage() {
     setBlockMessage("Bloqueo creado correctamente ✨");
     setSavingBlock(false);
   };
-
-  const deleteBlock = async (block) => {
+    const deleteBlock = async (block) => {
     clearMessagesExcept("list");
     setListMessage("Eliminando bloqueo...");
 
@@ -895,6 +932,7 @@ export default function TecnicasPage() {
       notes: incidence.notes || "",
     });
 
+    setActiveSection("incidencias");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -990,398 +1028,635 @@ export default function TecnicasPage() {
     setListMessage("Incidencia eliminada correctamente.");
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = "/admin";
-  };
-
   if (loadingSession) {
     return (
-      <main className="min-h-screen bg-[#fdf8f6] px-6 py-10 text-[#352829]">
+      <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
         <p>Cargando...</p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-[#fcf7f6] to-[#f6e9e6] px-4 py-8 text-[#352829] md:px-8">
-      <section className="mx-auto max-w-7xl">
-        <div className="mb-8 flex flex-col justify-between gap-4 rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.08)] md:flex-row md:items-center">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-[#bd7b83]">
-              Sistema interno
-            </p>
-            <h1 className="mt-3 text-4xl font-light">Técnicas / Personal</h1>
-            <p className="mt-2 text-sm text-[#6d5a58]">
-              Colaboradores, horarios, descansos, comisiones, cumpleaños,
-              vacaciones e incidencias.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <a
-              href="/admin"
-              className="rounded-full border border-[#bd7b83] px-6 py-3 text-center text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-            >
-              Volver al panel
-            </a>
-
-            <button
-              onClick={handleLogout}
-              className="rounded-full bg-[#f2e4e1] px-6 py-3 text-[#8a5f63] transition hover:bg-[#edd8d4]"
-            >
-              Cerrar sesión
-            </button>
-          </div>
+    <AdminShell
+      title="Técnicas / Personal"
+      subtitle="Colaboradores, horarios, descansos, comisiones, vacaciones e incidencias."
+      activeModule="tecnicas"
+      menuItems={staffMenuItems}
+      activeSection={activeSection}
+      setActiveSection={setActiveSection}
+    >
+      {listMessage && (
+        <div
+          className={`mb-6 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+            listMessage
+          )}`}
+        >
+          {listMessage}
         </div>
+      )}
 
-        {listMessage && (
-          <div
-            className={`mb-6 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
-              listMessage
-            )}`}
-          >
-            {listMessage}
-          </div>
-        )}
+      <div className="mb-6 grid gap-4 md:grid-cols-4">
+        <Card>
+          <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+            Colaboradores
+          </p>
+          <p className="mt-3 text-4xl font-light">{staff.length}</p>
+        </Card>
 
-        <div className="mb-8 grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-              Incidencias
-            </p>
-            <p className="mt-2 text-3xl font-light">{incidenceSummary.total}</p>
-          </div>
+        <Card>
+          <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+            Incidencias
+          </p>
+          <p className="mt-3 text-4xl font-light">{incidenceSummary.total}</p>
+        </Card>
 
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-              Retardos
-            </p>
-            <p className="mt-2 text-3xl font-light">
-              {incidenceSummary.retardo || 0}
-            </p>
-            <p className="text-sm text-[#6d5a58]">
-              {incidenceSummary.minutesLate} min acumulados
-            </p>
-          </div>
+        <Card>
+          <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+            Retardos
+          </p>
+          <p className="mt-3 text-4xl font-light">
+            {incidenceSummary.retardo || 0}
+          </p>
+          <p className="mt-2 text-sm text-[#68777c]">
+            {incidenceSummary.minutesLate} min acumulados
+          </p>
+        </Card>
 
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-              Faltas
-            </p>
-            <p className="mt-2 text-3xl font-light">
-              {incidenceSummary.falta || 0}
-            </p>
-          </div>
+        <Card>
+          <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+            Vacaciones
+          </p>
+          <p className="mt-3 text-4xl font-light">
+            {incidenceSummary.vacaciones || 0}
+          </p>
+        </Card>
+      </div>
 
-          <div className="rounded-2xl bg-white p-5 shadow-sm">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-              Vacaciones
-            </p>
-            <p className="mt-2 text-3xl font-light">
-              {incidenceSummary.vacaciones || 0}
-            </p>
-          </div>
-        </div>
+      {activeSection === "colaboradores" && (
+        <Card>
+          <SectionHeader
+            eyebrow="Personal"
+            title="Colaboradores registrados"
+            description={`Total: ${staff.length}`}
+            action={
+              <button
+                type="button"
+                onClick={openNewStaffForm}
+                className="rounded-full bg-[#bd7b83] px-6 py-3 text-sm text-white transition hover:opacity-90"
+              >
+                Agregar colaborador
+              </button>
+            }
+          />
 
-        <div className="grid gap-8 xl:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-8">
-            {!showStaffForm && (
-              <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-                <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                      Alta de personal
-                    </p>
-                    <h2 className="mt-3 text-2xl font-light">
-                      Agregar colaborador
-                    </h2>
-                    <p className="mt-2 text-sm text-[#6d5a58]">
-                      Presiona el botón para abrir el formulario completo de alta.
-                    </p>
-                  </div>
+          <input
+            value={staffSearch}
+            onChange={(event) => setStaffSearch(event.target.value)}
+            className="mb-6 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+            placeholder="Buscar colaborador..."
+          />
 
-                  <button
-                    type="button"
-                    onClick={openNewStaffForm}
-                    className="rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90"
+          {loadingData ? (
+            <p className="text-sm text-[#68777c]">Cargando...</p>
+          ) : filteredStaff.length === 0 ? (
+            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+              No hay colaboradores registrados.
+            </div>
+          ) : (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {filteredStaff.map((person) => {
+                const vacationSummary = getVacationSummary(person);
+
+                return (
+                  <div
+                    key={person.id}
+                    className={`rounded-2xl border p-5 ${
+                      person.active
+                        ? "border-[#dde3e6] bg-[#fdfefe]"
+                        : "border-[#dde3e6] bg-[#f4f5f6] opacity-70"
+                    }`}
                   >
-                    Agregar colaborador
-                  </button>
+                    <div className="flex flex-col justify-between gap-4 md:flex-row">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="h-4 w-4 rounded-full"
+                            style={{
+                              backgroundColor: person.color || "#bd7b83",
+                            }}
+                          />
+                          <h3 className="text-xl font-light">
+                            {person.full_name}
+                          </h3>
+                        </div>
+
+                        <p className="mt-2 text-sm text-[#68777c]">
+                          Rol: {person.role || "tecnica"}
+                        </p>
+
+                        <p className="text-sm text-[#68777c]">
+                          Comisión servicios:{" "}
+                          {person.service_commission_percentage ??
+                            person.commission_percentage ??
+                            0}
+                          %
+                        </p>
+
+                        <p className="text-sm text-[#68777c]">
+                          Comisión productos:{" "}
+                          {person.product_commission_percentage || 0}%
+                        </p>
+
+                        {person.birthday && (
+                          <p className="mt-2 text-sm text-[#68777c]">
+                            Cumpleaños: {person.birthday}
+                          </p>
+                        )}
+
+                        {person.hire_date && (
+                          <p className="text-sm text-[#68777c]">
+                            Ingreso: {person.hire_date} ·{" "}
+                            {vacationSummary.yearsWorked} año(s)
+                          </p>
+                        )}
+
+                        <div className="mt-3 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                          <p className="font-medium text-[#263238]">
+                            Vacaciones
+                          </p>
+                          <p>
+                            Derecho: {vacationSummary.entitledDays} días ·
+                            Usados: {vacationSummary.usedDays} · Disponibles:{" "}
+                            {vacationSummary.availableDays}
+                          </p>
+                        </div>
+
+                        {person.email && (
+                          <p className="mt-2 text-sm text-[#68777c]">
+                            Correo: {person.email}
+                          </p>
+                        )}
+
+                        {person.phone && (
+                          <p className="text-sm text-[#68777c]">
+                            Teléfono: {person.phone}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex min-w-36 flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditStaff(person)}
+                          className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleStaffActive(person)}
+                          className="rounded-full bg-[#f7eeee] px-4 py-2 text-sm text-[#8a5f63] transition hover:bg-[#edd8d4]"
+                        >
+                          {person.active ? "Desactivar" : "Activar"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeSection === "agregar" && (
+        <Card>
+          <SectionHeader
+            eyebrow={editingStaffId ? "Editar colaborador" : "Nuevo colaborador"}
+            title={editingStaffId ? "Actualizar datos" : "Crear colaborador"}
+            description="Captura datos generales, comisiones, color de agenda y notas internas."
+          />
+
+          <div className="space-y-4">
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Nombre *
+              </label>
+              <input
+                name="full_name"
+                value={staffForm.full_name}
+                onChange={handleStaffChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Ej. Laura Canul"
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Correo
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  value={staffForm.email}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="correo@email.com"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Teléfono
+                </label>
+                <input
+                  name="phone"
+                  value={staffForm.phone}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="9991234567"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Cumpleaños
+                </label>
+                <input
+                  type="date"
+                  name="birthday"
+                  value={staffForm.birthday}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Fecha de ingreso
+                </label>
+                <input
+                  type="date"
+                  name="hire_date"
+                  value={staffForm.hire_date}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Rol
+                </label>
+                <input
+                  name="role"
+                  value={staffForm.role}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="tecnica"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Color agenda
+                </label>
+                <input
+                  type="color"
+                  name="color"
+                  value={staffForm.color}
+                  onChange={handleStaffChange}
+                  className="h-12 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-2 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Comisión servicios %
+                </label>
+                <input
+                  type="number"
+                  name="service_commission_percentage"
+                  value={staffForm.service_commission_percentage}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="Ej. 30"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Comisión productos %
+                </label>
+                <input
+                  type="number"
+                  name="product_commission_percentage"
+                  value={staffForm.product_commission_percentage}
+                  onChange={handleStaffChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="Ej. 10"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <input
+                name="commission_notes"
+                value={staffForm.commission_notes}
+                onChange={handleStaffChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Notas comisión servicios"
+              />
+
+              <input
+                name="product_commission_notes"
+                value={staffForm.product_commission_notes}
+                onChange={handleStaffChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Notas comisión productos"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Ajuste vacaciones
+              </label>
+              <input
+                type="number"
+                name="vacation_days_adjustment"
+                value={staffForm.vacation_days_adjustment}
+                onChange={handleStaffChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="0"
+              />
+            </div>
+
+            <label className="flex items-center gap-2 rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
+              <input
+                type="checkbox"
+                name="active"
+                checked={staffForm.active}
+                onChange={handleStaffChange}
+              />
+              Colaborador activo
+            </label>
+
+            <textarea
+              name="vacation_notes"
+              value={staffForm.vacation_notes}
+              onChange={handleStaffChange}
+              className="min-h-20 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Notas de vacaciones..."
+            />
+
+            <textarea
+              name="notes"
+              value={staffForm.notes}
+              onChange={handleStaffChange}
+              className="min-h-24 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Notas internas..."
+            />
+          </div>
+
+          <div className="mt-6">
+            <SectionToast message={staffMessage} />
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={handleSaveStaff}
+                disabled={savingStaff}
+                className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                {savingStaff
+                  ? "Guardando..."
+                  : editingStaffId
+                  ? "Guardar cambios"
+                  : "Crear colaborador"}
+              </button>
+
+              <button
+                type="button"
+                onClick={closeStaffForm}
+                className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
+            {activeSection === "horarios" && (
+        <Card>
+          <SectionHeader
+            eyebrow="Horario semanal"
+            title="Configurar días y descansos"
+            description="Elige una colaboradora y configura sus horarios, descansos fijos y horario cortado."
+          />
+
+          <div className="mb-6">
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Colaborador *
+            </label>
+            <select
+              value={weekStaffId}
+              onChange={(event) => setWeekStaffId(event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+            >
+              <option value="">Seleccionar colaborador</option>
+              {staff.map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.full_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-4">
+            {weekSchedule.map((day, index) => (
+              <div
+                key={day.day_of_week}
+                className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] p-4"
+              >
+                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+                  <h3 className="text-lg font-light">{day.label}</h3>
+
+                  <div className="flex flex-wrap gap-3 text-sm text-[#68777c]">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={day.is_active}
+                        onChange={(event) =>
+                          handleWeekChange(
+                            index,
+                            "is_active",
+                            event.target.checked
+                          )
+                        }
+                      />
+                      Trabaja
+                    </label>
+
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={day.is_day_off}
+                        onChange={(event) =>
+                          handleWeekChange(
+                            index,
+                            "is_day_off",
+                            event.target.checked
+                          )
+                        }
+                      />
+                      Día de descanso
+                    </label>
+
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={day.has_break}
+                        disabled={day.is_day_off}
+                        onChange={(event) =>
+                          handleWeekChange(
+                            index,
+                            "has_break",
+                            event.target.checked
+                          )
+                        }
+                      />
+                      Descanso intermedio / horario cortado
+                    </label>
+                  </div>
                 </div>
 
-                {staffMessage && (
-                  <div className="mt-5">
-                    <SectionToast message={staffMessage} />
+                {day.is_active && !day.is_day_off && (
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#68777c]">
+                        Entrada
+                      </label>
+                      <TimeSelect
+                        value={day.start_time}
+                        onChange={(event) =>
+                          handleWeekChange(
+                            index,
+                            "start_time",
+                            event.target.value
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#68777c]">
+                        Salida
+                      </label>
+                      <TimeSelect
+                        value={day.end_time}
+                        onChange={(event) =>
+                          handleWeekChange(
+                            index,
+                            "end_time",
+                            event.target.value
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                 )}
+
+                {day.is_active && day.has_break && !day.is_day_off && (
+                  <div className="mt-4 rounded-2xl bg-white p-4">
+                    <p className="mb-3 text-sm text-[#8a5f63]">
+                      Descanso intermedio o corte de horario
+                    </p>
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Inicio descanso
+                        </label>
+                        <TimeSelect
+                          value={day.break_start}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "break_start",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Fin descanso
+                        </label>
+                        <TimeSelect
+                          value={day.break_end}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "break_end",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {day.is_day_off && (
+                  <p className="mt-4 rounded-xl bg-white p-3 text-sm text-[#8a5f63]">
+                    Este día está marcado como descanso.
+                  </p>
+                )}
               </div>
-            )}
+            ))}
+          </div>
 
-            {showStaffForm && (
-              <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-                <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                  {editingStaffId ? "Editar colaborador" : "Nuevo colaborador"}
-                </p>
+          <div className="mt-6">
+            <SectionToast message={scheduleMessage} />
 
-                <h2 className="mt-3 text-2xl font-light">
-                  {editingStaffId ? "Actualizar datos" : "Crear colaborador"}
-                </h2>
+            <button
+              type="button"
+              onClick={handleSaveWeekSchedule}
+              disabled={savingWeek}
+              className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+            >
+              {savingWeek ? "Guardando..." : "Guardar horario semanal"}
+            </button>
+          </div>
+        </Card>
+      )}
 
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Nombre *
-                    </label>
-                    <input
-                      name="full_name"
-                      value={staffForm.full_name}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Ej. Laura Canul"
-                    />
-                  </div>
+      {activeSection === "bloqueos" && (
+        <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Card>
+            <SectionHeader
+              eyebrow="Bloqueos movibles"
+              title={editingBlockId ? "Editar bloqueo" : "Crear bloqueo"}
+              description="Registra comida, descanso o bloqueo personal para evitar agendar en ese espacio."
+            />
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Correo
-                      </label>
-                      <input
-                        type="email"
-                        name="email"
-                        value={staffForm.email}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="correo@email.com"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Teléfono
-                      </label>
-                      <input
-                        name="phone"
-                        value={staffForm.phone}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="9991234567"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Cumpleaños
-                      </label>
-                      <input
-                        type="date"
-                        name="birthday"
-                        value={staffForm.birthday}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Fecha de ingreso
-                      </label>
-                      <input
-                        type="date"
-                        name="hire_date"
-                        value={staffForm.hire_date}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Rol
-                      </label>
-                      <input
-                        name="role"
-                        value={staffForm.role}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="tecnica"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Ajuste vacaciones
-                      </label>
-                      <input
-                        type="number"
-                        name="vacation_days_adjustment"
-                        value={staffForm.vacation_days_adjustment}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="0"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Color
-                      </label>
-                      <input
-                        type="color"
-                        name="color"
-                        value={staffForm.color}
-                        onChange={handleStaffChange}
-                        className="h-12 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-2 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Comisión por servicios %
-                      </label>
-                      <input
-                        type="number"
-                        name="service_commission_percentage"
-                        value={staffForm.service_commission_percentage}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="Ej. 30"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Comisión por productos %
-                      </label>
-                      <input
-                        type="number"
-                        name="product_commission_percentage"
-                        value={staffForm.product_commission_percentage}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="Ej. 10"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Notas comisión servicios
-                      </label>
-                      <input
-                        name="commission_notes"
-                        value={staffForm.commission_notes}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="Ej. Aplica solo en servicios realizados"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#6d5a58]">
-                        Notas comisión productos
-                      </label>
-                      <input
-                        name="product_commission_notes"
-                        value={staffForm.product_commission_notes}
-                        onChange={handleStaffChange}
-                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                        placeholder="Ej. Aplica en productos vendidos"
-                      />
-                    </div>
-                  </div>
-
-                  <label className="flex items-center gap-2 rounded-2xl bg-[#fcf7f6] p-4 text-sm text-[#6d5a58]">
-                    <input
-                      type="checkbox"
-                      name="active"
-                      checked={staffForm.active}
-                      onChange={handleStaffChange}
-                    />
-                    Colaborador activo
-                  </label>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Notas de vacaciones
-                    </label>
-                    <textarea
-                      name="vacation_notes"
-                      value={staffForm.vacation_notes}
-                      onChange={handleStaffChange}
-                      className="min-h-20 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Notas sobre vacaciones, acuerdos, permisos..."
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Notas internas
-                    </label>
-                    <textarea
-                      name="notes"
-                      value={staffForm.notes}
-                      onChange={handleStaffChange}
-                      className="min-h-24 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Notas internas..."
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <SectionToast message={staffMessage} />
-
-                  <div className="flex flex-col gap-3 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={handleSaveStaff}
-                      disabled={savingStaff}
-                      className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-                    >
-                      {savingStaff
-                        ? "Guardando..."
-                        : editingStaffId
-                        ? "Guardar cambios"
-                        : "Crear colaborador"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={closeStaffForm}
-                      className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                Horario semanal
-              </p>
-
-              <h2 className="mt-3 text-2xl font-light">
-                Configurar días y descansos
-              </h2>
-
-              <div className="mt-6">
-                <label className="mb-2 block text-sm text-[#6d5a58]">
-                  Colaborador *
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Colaborador
                 </label>
                 <select
-                  value={weekStaffId}
-                  onChange={(event) => setWeekStaffId(event.target.value)}
-                  className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                  name="staff_id"
+                  value={blockForm.staff_id}
+                  onChange={handleBlockChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                 >
                   <option value="">Seleccionar colaborador</option>
                   {staff.map((person) => (
@@ -1391,769 +1666,128 @@ export default function TecnicasPage() {
                   ))}
                 </select>
               </div>
-                            <div className="mt-6 space-y-4">
-                {weekSchedule.map((day, index) => (
-                  <div
-                    key={day.day_of_week}
-                    className="rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] p-4"
-                  >
-                    <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                      <h3 className="text-lg font-light">{day.label}</h3>
 
-                      <div className="flex flex-wrap gap-3 text-sm text-[#6d5a58]">
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={day.is_active}
-                            onChange={(event) =>
-                              handleWeekChange(
-                                index,
-                                "is_active",
-                                event.target.checked
-                              )
-                            }
-                          />
-                          Trabaja
-                        </label>
-
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={day.is_day_off}
-                            onChange={(event) =>
-                              handleWeekChange(
-                                index,
-                                "is_day_off",
-                                event.target.checked
-                              )
-                            }
-                          />
-                          Día de descanso
-                        </label>
-
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={day.has_break}
-                            disabled={day.is_day_off}
-                            onChange={(event) =>
-                              handleWeekChange(
-                                index,
-                                "has_break",
-                                event.target.checked
-                              )
-                            }
-                          />
-                          Descanso intermedio / horario cortado
-                        </label>
-                      </div>
-                    </div>
-
-                    {day.is_active && !day.is_day_off && (
-                      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                        <div>
-                          <label className="mb-2 block text-sm text-[#6d5a58]">
-                            Entrada
-                          </label>
-                          <TimeSelect
-                            value={day.start_time}
-                            onChange={(event) =>
-                              handleWeekChange(
-                                index,
-                                "start_time",
-                                event.target.value
-                              )
-                            }
-                          />
-                        </div>
-
-                        <div>
-                          <label className="mb-2 block text-sm text-[#6d5a58]">
-                            Salida
-                          </label>
-                          <TimeSelect
-                            value={day.end_time}
-                            onChange={(event) =>
-                              handleWeekChange(
-                                index,
-                                "end_time",
-                                event.target.value
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {day.is_active && day.has_break && !day.is_day_off && (
-                      <div className="mt-4 rounded-2xl bg-white p-4">
-                        <p className="mb-3 text-sm text-[#8a5f63]">
-                          Descanso intermedio o corte de horario
-                        </p>
-
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          <div>
-                            <label className="mb-2 block text-sm text-[#6d5a58]">
-                              Inicio descanso
-                            </label>
-                            <TimeSelect
-                              value={day.break_start}
-                              onChange={(event) =>
-                                handleWeekChange(
-                                  index,
-                                  "break_start",
-                                  event.target.value
-                                )
-                              }
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-2 block text-sm text-[#6d5a58]">
-                              Fin descanso
-                            </label>
-                            <TimeSelect
-                              value={day.break_end}
-                              onChange={(event) =>
-                                handleWeekChange(
-                                  index,
-                                  "break_end",
-                                  event.target.value
-                                )
-                              }
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {day.is_day_off && (
-                      <p className="mt-4 rounded-xl bg-white p-3 text-sm text-[#8a5f63]">
-                        Este día está marcado como descanso.
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-6">
-                <SectionToast message={scheduleMessage} />
-
-                <button
-                  type="button"
-                  onClick={handleSaveWeekSchedule}
-                  disabled={savingWeek}
-                  className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-                >
-                  {savingWeek ? "Guardando..." : "Guardar horario semanal"}
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                Bloqueos movibles
-              </p>
-
-              <h2 className="mt-3 text-2xl font-light">
-                Comida, descanso o bloqueo personal
-              </h2>
-
-              <div className="mt-6 space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="mb-2 block text-sm text-[#6d5a58]">
-                    Colaborador
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Fecha
                   </label>
-                  <select
-                    name="staff_id"
-                    value={blockForm.staff_id}
-                    onChange={handleBlockChange}
-                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  >
-                    <option value="">Seleccionar colaborador</option>
-                    {staff.map((person) => (
-                      <option key={person.id} value={person.id}>
-                        {person.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-4">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Fecha
-                    </label>
-                    <input
-                      type="date"
-                      name="block_date"
-                      value={blockForm.block_date}
-                      onChange={handleBlockChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Inicio
-                    </label>
-                    <TimeSelect
-                      value={blockForm.start_time}
-                      onChange={(event) =>
-                        handleBlockChange({
-                          target: {
-                            name: "start_time",
-                            value: event.target.value,
-                          },
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Fin
-                    </label>
-                    <TimeSelect
-                      value={blockForm.end_time}
-                      onChange={(event) =>
-                        handleBlockChange({
-                          target: {
-                            name: "end_time",
-                            value: event.target.value,
-                          },
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Tipo
-                    </label>
-                    <select
-                      name="block_type"
-                      value={blockForm.block_type}
-                      onChange={handleBlockChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    >
-                      <option value="comida">Comida</option>
-                      <option value="descanso">Descanso</option>
-                      <option value="personal">Personal</option>
-                      <option value="bloqueo">Bloqueo</option>
-                    </select>
-                  </div>
-                </div>
-
-                <input
-                  name="title"
-                  value={blockForm.title}
-                  onChange={handleBlockChange}
-                  className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Título del bloqueo"
-                />
-
-                <textarea
-                  name="notes"
-                  value={blockForm.notes}
-                  onChange={handleBlockChange}
-                  className="min-h-20 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Notas del bloqueo..."
-                />
-              </div>
-
-              <div className="mt-6">
-                <SectionToast message={blockMessage} />
-
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={handleSaveBlock}
-                    disabled={savingBlock}
-                    className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-                  >
-                    {savingBlock
-                      ? "Guardando..."
-                      : editingBlockId
-                      ? "Guardar bloqueo"
-                      : "Crear bloqueo"}
-                  </button>
-
-                  {editingBlockId && (
-                    <button
-                      type="button"
-                      onClick={resetBlockForm}
-                      className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                    >
-                      Cancelar
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                Incidencias y ausencias
-              </p>
-
-              <h2 className="mt-3 text-2xl font-light">
-                Vacaciones, permisos, faltas y retardos
-              </h2>
-
-              <div className="mt-6 space-y-4">
-                <div>
-                  <label className="mb-2 block text-sm text-[#6d5a58]">
-                    Colaborador
-                  </label>
-                  <select
-                    name="staff_id"
-                    value={incidenceForm.staff_id}
-                    onChange={handleIncidenceChange}
-                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  >
-                    <option value="">Seleccionar colaborador</option>
-                    {staff.map((person) => (
-                      <option key={person.id} value={person.id}>
-                        {person.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Tipo de incidencia
-                    </label>
-                    <select
-                      name="event_type"
-                      value={incidenceForm.event_type}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    >
-                      {incidenceTypes.map((type) => (
-                        <option key={type.value} value={type.value}>
-                          {type.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Estado
-                    </label>
-                    <select
-                      name="status"
-                      value={incidenceForm.status}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    >
-                      <option value="programada">Programada</option>
-                      <option value="tomada">Tomada</option>
-                      <option value="cancelada">Cancelada</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-4">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Fecha inicio
-                    </label>
-                    <input
-                      type="date"
-                      name="start_date"
-                      value={incidenceForm.start_date}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Fecha fin
-                    </label>
-                    <input
-                      type="date"
-                      name="end_date"
-                      value={incidenceForm.end_date}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Días registrados
-                    </label>
-                    <input
-                      type="number"
-                      name="days_taken"
-                      value={incidenceForm.days_taken}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Días"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Minutos de retardo
-                    </label>
-                    <input
-                      type="number"
-                      name="minutes_late"
-                      value={incidenceForm.minutes_late}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Minutos"
-                    />
-                  </div>
-                </div>
-
-                <label className="flex items-center gap-2 rounded-2xl bg-[#fcf7f6] p-4 text-sm text-[#6d5a58]">
                   <input
-                    type="checkbox"
-                    name="affects_vacation_balance"
-                    checked={incidenceForm.affects_vacation_balance}
-                    onChange={handleIncidenceChange}
+                    type="date"
+                    name="block_date"
+                    value={blockForm.block_date}
+                    onChange={handleBlockChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                   />
-                  Descuenta del saldo de vacaciones
-                </label>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Motivo
-                    </label>
-                    <input
-                      name="reason"
-                      value={incidenceForm.reason}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="Motivo"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Descuento económico opcional
-                    </label>
-                    <input
-                      type="number"
-                      name="discount_amount"
-                      value={incidenceForm.discount_amount}
-                      onChange={handleIncidenceChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="0"
-                    />
-                  </div>
                 </div>
 
-                <textarea
-                  name="notes"
-                  value={incidenceForm.notes}
-                  onChange={handleIncidenceChange}
-                  className="min-h-20 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Notas..."
-                />
-              </div>
-
-              <div className="mt-6">
-                <SectionToast message={incidenceMessage} />
-
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={handleSaveIncidence}
-                    disabled={savingIncidence}
-                    className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-                  >
-                    {savingIncidence
-                      ? "Guardando..."
-                      : editingIncidenceId
-                      ? "Guardar incidencia"
-                      : "Registrar incidencia"}
-                  </button>
-
-                  {editingIncidenceId && (
-                    <button
-                      type="button"
-                      onClick={resetIncidenceForm}
-                      className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                    >
-                      Cancelar
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-8">
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                    Personal
-                  </p>
-                  <h2 className="mt-3 text-2xl font-light">
-                    Colaboradores registrados
-                  </h2>
-                  <p className="mt-2 text-sm text-[#6d5a58]">
-                    Total: {staff.length}
-                  </p>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Tipo
+                  </label>
+                  <select
+                    name="block_type"
+                    value={blockForm.block_type}
+                    onChange={handleBlockChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  >
+                    <option value="comida">Comida</option>
+                    <option value="descanso">Descanso</option>
+                    <option value="personal">Personal</option>
+                    <option value="bloqueo">Bloqueo</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Inicio
+                  </label>
+                  <TimeSelect
+                    value={blockForm.start_time}
+                    onChange={(event) =>
+                      handleBlockChange({
+                        target: {
+                          name: "start_time",
+                          value: event.target.value,
+                        },
+                      })
+                    }
+                  />
                 </div>
 
-                <button
-                  onClick={loadData}
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                >
-                  Actualizar
-                </button>
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Fin
+                  </label>
+                  <TimeSelect
+                    value={blockForm.end_time}
+                    onChange={(event) =>
+                      handleBlockChange({
+                        target: {
+                          name: "end_time",
+                          value: event.target.value,
+                        },
+                      })
+                    }
+                  />
+                </div>
               </div>
 
               <input
-                value={staffSearch}
-                onChange={(event) => setStaffSearch(event.target.value)}
-                className="mt-6 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                placeholder="Buscar colaborador..."
+                name="title"
+                value={blockForm.title}
+                onChange={handleBlockChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Título del bloqueo"
               />
 
-              <div className="mt-6 space-y-4">
-                {loadingData ? (
-                  <p className="text-sm text-[#6d5a58]">Cargando...</p>
-                ) : filteredStaff.length === 0 ? (
-                  <div className="rounded-2xl bg-[#fcf7f6] p-5 text-sm text-[#6d5a58]">
-                    No hay colaboradores registrados.
-                  </div>
-                ) : (
-                  filteredStaff.map((person) => {
-                    const vacationSummary = getVacationSummary(person);
+              <textarea
+                name="notes"
+                value={blockForm.notes}
+                onChange={handleBlockChange}
+                className="min-h-24 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Notas del bloqueo..."
+              />
+            </div>
 
-                    return (
-                      <div
-                        key={person.id}
-                        className={`rounded-2xl border p-5 ${
-                          person.active
-                            ? "border-[#ead2cf] bg-[#fdf8f6]"
-                            : "border-[#ead2cf] bg-[#f5eeee] opacity-70"
-                        }`}
-                      >
-                        <div className="flex flex-col justify-between gap-4 md:flex-row">
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <span
-                                className="h-4 w-4 rounded-full"
-                                style={{
-                                  backgroundColor: person.color || "#bd7b83",
-                                }}
-                              />
-                              <h3 className="text-xl font-light">
-                                {person.full_name}
-                              </h3>
-                            </div>
+            <div className="mt-6">
+              <SectionToast message={blockMessage} />
 
-                            <p className="mt-2 text-sm text-[#6d5a58]">
-                              Rol: {person.role || "tecnica"}
-                            </p>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={handleSaveBlock}
+                  disabled={savingBlock}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                >
+                  {savingBlock
+                    ? "Guardando..."
+                    : editingBlockId
+                    ? "Guardar bloqueo"
+                    : "Crear bloqueo"}
+                </button>
 
-                            <p className="text-sm text-[#6d5a58]">
-                              Comisión servicios:{" "}
-                              {person.service_commission_percentage ??
-                                person.commission_percentage ??
-                                0}
-                              %
-                            </p>
-
-                            <p className="text-sm text-[#6d5a58]">
-                              Comisión productos:{" "}
-                              {person.product_commission_percentage || 0}%
-                            </p>
-
-                            {person.commission_notes && (
-                              <p className="mt-2 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
-                                Servicios: {person.commission_notes}
-                              </p>
-                            )}
-
-                            {person.product_commission_notes && (
-                              <p className="mt-2 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
-                                Productos: {person.product_commission_notes}
-                              </p>
-                            )}
-
-                            {person.birthday && (
-                              <p className="mt-2 text-sm text-[#6d5a58]">
-                                Cumpleaños: {person.birthday}
-                              </p>
-                            )}
-
-                            {person.hire_date && (
-                              <p className="text-sm text-[#6d5a58]">
-                                Ingreso: {person.hire_date} ·{" "}
-                                {vacationSummary.yearsWorked} año(s)
-                              </p>
-                            )}
-
-                            <div className="mt-3 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
-                              <p className="font-medium text-[#352829]">
-                                Vacaciones
-                              </p>
-                              <p>
-                                Derecho: {vacationSummary.entitledDays} días ·
-                                Usados: {vacationSummary.usedDays} ·
-                                Disponibles: {vacationSummary.availableDays}
-                              </p>
-                            </div>
-
-                            {person.email && (
-                              <p className="mt-2 text-sm text-[#6d5a58]">
-                                Correo: {person.email}
-                              </p>
-                            )}
-
-                            {person.phone && (
-                              <p className="text-sm text-[#6d5a58]">
-                                Teléfono: {person.phone}
-                              </p>
-                            )}
-
-                            <div className="mt-4 rounded-xl bg-white p-3">
-                              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                                Horario semanal
-                              </p>
-
-                              <div className="mt-2 space-y-1 text-sm text-[#6d5a58]">
-                                {(schedulesByStaff[person.id] || []).length ===
-                                0 ? (
-                                  <p>Sin horarios registrados.</p>
-                                ) : (
-                                  schedulesByStaff[person.id].map(
-                                    (schedule) => (
-                                      <div
-                                        key={schedule.id}
-                                        className="rounded-lg bg-[#fcf7f6] px-3 py-2"
-                                      >
-                                        <span>
-                                          {getDayLabel(schedule.day_of_week)} ·{" "}
-                                          {schedule.is_day_off
-                                            ? "Descanso"
-                                            : `${formatTime(
-                                                schedule.start_time
-                                              )} - ${formatTime(
-                                                schedule.end_time
-                                              )}`}
-                                          {schedule.has_break &&
-                                            !schedule.is_day_off &&
-                                            ` · Descanso ${formatTime(
-                                              schedule.break_start
-                                            )} - ${formatTime(
-                                              schedule.break_end
-                                            )}`}
-                                          {!schedule.is_active
-                                            ? " · Inactivo"
-                                            : ""}
-                                        </span>
-                                      </div>
-                                    )
-                                  )
-                                )}
-                              </div>
-                            </div>
-
-                            {(incidencesByStaff[person.id] || []).length >
-                              0 && (
-                              <div className="mt-4 rounded-xl bg-white p-3">
-                                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                                  Incidencias registradas
-                                </p>
-
-                                <div className="mt-2 space-y-2 text-sm text-[#6d5a58]">
-                                  {incidencesByStaff[person.id].map(
-                                    (incidence) => (
-                                      <div
-                                        key={incidence.id}
-                                        className="flex flex-col justify-between gap-2 rounded-lg bg-[#fcf7f6] px-3 py-2 sm:flex-row"
-                                      >
-                                        <span>
-                                          {getIncidenceLabel(
-                                            incidence.event_type
-                                          )} · {incidence.start_date} a{" "}
-                                          {incidence.end_date} ·{" "}
-                                          {incidence.days_taken} día(s)
-                                          {incidence.minutes_late > 0
-                                            ? ` · ${incidence.minutes_late} min retardo`
-                                            : ""}{" "}
-                                          · {incidence.status}
-                                        </span>
-
-                                        <div className="flex gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              handleEditIncidence(incidence)
-                                            }
-                                            className="text-xs text-[#bd7b83]"
-                                          >
-                                            Editar
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              deleteIncidence(incidence)
-                                            }
-                                            className="text-xs text-red-600"
-                                          >
-                                            Eliminar
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex min-w-36 flex-col gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleEditStaff(person)}
-                              className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                            >
-                              Editar
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleStaffActive(person)}
-                              className="rounded-full bg-[#f2e4e1] px-4 py-2 text-sm text-[#8a5f63] transition hover:bg-[#edd8d4]"
-                            >
-                              {person.active ? "Desactivar" : "Activar"}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
+                {editingBlockId && (
+                  <button
+                    type="button"
+                    onClick={resetBlockForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar
+                  </button>
                 )}
               </div>
             </div>
+          </Card>
 
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                    Bloqueos del día
-                  </p>
-                  <h2 className="mt-3 text-2xl font-light">
-                    Comidas y descansos
-                  </h2>
-                </div>
-
+          <Card>
+            <SectionHeader
+              eyebrow="Bloqueos del día"
+              title="Comidas y descansos"
+              description="Consulta los bloqueos registrados para la fecha elegida."
+              action={
                 <input
                   type="date"
                   value={blockDateFilter}
@@ -2164,70 +1798,336 @@ export default function TecnicasPage() {
                       block_date: event.target.value,
                     }));
                   }}
-                  className="rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                  className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                 />
-              </div>
+              }
+            />
 
-              <div className="mt-6 space-y-4">
-                {filteredBlocks.length === 0 ? (
-                  <div className="rounded-2xl bg-[#fcf7f6] p-5 text-sm text-[#6d5a58]">
-                    No hay bloqueos para esta fecha.
-                  </div>
-                ) : (
-                  filteredBlocks.map((block) => (
-                    <div
-                      key={block.id}
-                      className="rounded-2xl border border-[#ead2cf] bg-[#fdf8f6] p-5"
-                    >
-                      <div className="flex flex-col justify-between gap-4 md:flex-row">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-                            {block.block_type}
+            <div className="space-y-4">
+              {filteredBlocks.length === 0 ? (
+                <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+                  No hay bloqueos para esta fecha.
+                </div>
+              ) : (
+                filteredBlocks.map((block) => (
+                  <div
+                    key={block.id}
+                    className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+                  >
+                    <div className="flex flex-col justify-between gap-4 md:flex-row">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                          {block.block_type}
+                        </p>
+
+                        <h3 className="mt-2 text-xl font-light">
+                          {block.title}
+                        </h3>
+
+                        <p className="mt-2 text-sm text-[#68777c]">
+                          {block.staff?.full_name || "Colaborador"} ·{" "}
+                          {formatTime(block.start_time)} -{" "}
+                          {formatTime(block.end_time)}
+                        </p>
+
+                        {block.notes && (
+                          <p className="mt-3 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                            {block.notes}
                           </p>
+                        )}
+                      </div>
 
-                          <h3 className="mt-2 text-xl font-light">
-                            {block.title}
-                          </h3>
+                      <div className="flex min-w-36 flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditBlock(block)}
+                          className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Editar
+                        </button>
 
-                          <p className="mt-2 text-sm text-[#6d5a58]">
-                            {block.staff?.full_name || "Colaborador"} ·{" "}
-                            {formatTime(block.start_time)} -{" "}
-                            {formatTime(block.end_time)}
-                          </p>
-
-                          {block.notes && (
-                            <p className="mt-3 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
-                              {block.notes}
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex min-w-36 flex-col gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleEditBlock(block)}
-                            className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                          >
-                            Editar
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => deleteBlock(block)}
-                            className="rounded-full bg-red-50 px-4 py-2 text-sm text-red-600 transition hover:bg-red-100"
-                          >
-                            Eliminar
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => deleteBlock(block)}
+                          className="rounded-full bg-red-50 px-4 py-2 text-sm text-red-600 transition hover:bg-red-100"
+                        >
+                          Eliminar
+                        </button>
                       </div>
                     </div>
-                  ))
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {activeSection === "incidencias" && (
+        <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Card>
+            <SectionHeader
+              eyebrow="Incidencias y ausencias"
+              title={
+                editingIncidenceId ? "Editar incidencia" : "Registrar incidencia"
+              }
+              description="Registra vacaciones, permisos, faltas, retardos, descansos trabajados u otros movimientos."
+            />
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Colaborador
+                </label>
+                <select
+                  name="staff_id"
+                  value={incidenceForm.staff_id}
+                  onChange={handleIncidenceChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                >
+                  <option value="">Seleccionar colaborador</option>
+                  {staff.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.full_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Tipo de incidencia
+                  </label>
+                  <select
+                    name="event_type"
+                    value={incidenceForm.event_type}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  >
+                    {incidenceTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Estado
+                  </label>
+                  <select
+                    name="status"
+                    value={incidenceForm.status}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  >
+                    <option value="programada">Programada</option>
+                    <option value="tomada">Tomada</option>
+                    <option value="cancelada">Cancelada</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Fecha inicio
+                  </label>
+                  <input
+                    type="date"
+                    name="start_date"
+                    value={incidenceForm.start_date}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Fecha fin
+                  </label>
+                  <input
+                    type="date"
+                    name="end_date"
+                    value={incidenceForm.end_date}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Días registrados
+                  </label>
+                  <input
+                    type="number"
+                    name="days_taken"
+                    value={incidenceForm.days_taken}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                    placeholder="Días"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Minutos de retardo
+                  </label>
+                  <input
+                    type="number"
+                    name="minutes_late"
+                    value={incidenceForm.minutes_late}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                    placeholder="Minutos"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Descuento opcional
+                  </label>
+                  <input
+                    type="number"
+                    name="discount_amount"
+                    value={incidenceForm.discount_amount}
+                    onChange={handleIncidenceChange}
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
+                <input
+                  type="checkbox"
+                  name="affects_vacation_balance"
+                  checked={incidenceForm.affects_vacation_balance}
+                  onChange={handleIncidenceChange}
+                />
+                Descuenta del saldo de vacaciones
+              </label>
+
+              <input
+                name="reason"
+                value={incidenceForm.reason}
+                onChange={handleIncidenceChange}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Motivo"
+              />
+
+              <textarea
+                name="notes"
+                value={incidenceForm.notes}
+                onChange={handleIncidenceChange}
+                className="min-h-24 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Notas..."
+              />
+            </div>
+
+            <div className="mt-6">
+              <SectionToast message={incidenceMessage} />
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={handleSaveIncidence}
+                  disabled={savingIncidence}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                >
+                  {savingIncidence
+                    ? "Guardando..."
+                    : editingIncidenceId
+                    ? "Guardar incidencia"
+                    : "Registrar incidencia"}
+                </button>
+
+                {editingIncidenceId && (
+                  <button
+                    type="button"
+                    onClick={resetIncidenceForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar
+                  </button>
                 )}
               </div>
             </div>
-          </div>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              eyebrow="Historial"
+              title="Incidencias registradas"
+              description="Vacaciones, permisos, faltas, retardos y otros movimientos del personal."
+            />
+
+            <div className="space-y-4">
+              {incidences.length === 0 ? (
+                <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+                  No hay incidencias registradas.
+                </div>
+              ) : (
+                incidences.map((incidence) => (
+                  <div
+                    key={incidence.id}
+                    className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+                  >
+                    <div className="flex flex-col justify-between gap-4 md:flex-row">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                          {getIncidenceLabel(incidence.event_type)}
+                        </p>
+
+                        <h3 className="mt-2 text-xl font-light">
+                          {incidence.staff?.full_name || "Colaborador"}
+                        </h3>
+
+                        <p className="mt-2 text-sm text-[#68777c]">
+                          {incidence.start_date} a {incidence.end_date} ·{" "}
+                          {incidence.days_taken} día(s)
+                          {incidence.minutes_late > 0
+                            ? ` · ${incidence.minutes_late} min retardo`
+                            : ""}{" "}
+                          · {incidence.status}
+                        </p>
+
+                        {incidence.reason && (
+                          <p className="mt-3 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                            {incidence.reason}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex min-w-36 flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditIncidence(incidence)}
+                          className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteIncidence(incidence)}
+                          className="rounded-full bg-red-50 px-4 py-2 text-sm text-red-600 transition hover:bg-red-100"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
         </div>
-      </section>
-    </main>
+      )}
+    </AdminShell>
   );
 }
