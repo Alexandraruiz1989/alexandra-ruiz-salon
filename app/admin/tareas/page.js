@@ -176,6 +176,24 @@ export default function TareasPage() {
     setLoadingData(false);
   };
 
+  const createTaskNotification = async (task) => {
+    if (!task.staff_id) return { error: null };
+
+    const notificationData = {
+      staff_id: task.staff_id,
+      title: "Nueva tarea asignada",
+      message: `Se te asignó la tarea: ${task.title}${
+        task.due_date ? ` · Fecha límite: ${task.due_date}` : ""
+      }`,
+      notification_type: "tarea",
+      related_table: "staff_tasks",
+      related_id: task.id,
+      is_read: false,
+    };
+
+    return await supabase.from("notifications").insert([notificationData]);
+  };
+
   const filteredTasks = useMemo(() => {
     const term = search.toLowerCase().trim();
 
@@ -308,12 +326,16 @@ export default function TareasPage() {
 
     const { data: sessionData } = await supabase.auth.getSession();
 
-    const { error } = await supabase.from("staff_tasks").insert([
-      {
-        ...taskData,
-        created_by: sessionData.session?.user?.email || null,
-      },
-    ]);
+    const { data: createdTask, error } = await supabase
+      .from("staff_tasks")
+      .insert([
+        {
+          ...taskData,
+          created_by: sessionData.session?.user?.email || null,
+        },
+      ])
+      .select()
+      .single();
 
     if (error) {
       setMessage(`No se pudo crear la tarea: ${error.message}`);
@@ -321,9 +343,25 @@ export default function TareasPage() {
       return;
     }
 
+    const notificationResult = await createTaskNotification(createdTask);
+
     await loadData();
     resetForm();
-    setMessage("Tarea creada correctamente ✨");
+
+    if (notificationResult.error) {
+      setMessage(
+        `Tarea creada correctamente, pero no se pudo crear la notificación: ${notificationResult.error.message}`
+      );
+      setSaving(false);
+      return;
+    }
+
+    setMessage(
+      createdTask.staff_id
+        ? "Tarea creada correctamente y notificación interna generada ✨"
+        : "Tarea creada correctamente ✨"
+    );
+
     setSaving(false);
   };
 
@@ -396,8 +434,8 @@ export default function TareasPage() {
             </p>
             <h1 className="mt-3 text-4xl font-light">Tareas</h1>
             <p className="mt-2 text-sm text-[#6d5a58]">
-              Asigna pendientes al personal, da seguimiento y marca tareas como
-              completadas.
+              Asigna pendientes al personal, da seguimiento y genera
+              notificaciones internas.
             </p>
           </div>
 

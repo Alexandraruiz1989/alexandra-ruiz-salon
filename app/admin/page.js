@@ -11,24 +11,46 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   useEffect(() => {
     const getSession = async () => {
       const { data } = await supabase.auth.getSession();
       setSession(data.session);
       setLoading(false);
+
+      if (data.session) {
+        await loadUnreadNotifications();
+      }
     };
 
     getSession();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       setSession(newSession);
+
+      if (newSession) {
+        await loadUnreadNotifications();
+      } else {
+        setUnreadNotifications(0);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const loadUnreadNotifications = async () => {
+    const { count, error } = await supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("is_read", false);
+
+    if (!error) {
+      setUnreadNotifications(count || 0);
+    }
+  };
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -44,6 +66,7 @@ export default function AdminPage() {
       setMessage(`No se pudo iniciar sesión: ${error.message}`);
     } else {
       setMessage("Sesión iniciada correctamente.");
+      await loadUnreadNotifications();
     }
 
     setLoginLoading(false);
@@ -52,6 +75,7 @@ export default function AdminPage() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setSession(null);
+    setUnreadNotifications(0);
   };
 
   if (loading) {
@@ -157,12 +181,32 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <button
-            onClick={handleLogout}
-            className="rounded-full border border-[#bd7b83] px-6 py-3 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-          >
-            Cerrar sesión
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <a
+              href="/admin/notificaciones"
+              className={`relative flex h-12 w-12 items-center justify-center rounded-full border transition ${
+                unreadNotifications > 0
+                  ? "animate-pulse border-[#d6007f] bg-[#d6007f] text-white shadow-[0_0_25px_rgba(214,0,127,0.45)]"
+                  : "border-[#bd7b83] bg-white text-[#bd7b83] hover:bg-[#bd7b83] hover:text-white"
+              }`}
+              title="Notificaciones"
+            >
+              <span className="text-xl">🔔</span>
+
+              {unreadNotifications > 0 && (
+                <span className="absolute -right-2 -top-2 flex min-h-6 min-w-6 items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-[#d6007f] shadow-md">
+                  {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                </span>
+              )}
+            </a>
+
+            <button
+              onClick={handleLogout}
+              className="rounded-full border border-[#bd7b83] px-6 py-3 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
 
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -222,18 +266,51 @@ export default function AdminPage() {
             </p>
           </a>
 
-         <a
-  href="/admin/tareas"
-  className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
->
-  <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-    Módulo
-  </p>
-  <h2 className="mt-3 text-2xl font-light">Tareas</h2>
-  <p className="mt-3 text-sm text-[#6d5a58]">
-    Asignar tareas al personal, revisar pendientes y marcar avances.
-  </p>
-</a>
+          <a
+            href="/admin/tareas"
+            className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+          >
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Módulo
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Tareas</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Asignar tareas al personal, revisar pendientes y marcar avances.
+            </p>
+          </a>
+
+          <a
+            href="/admin/notificaciones"
+            className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+                Módulo
+              </p>
+
+              {unreadNotifications > 0 && (
+                <span className="rounded-full bg-[#d6007f] px-3 py-1 text-xs font-bold text-white">
+                  {unreadNotifications} nueva
+                  {unreadNotifications === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+
+            <h2 className="mt-3 text-2xl font-light">Notificaciones</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Avisos internos de tareas asignadas y movimientos del sistema.
+            </p>
+          </a>
+
+          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+              Próximamente
+            </p>
+            <h2 className="mt-3 text-2xl font-light">Caja</h2>
+            <p className="mt-3 text-sm text-[#6d5a58]">
+              Pagos, anticipos, caja chica y cortes.
+            </p>
+          </div>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
@@ -252,16 +329,6 @@ export default function AdminPage() {
             <h2 className="mt-3 text-2xl font-light">Tarjetas de regalo</h2>
             <p className="mt-3 text-sm text-[#6d5a58]">
               Venta, códigos, saldos e historial de uso.
-            </p>
-          </div>
-
-          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
-            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-              Próximamente
-            </p>
-            <h2 className="mt-3 text-2xl font-light">Tareas</h2>
-            <p className="mt-3 text-sm text-[#6d5a58]">
-              Asignar tareas al personal, revisar pendientes y marcar avances.
             </p>
           </div>
 
