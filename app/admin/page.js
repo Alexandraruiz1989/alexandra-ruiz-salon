@@ -222,15 +222,18 @@ export default function AdminPage() {
             </p>
           </a>
 
-          <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
-            <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-              Próximamente
-            </p>
-            <h2 className="mt-3 text-2xl font-light">Caja</h2>
-            <p className="mt-3 text-sm text-[#6d5a58]">
-              Pagos, anticipos, caja chica y cortes.
-            </p>
-          </div>
+         <a
+  href="/admin/tareas"
+  className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_50px_rgba(189,123,131,0.08)] transition hover:-translate-y-1"
+>
+  <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+    Módulo
+  </p>
+  <h2 className="mt-3 text-2xl font-light">Tareas</h2>
+  <p className="mt-3 text-sm text-[#6d5a58]">
+    Asignar tareas al personal, revisar pendientes y marcar avances.
+  </p>
+</a>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 opacity-60 shadow-[0_20px_50px_rgba(189,123,131,0.08)]">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
