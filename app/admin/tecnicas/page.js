@@ -29,7 +29,6 @@ const incidenceTypes = [
 const staffMenuItems = [
   { key: "colaboradores", label: "Colaboradores" },
   { key: "agregar", label: "Agregar colaborador" },
-  { key: "horarios", label: "Horarios" },
   { key: "bloqueos", label: "Bloqueos / comida" },
   { key: "incidencias", label: "Incidencias" },
 ];
@@ -119,7 +118,11 @@ function getMessageType(message) {
     text.includes("obligatorio") ||
     text.includes("obligatorios") ||
     text.includes("faltan") ||
-    text.includes("selecciona");
+    text.includes("selecciona") ||
+    text.includes("no puedes") ||
+    text.includes("no es posible") ||
+    text.includes("relacionadas") ||
+    text.includes("citas");
 
   const isSuccess =
     text.includes("correctamente") ||
@@ -257,12 +260,10 @@ export default function TecnicasPage() {
   const [activeSection, setActiveSection] = useState("colaboradores");
 
   const [savingStaff, setSavingStaff] = useState(false);
-  const [savingWeek, setSavingWeek] = useState(false);
   const [savingBlock, setSavingBlock] = useState(false);
   const [savingIncidence, setSavingIncidence] = useState(false);
 
   const [staffMessage, setStaffMessage] = useState("");
-  const [scheduleMessage, setScheduleMessage] = useState("");
   const [blockMessage, setBlockMessage] = useState("");
   const [incidenceMessage, setIncidenceMessage] = useState("");
   const [listMessage, setListMessage] = useState("");
@@ -283,7 +284,6 @@ export default function TecnicasPage() {
   const [editingIncidenceId, setEditingIncidenceId] = useState(null);
 
   const [staffForm, setStaffForm] = useState(emptyStaffForm);
-  const [weekStaffId, setWeekStaffId] = useState("");
   const [weekSchedule, setWeekSchedule] = useState(defaultWeekSchedule);
 
   const [blockForm, setBlockForm] = useState(emptyBlockForm);
@@ -306,16 +306,47 @@ export default function TecnicasPage() {
   }, []);
 
   useEffect(() => {
-    if (weekStaffId) {
-      loadWeekScheduleForStaff(weekStaffId);
-    } else {
-      setWeekSchedule(defaultWeekSchedule);
-    }
-  }, [weekStaffId, schedules]);
+    if (!staffMessage) return;
+
+    const timer = setTimeout(() => {
+      setStaffMessage("");
+    }, 40000);
+
+    return () => clearTimeout(timer);
+  }, [staffMessage]);
+
+  useEffect(() => {
+    if (!blockMessage) return;
+
+    const timer = setTimeout(() => {
+      setBlockMessage("");
+    }, 40000);
+
+    return () => clearTimeout(timer);
+  }, [blockMessage]);
+
+  useEffect(() => {
+    if (!incidenceMessage) return;
+
+    const timer = setTimeout(() => {
+      setIncidenceMessage("");
+    }, 40000);
+
+    return () => clearTimeout(timer);
+  }, [incidenceMessage]);
+
+  useEffect(() => {
+    if (!listMessage) return;
+
+    const timer = setTimeout(() => {
+      setListMessage("");
+    }, 40000);
+
+    return () => clearTimeout(timer);
+  }, [listMessage]);
 
   const clearMessagesExcept = (section) => {
     if (section !== "staff") setStaffMessage("");
-    if (section !== "schedule") setScheduleMessage("");
     if (section !== "block") setBlockMessage("");
     if (section !== "incidence") setIncidenceMessage("");
     if (section !== "list") setListMessage("");
@@ -537,6 +568,33 @@ export default function TecnicasPage() {
     });
   };
 
+  const copyFirstActiveScheduleToAllDays = () => {
+    const sourceDay =
+      weekSchedule.find((day) => day.is_active) || weekSchedule[0];
+
+    if (!sourceDay) {
+      setStaffMessage("No hay horario base para copiar.");
+      return;
+    }
+
+    setWeekSchedule((current) =>
+      current.map((day) => ({
+        ...day,
+        is_active: true,
+        is_day_off: false,
+        start_time: sourceDay.start_time || "09:00",
+        end_time: sourceDay.end_time || "18:00",
+        has_break: Boolean(sourceDay.has_break),
+        break_start: sourceDay.break_start || "14:00",
+        break_end: sourceDay.break_end || "15:00",
+      }))
+    );
+
+    setStaffMessage(
+      "Horario copiado correctamente a todos los días. Ahora puedes ajustar días individuales ✨"
+    );
+  };
+
   const handleBlockChange = (event) => {
     const { name, value } = event.target;
 
@@ -599,6 +657,7 @@ export default function TecnicasPage() {
 
   const resetStaffForm = () => {
     setStaffForm(emptyStaffForm);
+    setWeekSchedule(defaultWeekSchedule);
     setEditingStaffId(null);
   };
 
@@ -654,9 +713,37 @@ export default function TecnicasPage() {
       active: Boolean(person.active),
     });
 
-    setWeekStaffId(person.id);
+    loadWeekScheduleForStaff(person.id);
     setActiveSection("agregar");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const saveStaffSchedule = async (staffId) => {
+    const { error: deleteError } = await supabase
+      .from("staff_schedules")
+      .delete()
+      .eq("staff_id", staffId);
+
+    if (deleteError) {
+      return deleteError;
+    }
+
+    const rows = weekSchedule.map((day) => ({
+      staff_id: staffId,
+      day_of_week: Number(day.day_of_week),
+      start_time: day.start_time || "09:00",
+      end_time: day.end_time || "18:00",
+      is_active: Boolean(day.is_active),
+      is_day_off: Boolean(day.is_day_off),
+      has_break: Boolean(day.has_break),
+      break_start: day.has_break ? day.break_start || null : null,
+      break_end: day.has_break ? day.break_end || null : null,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error } = await supabase.from("staff_schedules").insert(rows);
+
+    return error;
   };
 
   const handleSaveStaff = async () => {
@@ -711,15 +798,29 @@ export default function TecnicasPage() {
         return;
       }
 
+      const scheduleError = await saveStaffSchedule(editingStaffId);
+
+      if (scheduleError) {
+        setStaffMessage(
+          `El colaborador se actualizó, pero no se pudo guardar el horario: ${scheduleError.message}`
+        );
+        setSavingStaff(false);
+        return;
+      }
+
       await loadData();
       resetStaffForm();
-      setStaffMessage("Colaborador actualizado correctamente ✨");
+      setStaffMessage("Colaborador y horario actualizados correctamente ✨");
       setSavingStaff(false);
       setActiveSection("colaboradores");
       return;
     }
 
-    const { error } = await supabase.from("staff").insert([staffData]);
+    const { data: createdStaff, error } = await supabase
+      .from("staff")
+      .insert([staffData])
+      .select()
+      .single();
 
     if (error) {
       setStaffMessage(`No se pudo crear el colaborador: ${error.message}`);
@@ -727,21 +828,30 @@ export default function TecnicasPage() {
       return;
     }
 
+    const scheduleError = await saveStaffSchedule(createdStaff.id);
+
+    if (scheduleError) {
+      setStaffMessage(
+        `El colaborador se creó, pero no se pudo guardar el horario: ${scheduleError.message}`
+      );
+      setSavingStaff(false);
+      return;
+    }
+
     await loadData();
     resetStaffForm();
-    setStaffMessage("Colaborador creado correctamente ✨");
+    setStaffMessage("Colaborador y horario creados correctamente ✨");
     setSavingStaff(false);
     setActiveSection("colaboradores");
   };
-
-  const toggleStaffActive = async (person) => {
+    const toggleStaffActive = async (person) => {
     clearMessagesExcept("list");
     setListMessage("Actualizando colaborador...");
 
     const { error } = await supabase
       .from("staff")
       .update({
-        active: !person.active,
+        active: !Boolean(person.active),
         updated_at: new Date().toISOString(),
       })
       .eq("id", person.id);
@@ -752,6 +862,7 @@ export default function TecnicasPage() {
     }
 
     await loadData();
+
     setListMessage(
       person.active
         ? "Colaborador desactivado correctamente."
@@ -759,56 +870,80 @@ export default function TecnicasPage() {
     );
   };
 
-  const handleSaveWeekSchedule = async () => {
-    setSavingWeek(true);
-    clearMessagesExcept("schedule");
-    setScheduleMessage("Guardando horario semanal...");
+  const deleteStaff = async (person) => {
+    const confirmDelete = window.confirm(
+      `¿Seguro que deseas eliminar a ${person.full_name}? Si tiene citas relacionadas, lo recomendable es desactivarlo para conservar el historial.`
+    );
 
-    if (!weekStaffId) {
-      setScheduleMessage("Selecciona un colaborador para guardar su horario.");
-      setSavingWeek(false);
+    if (!confirmDelete) return;
+
+    clearMessagesExcept("list");
+    setListMessage("Validando si el colaborador tiene citas relacionadas...");
+
+    const { count, error: countError } = await supabase
+      .from("appointment_services")
+      .select("*", { count: "exact", head: true })
+      .eq("staff_id", person.id);
+
+    if (countError) {
+      setListMessage(
+        `No se pudo validar si tiene citas relacionadas: ${countError.message}`
+      );
       return;
     }
 
-    const { error: deleteError } = await supabase
+    if ((count || 0) > 0) {
+      setListMessage(
+        "No es posible eliminar este colaborador porque tiene citas relacionadas. Puedes desactivarlo para conservar el historial."
+      );
+      return;
+    }
+
+    const { error: schedulesError } = await supabase
       .from("staff_schedules")
       .delete()
-      .eq("staff_id", weekStaffId);
+      .eq("staff_id", person.id);
 
-    if (deleteError) {
-      setScheduleMessage(
-        `No se pudo actualizar el horario: ${deleteError.message}`
+    if (schedulesError) {
+      setListMessage(
+        `No se pudieron eliminar sus horarios: ${schedulesError.message}`
       );
-      setSavingWeek(false);
       return;
     }
 
-    const rows = weekSchedule.map((day) => ({
-      staff_id: weekStaffId,
-      day_of_week: Number(day.day_of_week),
-      start_time: day.start_time || "09:00",
-      end_time: day.end_time || "18:00",
-      is_active: Boolean(day.is_active),
-      is_day_off: Boolean(day.is_day_off),
-      has_break: Boolean(day.has_break),
-      break_start: day.has_break ? day.break_start || null : null,
-      break_end: day.has_break ? day.break_end || null : null,
-      updated_at: new Date().toISOString(),
-    }));
+    const { error: blocksError } = await supabase
+      .from("staff_time_blocks")
+      .delete()
+      .eq("staff_id", person.id);
 
-    const { error } = await supabase.from("staff_schedules").insert(rows);
+    if (blocksError) {
+      setListMessage(
+        `No se pudieron eliminar sus bloqueos: ${blocksError.message}`
+      );
+      return;
+    }
+
+    const { error: incidencesError } = await supabase
+      .from("staff_vacations")
+      .delete()
+      .eq("staff_id", person.id);
+
+    if (incidencesError) {
+      setListMessage(
+        `No se pudieron eliminar sus incidencias: ${incidencesError.message}`
+      );
+      return;
+    }
+
+    const { error } = await supabase.from("staff").delete().eq("id", person.id);
 
     if (error) {
-      setScheduleMessage(
-        `No se pudo guardar el horario semanal: ${error.message}`
-      );
-      setSavingWeek(false);
+      setListMessage(`No se pudo eliminar el colaborador: ${error.message}`);
       return;
     }
 
     await loadData();
-    setScheduleMessage("Horario semanal guardado correctamente ✨");
-    setSavingWeek(false);
+    setListMessage("Colaborador eliminado correctamente.");
   };
 
   const handleEditBlock = (block) => {
@@ -895,7 +1030,8 @@ export default function TecnicasPage() {
     setBlockMessage("Bloqueo creado correctamente ✨");
     setSavingBlock(false);
   };
-    const deleteBlock = async (block) => {
+
+  const deleteBlock = async (block) => {
     clearMessagesExcept("list");
     setListMessage("Eliminando bloqueo...");
 
@@ -1091,8 +1227,7 @@ export default function TecnicasPage() {
           </p>
         </Card>
       </div>
-
-      {activeSection === "colaboradores" && (
+            {activeSection === "colaboradores" && (
         <Card>
           <SectionHeader
             eyebrow="Personal"
@@ -1155,6 +1290,10 @@ export default function TecnicasPage() {
                         </p>
 
                         <p className="text-sm text-[#68777c]">
+                          Estado: {person.active ? "Activo" : "Desactivado"}
+                        </p>
+
+                        <p className="text-sm text-[#68777c]">
                           Comisión servicios:{" "}
                           {person.service_commission_percentage ??
                             person.commission_percentage ??
@@ -1202,9 +1341,42 @@ export default function TecnicasPage() {
                             Teléfono: {person.phone}
                           </p>
                         )}
+
+                        <div className="mt-4 rounded-xl bg-[#f7f9fa] p-3">
+                          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                            Horario semanal
+                          </p>
+
+                          <div className="mt-2 space-y-1 text-sm text-[#68777c]">
+                            {(schedulesByStaff[person.id] || []).length ===
+                            0 ? (
+                              <p>Sin horarios registrados.</p>
+                            ) : (
+                              schedulesByStaff[person.id].map((schedule) => (
+                                <div
+                                  key={schedule.id}
+                                  className="rounded-lg bg-white px-3 py-2"
+                                >
+                                  {getDayLabel(schedule.day_of_week)} ·{" "}
+                                  {schedule.is_day_off
+                                    ? "Descanso"
+                                    : `${formatTime(
+                                        schedule.start_time
+                                      )} - ${formatTime(schedule.end_time)}`}
+                                  {schedule.has_break &&
+                                    !schedule.is_day_off &&
+                                    ` · Descanso ${formatTime(
+                                      schedule.break_start
+                                    )} - ${formatTime(schedule.break_end)}`}
+                                  {!schedule.is_active ? " · Inactivo" : ""}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="flex min-w-36 flex-col gap-2">
+                      <div className="flex min-w-40 flex-col gap-2">
                         <button
                           type="button"
                           onClick={() => handleEditStaff(person)}
@@ -1220,6 +1392,14 @@ export default function TecnicasPage() {
                         >
                           {person.active ? "Desactivar" : "Activar"}
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteStaff(person)}
+                          className="rounded-full bg-red-50 px-4 py-2 text-sm text-red-600 transition hover:bg-red-100"
+                        >
+                          Eliminar
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1234,8 +1414,12 @@ export default function TecnicasPage() {
         <Card>
           <SectionHeader
             eyebrow={editingStaffId ? "Editar colaborador" : "Nuevo colaborador"}
-            title={editingStaffId ? "Actualizar datos" : "Crear colaborador"}
-            description="Captura datos generales, comisiones, color de agenda y notas internas."
+            title={
+              editingStaffId
+                ? "Actualizar datos y horario"
+                : "Crear colaborador con horario"
+            }
+            description="Captura datos generales, comisiones, color de agenda, notas internas y horario semanal."
           />
 
           <div className="space-y-4">
@@ -1424,6 +1608,176 @@ export default function TecnicasPage() {
             />
           </div>
 
+          <div className="mt-8 rounded-[1.5rem] bg-[#f7f9fa] p-5">
+            <div className="mb-5 flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div>
+                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                  Horario semanal
+                </p>
+                <h4 className="mt-2 text-xl font-light">
+                  Configura días, descansos y horario cortado
+                </h4>
+                <p className="mt-1 text-sm text-[#68777c]">
+                  Llena un día y usa el botón para copiarlo a todos. Después
+                  puedes modificar días individuales.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={copyFirstActiveScheduleToAllDays}
+                className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Copiar primer horario a todos
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {weekSchedule.map((day, index) => (
+                <div
+                  key={day.day_of_week}
+                  className="rounded-2xl border border-[#dde3e6] bg-white p-4"
+                >
+                  <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+                    <h3 className="text-lg font-light">{day.label}</h3>
+
+                    <div className="flex flex-wrap gap-3 text-sm text-[#68777c]">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={day.is_active}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "is_active",
+                              event.target.checked
+                            )
+                          }
+                        />
+                        Trabaja
+                      </label>
+
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={day.is_day_off}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "is_day_off",
+                              event.target.checked
+                            )
+                          }
+                        />
+                        Día de descanso
+                      </label>
+
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={day.has_break}
+                          disabled={day.is_day_off}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "has_break",
+                              event.target.checked
+                            )
+                          }
+                        />
+                        Descanso intermedio / horario cortado
+                      </label>
+                    </div>
+                  </div>
+
+                  {day.is_active && !day.is_day_off && (
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Entrada
+                        </label>
+                        <TimeSelect
+                          value={day.start_time}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "start_time",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Salida
+                        </label>
+                        <TimeSelect
+                          value={day.end_time}
+                          onChange={(event) =>
+                            handleWeekChange(
+                              index,
+                              "end_time",
+                              event.target.value
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {day.is_active && day.has_break && !day.is_day_off && (
+                    <div className="mt-4 rounded-2xl bg-[#f7f9fa] p-4">
+                      <p className="mb-3 text-sm text-[#8a5f63]">
+                        Descanso intermedio o corte de horario
+                      </p>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Inicio descanso
+                          </label>
+                          <TimeSelect
+                            value={day.break_start}
+                            onChange={(event) =>
+                              handleWeekChange(
+                                index,
+                                "break_start",
+                                event.target.value
+                              )
+                            }
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Fin descanso
+                          </label>
+                          <TimeSelect
+                            value={day.break_end}
+                            onChange={(event) =>
+                              handleWeekChange(
+                                index,
+                                "break_end",
+                                event.target.value
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {day.is_day_off && (
+                    <p className="mt-4 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#8a5f63]">
+                      Este día está marcado como descanso.
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="mt-6">
             <SectionToast message={staffMessage} />
 
@@ -1452,193 +1806,7 @@ export default function TecnicasPage() {
           </div>
         </Card>
       )}
-            {activeSection === "horarios" && (
-        <Card>
-          <SectionHeader
-            eyebrow="Horario semanal"
-            title="Configurar días y descansos"
-            description="Elige una colaboradora y configura sus horarios, descansos fijos y horario cortado."
-          />
-
-          <div className="mb-6">
-            <label className="mb-2 block text-sm text-[#68777c]">
-              Colaborador *
-            </label>
-            <select
-              value={weekStaffId}
-              onChange={(event) => setWeekStaffId(event.target.value)}
-              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-            >
-              <option value="">Seleccionar colaborador</option>
-              {staff.map((person) => (
-                <option key={person.id} value={person.id}>
-                  {person.full_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-4">
-            {weekSchedule.map((day, index) => (
-              <div
-                key={day.day_of_week}
-                className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] p-4"
-              >
-                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                  <h3 className="text-lg font-light">{day.label}</h3>
-
-                  <div className="flex flex-wrap gap-3 text-sm text-[#68777c]">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={day.is_active}
-                        onChange={(event) =>
-                          handleWeekChange(
-                            index,
-                            "is_active",
-                            event.target.checked
-                          )
-                        }
-                      />
-                      Trabaja
-                    </label>
-
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={day.is_day_off}
-                        onChange={(event) =>
-                          handleWeekChange(
-                            index,
-                            "is_day_off",
-                            event.target.checked
-                          )
-                        }
-                      />
-                      Día de descanso
-                    </label>
-
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={day.has_break}
-                        disabled={day.is_day_off}
-                        onChange={(event) =>
-                          handleWeekChange(
-                            index,
-                            "has_break",
-                            event.target.checked
-                          )
-                        }
-                      />
-                      Descanso intermedio / horario cortado
-                    </label>
-                  </div>
-                </div>
-
-                {day.is_active && !day.is_day_off && (
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-2 block text-sm text-[#68777c]">
-                        Entrada
-                      </label>
-                      <TimeSelect
-                        value={day.start_time}
-                        onChange={(event) =>
-                          handleWeekChange(
-                            index,
-                            "start_time",
-                            event.target.value
-                          )
-                        }
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm text-[#68777c]">
-                        Salida
-                      </label>
-                      <TimeSelect
-                        value={day.end_time}
-                        onChange={(event) =>
-                          handleWeekChange(
-                            index,
-                            "end_time",
-                            event.target.value
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {day.is_active && day.has_break && !day.is_day_off && (
-                  <div className="mt-4 rounded-2xl bg-white p-4">
-                    <p className="mb-3 text-sm text-[#8a5f63]">
-                      Descanso intermedio o corte de horario
-                    </p>
-
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Inicio descanso
-                        </label>
-                        <TimeSelect
-                          value={day.break_start}
-                          onChange={(event) =>
-                            handleWeekChange(
-                              index,
-                              "break_start",
-                              event.target.value
-                            )
-                          }
-                        />
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Fin descanso
-                        </label>
-                        <TimeSelect
-                          value={day.break_end}
-                          onChange={(event) =>
-                            handleWeekChange(
-                              index,
-                              "break_end",
-                              event.target.value
-                            )
-                          }
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {day.is_day_off && (
-                  <p className="mt-4 rounded-xl bg-white p-3 text-sm text-[#8a5f63]">
-                    Este día está marcado como descanso.
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6">
-            <SectionToast message={scheduleMessage} />
-
-            <button
-              type="button"
-              onClick={handleSaveWeekSchedule}
-              disabled={savingWeek}
-              className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-            >
-              {savingWeek ? "Guardando..." : "Guardar horario semanal"}
-            </button>
-          </div>
-        </Card>
-      )}
-
-      {activeSection === "bloqueos" && (
+            {activeSection === "bloqueos" && (
         <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
           <Card>
             <SectionHeader
