@@ -16,6 +16,40 @@ const emptyForm = {
   active: true,
 };
 
+function getMessageType(message) {
+  const text = message.toLowerCase();
+
+  const isError =
+    text.includes("no se pudo") ||
+    text.includes("error") ||
+    text.includes("obligatorio") ||
+    text.includes("obligatorios") ||
+    text.includes("faltan");
+
+  const isSuccess =
+    text.includes("correctamente") ||
+    text.includes("activado") ||
+    text.includes("desactivado");
+
+  if (isError) return "error";
+  if (isSuccess) return "success";
+  return "info";
+}
+
+function getToastStyle(message) {
+  const type = getMessageType(message);
+
+  if (type === "error") {
+    return "bg-red-600 text-white shadow-[0_18px_45px_rgba(220,38,38,0.28)]";
+  }
+
+  if (type === "success") {
+    return "bg-green-600 text-white shadow-[0_18px_45px_rgba(22,163,74,0.25)]";
+  }
+
+  return "bg-[#8a5f63] text-white shadow-[0_18px_45px_rgba(138,95,99,0.25)]";
+}
+
 export default function ServiciosPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingServices, setLoadingServices] = useState(false);
@@ -45,7 +79,6 @@ export default function ServiciosPage() {
 
   const loadServices = async () => {
     setLoadingServices(true);
-    setMessage("");
 
     const { data, error } = await supabase
       .from("services")
@@ -243,12 +276,6 @@ export default function ServiciosPage() {
           </div>
         </div>
 
-        {message && (
-          <div className="mb-6 rounded-2xl border border-[#ecd8d4] bg-white px-5 py-4 text-sm text-[#8a5f63] shadow-sm">
-            {message}
-          </div>
-        )}
-
         <div className="grid gap-8 xl:grid-cols-[0.85fr_1.15fr]">
           <div className="h-fit rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
@@ -297,13 +324,18 @@ export default function ServiciosPage() {
                   <label className="mb-2 block text-sm text-[#6d5a58]">
                     Precio base
                   </label>
-                  <input
-                    type="number"
-                    name="base_price"
-                    value={form.base_price}
-                    onChange={handleChange}
-                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  />
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8a5f63]">
+                      $
+                    </span>
+                    <input
+                      type="number"
+                      name="base_price"
+                      value={form.base_price}
+                      onChange={handleChange}
+                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-8 py-3 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -398,29 +430,41 @@ export default function ServiciosPage() {
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-              >
-                {saving
-                  ? "Guardando..."
-                  : editingServiceId
-                  ? "Guardar cambios"
-                  : "Crear servicio"}
-              </button>
+            <div className="mt-6">
+              {message && (
+                <div
+                  className={`mb-3 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+                    message
+                  )}`}
+                >
+                  {message}
+                </div>
+              )}
 
-              {editingServiceId && (
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={resetForm}
-                  className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
                 >
-                  Cancelar
+                  {saving
+                    ? "Guardando..."
+                    : editingServiceId
+                    ? "Guardar cambios"
+                    : "Crear servicio"}
                 </button>
-              )}
+
+                {editingServiceId && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
