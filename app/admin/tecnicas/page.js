@@ -55,6 +55,10 @@ const emptyStaffForm = {
   hire_date: "",
   vacation_days_adjustment: "",
   vacation_notes: "",
+  service_commission_percentage: "",
+  product_commission_percentage: "",
+  commission_notes: "",
+  product_commission_notes: "",
   role: "tecnica",
   color: "#bd7b83",
   notes: "",
@@ -237,6 +241,7 @@ export default function TecnicasPage() {
     new Date().toISOString().slice(0, 10)
   );
 
+  const [showStaffForm, setShowStaffForm] = useState(false);
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [editingIncidenceId, setEditingIncidenceId] = useState(null);
@@ -313,13 +318,17 @@ export default function TecnicasPage() {
     ]);
 
     if (staffResult.error) {
-      setListMessage(`Error al cargar colaboradores: ${staffResult.error.message}`);
+      setListMessage(
+        `Error al cargar colaboradores: ${staffResult.error.message}`
+      );
     } else {
       setStaff(staffResult.data || []);
     }
 
     if (schedulesResult.error) {
-      setListMessage(`Error al cargar horarios: ${schedulesResult.error.message}`);
+      setListMessage(
+        `Error al cargar horarios: ${schedulesResult.error.message}`
+      );
     } else {
       setSchedules(schedulesResult.data || []);
     }
@@ -331,13 +340,17 @@ export default function TecnicasPage() {
     }
 
     if (incidencesResult.error) {
-      setListMessage(`Error al cargar incidencias: ${incidencesResult.error.message}`);
+      setListMessage(
+        `Error al cargar incidencias: ${incidencesResult.error.message}`
+      );
     } else {
       setIncidences(incidencesResult.data || []);
     }
 
     if (policiesResult.error) {
-      setListMessage(`Error al cargar políticas: ${policiesResult.error.message}`);
+      setListMessage(
+        `Error al cargar políticas: ${policiesResult.error.message}`
+      );
     } else {
       setVacationPolicies(policiesResult.data || []);
     }
@@ -549,9 +562,23 @@ export default function TecnicasPage() {
     });
   };
 
+  const openNewStaffForm = () => {
+    resetStaffForm();
+    setShowStaffForm(true);
+    clearMessagesExcept("staff");
+    setStaffMessage("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const resetStaffForm = () => {
     setStaffForm(emptyStaffForm);
     setEditingStaffId(null);
+  };
+
+  const closeStaffForm = () => {
+    resetStaffForm();
+    setShowStaffForm(false);
+    setStaffMessage("");
   };
 
   const resetBlockForm = () => {
@@ -569,6 +596,7 @@ export default function TecnicasPage() {
 
   const handleEditStaff = (person) => {
     setEditingStaffId(person.id);
+    setShowStaffForm(true);
     clearMessagesExcept("staff");
     setStaffMessage("");
 
@@ -580,6 +608,13 @@ export default function TecnicasPage() {
       hire_date: person.hire_date || "",
       vacation_days_adjustment: person.vacation_days_adjustment ?? "",
       vacation_notes: person.vacation_notes || "",
+      service_commission_percentage:
+        person.service_commission_percentage ??
+        person.commission_percentage ??
+        "",
+      product_commission_percentage: person.product_commission_percentage ?? "",
+      commission_notes: person.commission_notes || "",
+      product_commission_notes: person.product_commission_notes || "",
       role: person.role || "tecnica",
       color: person.color || "#bd7b83",
       notes: person.notes || "",
@@ -601,6 +636,13 @@ export default function TecnicasPage() {
       return;
     }
 
+    const serviceCommission = Number(
+      staffForm.service_commission_percentage || 0
+    );
+    const productCommission = Number(
+      staffForm.product_commission_percentage || 0
+    );
+
     const staffData = {
       full_name: staffForm.full_name.trim(),
       email: staffForm.email.trim() || null,
@@ -609,6 +651,11 @@ export default function TecnicasPage() {
       hire_date: staffForm.hire_date || null,
       vacation_days_adjustment: Number(staffForm.vacation_days_adjustment || 0),
       vacation_notes: staffForm.vacation_notes.trim() || null,
+      commission_percentage: serviceCommission,
+      service_commission_percentage: serviceCommission,
+      product_commission_percentage: productCommission,
+      commission_notes: staffForm.commission_notes.trim() || null,
+      product_commission_notes: staffForm.product_commission_notes.trim() || null,
       role: staffForm.role.trim() || "tecnica",
       color: staffForm.color || "#bd7b83",
       notes: staffForm.notes.trim() || null,
@@ -630,6 +677,7 @@ export default function TecnicasPage() {
 
       await loadData();
       resetStaffForm();
+      setShowStaffForm(false);
       setStaffMessage("Colaborador actualizado correctamente ✨");
       setSavingStaff(false);
       return;
@@ -645,6 +693,7 @@ export default function TecnicasPage() {
 
     await loadData();
     resetStaffForm();
+    setShowStaffForm(false);
     setStaffMessage("Colaborador creado correctamente ✨");
     setSavingStaff(false);
   };
@@ -673,8 +722,7 @@ export default function TecnicasPage() {
         : "Colaborador activado correctamente ✨"
     );
   };
-
-  const handleSaveWeekSchedule = async () => {
+    const handleSaveWeekSchedule = async () => {
     setSavingWeek(true);
     clearMessagesExcept("schedule");
     setScheduleMessage("Guardando horario semanal...");
@@ -691,7 +739,9 @@ export default function TecnicasPage() {
       .eq("staff_id", weekStaffId);
 
     if (deleteError) {
-      setScheduleMessage(`No se pudo actualizar el horario: ${deleteError.message}`);
+      setScheduleMessage(
+        `No se pudo actualizar el horario: ${deleteError.message}`
+      );
       setSavingWeek(false);
       return;
     }
@@ -712,7 +762,9 @@ export default function TecnicasPage() {
     const { error } = await supabase.from("staff_schedules").insert(rows);
 
     if (error) {
-      setScheduleMessage(`No se pudo guardar el horario semanal: ${error.message}`);
+      setScheduleMessage(
+        `No se pudo guardar el horario semanal: ${error.message}`
+      );
       setSavingWeek(false);
       return;
     }
@@ -753,7 +805,9 @@ export default function TecnicasPage() {
       !blockForm.end_time ||
       !blockForm.title.trim()
     ) {
-      setBlockMessage("Colaborador, fecha, hora y título del bloqueo son obligatorios.");
+      setBlockMessage(
+        "Colaborador, fecha, hora y título del bloqueo son obligatorios."
+      );
       setSavingBlock(false);
       return;
     }
@@ -821,7 +875,8 @@ export default function TecnicasPage() {
     await loadData();
     setListMessage("Bloqueo eliminado correctamente.");
   };
-    const handleEditIncidence = (incidence) => {
+
+  const handleEditIncidence = (incidence) => {
     setEditingIncidenceId(incidence.id);
     clearMessagesExcept("incidence");
     setIncidenceMessage("");
@@ -958,7 +1013,8 @@ export default function TecnicasPage() {
             </p>
             <h1 className="mt-3 text-4xl font-light">Técnicas / Personal</h1>
             <p className="mt-2 text-sm text-[#6d5a58]">
-              Colaboradores, horarios, descansos, cumpleaños, vacaciones e incidencias.
+              Colaboradores, horarios, descansos, comisiones, cumpleaños,
+              vacaciones e incidencias.
             </p>
           </div>
 
@@ -1030,194 +1086,284 @@ export default function TecnicasPage() {
 
         <div className="grid gap-8 xl:grid-cols-[0.9fr_1.1fr]">
           <div className="space-y-8">
-            <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
-                {editingStaffId ? "Editar colaborador" : "Nuevo colaborador"}
-              </p>
-
-              <h2 className="mt-3 text-2xl font-light">
-                {editingStaffId ? "Actualizar datos" : "Crear colaborador"}
-              </h2>
-
-              <div className="mt-6 space-y-4">
-                <div>
-                  <label className="mb-2 block text-sm text-[#6d5a58]">
-                    Nombre *
-                  </label>
-                  <input
-                    name="full_name"
-                    value={staffForm.full_name}
-                    onChange={handleStaffChange}
-                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    placeholder="Ej. Laura Canul"
-                  />
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
+            {!showStaffForm && (
+              <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
+                <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                   <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Correo
-                    </label>
-                    <input
-                      type="email"
-                      name="email"
-                      value={staffForm.email}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="correo@email.com"
-                    />
+                    <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+                      Alta de personal
+                    </p>
+                    <h2 className="mt-3 text-2xl font-light">
+                      Agregar colaborador
+                    </h2>
+                    <p className="mt-2 text-sm text-[#6d5a58]">
+                      Presiona el botón para abrir el formulario completo de alta.
+                    </p>
                   </div>
 
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Teléfono
-                    </label>
-                    <input
-                      name="phone"
-                      value={staffForm.phone}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="9991234567"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Cumpleaños
-                    </label>
-                    <input
-                      type="date"
-                      name="birthday"
-                      value={staffForm.birthday}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Fecha de ingreso
-                    </label>
-                    <input
-                      type="date"
-                      name="hire_date"
-                      value={staffForm.hire_date}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Rol
-                    </label>
-                    <input
-                      name="role"
-                      value={staffForm.role}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="tecnica"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Ajuste vacaciones
-                    </label>
-                    <input
-                      type="number"
-                      name="vacation_days_adjustment"
-                      value={staffForm.vacation_days_adjustment}
-                      onChange={handleStaffChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                      placeholder="0"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm text-[#6d5a58]">
-                      Color
-                    </label>
-                    <input
-                      type="color"
-                      name="color"
-                      value={staffForm.color}
-                      onChange={handleStaffChange}
-                      className="h-12 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-2 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <label className="flex items-center gap-2 rounded-2xl bg-[#fcf7f6] p-4 text-sm text-[#6d5a58]">
-                  <input
-                    type="checkbox"
-                    name="active"
-                    checked={staffForm.active}
-                    onChange={handleStaffChange}
-                  />
-                  Colaborador activo
-                </label>
-
-                <div>
-                  <label className="mb-2 block text-sm text-[#6d5a58]">
-                    Notas de vacaciones
-                  </label>
-                  <textarea
-                    name="vacation_notes"
-                    value={staffForm.vacation_notes}
-                    onChange={handleStaffChange}
-                    className="min-h-20 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    placeholder="Notas sobre vacaciones, acuerdos, permisos..."
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm text-[#6d5a58]">
-                    Notas internas
-                  </label>
-                  <textarea
-                    name="notes"
-                    value={staffForm.notes}
-                    onChange={handleStaffChange}
-                    className="min-h-24 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                    placeholder="Notas internas..."
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <SectionToast message={staffMessage} />
-
-                <div className="flex flex-col gap-3 sm:flex-row">
                   <button
                     type="button"
-                    onClick={handleSaveStaff}
-                    disabled={savingStaff}
-                    className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                    onClick={openNewStaffForm}
+                    className="rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90"
                   >
-                    {savingStaff
-                      ? "Guardando..."
-                      : editingStaffId
-                      ? "Guardar cambios"
-                      : "Crear colaborador"}
+                    Agregar colaborador
                   </button>
+                </div>
 
-                  {editingStaffId && (
+                {staffMessage && (
+                  <div className="mt-5">
+                    <SectionToast message={staffMessage} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {showStaffForm && (
+              <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
+                <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+                  {editingStaffId ? "Editar colaborador" : "Nuevo colaborador"}
+                </p>
+
+                <h2 className="mt-3 text-2xl font-light">
+                  {editingStaffId ? "Actualizar datos" : "Crear colaborador"}
+                </h2>
+
+                <div className="mt-6 space-y-4">
+                  <div>
+                    <label className="mb-2 block text-sm text-[#6d5a58]">
+                      Nombre *
+                    </label>
+                    <input
+                      name="full_name"
+                      value={staffForm.full_name}
+                      onChange={handleStaffChange}
+                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                      placeholder="Ej. Laura Canul"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Correo
+                      </label>
+                      <input
+                        type="email"
+                        name="email"
+                        value={staffForm.email}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="correo@email.com"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Teléfono
+                      </label>
+                      <input
+                        name="phone"
+                        value={staffForm.phone}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="9991234567"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Cumpleaños
+                      </label>
+                      <input
+                        type="date"
+                        name="birthday"
+                        value={staffForm.birthday}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Fecha de ingreso
+                      </label>
+                      <input
+                        type="date"
+                        name="hire_date"
+                        value={staffForm.hire_date}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Rol
+                      </label>
+                      <input
+                        name="role"
+                        value={staffForm.role}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="tecnica"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Ajuste vacaciones
+                      </label>
+                      <input
+                        type="number"
+                        name="vacation_days_adjustment"
+                        value={staffForm.vacation_days_adjustment}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="0"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Color
+                      </label>
+                      <input
+                        type="color"
+                        name="color"
+                        value={staffForm.color}
+                        onChange={handleStaffChange}
+                        className="h-12 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-2 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Comisión por servicios %
+                      </label>
+                      <input
+                        type="number"
+                        name="service_commission_percentage"
+                        value={staffForm.service_commission_percentage}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="Ej. 30"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Comisión por productos %
+                      </label>
+                      <input
+                        type="number"
+                        name="product_commission_percentage"
+                        value={staffForm.product_commission_percentage}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="Ej. 10"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Notas comisión servicios
+                      </label>
+                      <input
+                        name="commission_notes"
+                        value={staffForm.commission_notes}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="Ej. Aplica solo en servicios realizados"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm text-[#6d5a58]">
+                        Notas comisión productos
+                      </label>
+                      <input
+                        name="product_commission_notes"
+                        value={staffForm.product_commission_notes}
+                        onChange={handleStaffChange}
+                        className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                        placeholder="Ej. Aplica en productos vendidos"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 rounded-2xl bg-[#fcf7f6] p-4 text-sm text-[#6d5a58]">
+                    <input
+                      type="checkbox"
+                      name="active"
+                      checked={staffForm.active}
+                      onChange={handleStaffChange}
+                    />
+                    Colaborador activo
+                  </label>
+
+                  <div>
+                    <label className="mb-2 block text-sm text-[#6d5a58]">
+                      Notas de vacaciones
+                    </label>
+                    <textarea
+                      name="vacation_notes"
+                      value={staffForm.vacation_notes}
+                      onChange={handleStaffChange}
+                      className="min-h-20 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                      placeholder="Notas sobre vacaciones, acuerdos, permisos..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm text-[#6d5a58]">
+                      Notas internas
+                    </label>
+                    <textarea
+                      name="notes"
+                      value={staffForm.notes}
+                      onChange={handleStaffChange}
+                      className="min-h-24 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                      placeholder="Notas internas..."
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <SectionToast message={staffMessage} />
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
                     <button
                       type="button"
-                      onClick={resetStaffForm}
+                      onClick={handleSaveStaff}
+                      disabled={savingStaff}
+                      className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                    >
+                      {savingStaff
+                        ? "Guardando..."
+                        : editingStaffId
+                        ? "Guardar cambios"
+                        : "Crear colaborador"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={closeStaffForm}
                       className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
                     >
                       Cancelar
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
               <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
@@ -1245,8 +1391,7 @@ export default function TecnicasPage() {
                   ))}
                 </select>
               </div>
-
-              <div className="mt-6 space-y-4">
+                            <div className="mt-6 space-y-4">
                 {weekSchedule.map((day, index) => (
                   <div
                     key={day.day_of_week}
@@ -1815,8 +1960,33 @@ export default function TecnicasPage() {
                               Rol: {person.role || "tecnica"}
                             </p>
 
+                            <p className="text-sm text-[#6d5a58]">
+                              Comisión servicios:{" "}
+                              {person.service_commission_percentage ??
+                                person.commission_percentage ??
+                                0}
+                              %
+                            </p>
+
+                            <p className="text-sm text-[#6d5a58]">
+                              Comisión productos:{" "}
+                              {person.product_commission_percentage || 0}%
+                            </p>
+
+                            {person.commission_notes && (
+                              <p className="mt-2 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
+                                Servicios: {person.commission_notes}
+                              </p>
+                            )}
+
+                            {person.product_commission_notes && (
+                              <p className="mt-2 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
+                                Productos: {person.product_commission_notes}
+                              </p>
+                            )}
+
                             {person.birthday && (
-                              <p className="text-sm text-[#6d5a58]">
+                              <p className="mt-2 text-sm text-[#6d5a58]">
                                 Cumpleaños: {person.birthday}
                               </p>
                             )}
