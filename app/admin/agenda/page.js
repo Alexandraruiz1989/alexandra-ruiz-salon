@@ -2709,17 +2709,17 @@ function AppointmentDetailModal({ appointment, onClose, onEdit }) {
 
   const thankYouMessage = `Hola ${clientFirstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
 
- const reviewLink =
-  typeof window !== "undefined"
-    ? `${window.location.origin}/calificar/${appointment.id}`
-    : "";
+ const reviewBaseUrl = "https://alexandra-ruiz-salon.vercel.app";
+
+const reviewLink = `${reviewBaseUrl}/calificar/${appointment.id}`;
 
 const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
 
 Puedes calificarnos aquí:
 ${reviewLink}`;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex
+     items-center justify-center bg-black/40 p-4">
       <div className="relative max-h-[90vh] w-full max-w-3xl overflow-auto rounded-[1.5rem] bg-white p-6 shadow-2xl">
         <button
           type="button"
