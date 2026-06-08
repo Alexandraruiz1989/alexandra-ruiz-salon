@@ -310,7 +310,7 @@ export default function TecnicasPage() {
 
     const timer = setTimeout(() => {
       setStaffMessage("");
-    }, 40000);
+    }, 15000);
 
     return () => clearTimeout(timer);
   }, [staffMessage]);
@@ -320,7 +320,7 @@ export default function TecnicasPage() {
 
     const timer = setTimeout(() => {
       setBlockMessage("");
-    }, 40000);
+    }, 15000);
 
     return () => clearTimeout(timer);
   }, [blockMessage]);
@@ -330,7 +330,7 @@ export default function TecnicasPage() {
 
     const timer = setTimeout(() => {
       setIncidenceMessage("");
-    }, 40000);
+    }, 15000);
 
     return () => clearTimeout(timer);
   }, [incidenceMessage]);
@@ -340,7 +340,7 @@ export default function TecnicasPage() {
 
     const timer = setTimeout(() => {
       setListMessage("");
-    }, 40000);
+    }, 15000);
 
     return () => clearTimeout(timer);
   }, [listMessage]);
