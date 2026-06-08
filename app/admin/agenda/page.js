@@ -2653,10 +2653,63 @@ function AvailabilitySection({
     </div>
   );
 }
+function cleanPhoneForWhatsApp(phone) {
+  if (!phone) return "";
 
-function AppointmentDetailModal({ appointment, onClose, onEdit }) {
+  const onlyNumbers = String(phone).replace(/\D/g, "");
+
+  if (onlyNumbers.startsWith("52")) {
+    return onlyNumbers;
+  }
+
+  return `52${onlyNumbers}`;
+}
+
+function openWhatsAppMessage(phone, message) {
+  const cleanPhone = cleanPhoneForWhatsApp(phone);
+
+  if (!cleanPhone) {
+    alert("Esta clienta no tiene teléfono registrado.");
+    return;
+  }
+
+  const encodedMessage = encodeURIComponent(message);
+  window.open(`https://wa.me/${cleanPhone}?text=${encodedMessage}`, "_blank");
+}
+
+function getClientFirstName(fullName) {
+  if (!fullName) return "hermosa";
+  return fullName.split(" ")[0];
+}
+
+function getAppointmentServicesText(appointment) {
   const services = appointment.appointment_services || [];
 
+  if (services.length === 0) {
+    return "tu servicio";
+  }
+
+  return services
+    .map((service) => service.services?.name || "servicio")
+    .join(", ");
+}
+function AppointmentDetailModal({ appointment, onClose, onEdit }) {
+  const services = appointment.appointment_services || [];
+  const clientName = appointment.clients?.full_name || "";
+  const clientFirstName = getClientFirstName(clientName);
+  const clientPhone = appointment.clients?.phone || "";
+  const appointmentTime = formatTime(appointment.start_time);
+  const servicesText = getAppointmentServicesText(appointment);
+
+  const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
+
+  const onTheWayMessage = `Hola ${clientFirstName} 💕 Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos ✨`;
+
+  const lateMessage = `Hola ${clientFirstName} 💕 Notamos que tu cita era a las ${appointmentTime}. ¿Nos confirmas si vienes en camino o si tuviste algún retraso?`;
+
+  const thankYouMessage = `Hola ${clientFirstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
+
+  const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨`;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="relative max-h-[90vh] w-full max-w-3xl overflow-auto rounded-[1.5rem] bg-white p-6 shadow-2xl">
@@ -2690,7 +2743,57 @@ function AppointmentDetailModal({ appointment, onClose, onEdit }) {
           {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
           {formatTime(appointment.end_time)}
         </p>
+        <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Mensajes rápidos por WhatsApp
+          </p>
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => openWhatsAppMessage(clientPhone, reminderMessage)}
+              className="rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+            >
+              Enviar recordatorio
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openWhatsAppMessage(clientPhone, onTheWayMessage)}
+              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+            >
+              ¿Viene en camino?
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openWhatsAppMessage(clientPhone, lateMessage)}
+              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+            >
+              Preguntar si viene retrasada
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openWhatsAppMessage(clientPhone, thankYouMessage)}
+              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+            >
+              Enviar agradecimiento
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openWhatsAppMessage(clientPhone, reviewMessage)}
+              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:col-span-2"
+            >
+              Solicitar calificación
+            </button>
+          </div>
+
+          <p className="mt-3 text-xs text-[#68777c]">
+            Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos textos serán editables desde configuración.
+          </p>
+        </div>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl bg-[#f7f9fa] p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
