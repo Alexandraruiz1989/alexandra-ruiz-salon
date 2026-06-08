@@ -42,7 +42,7 @@ export default function PublicReviewPage() {
   const [message, setMessage] = useState("");
 
   const [appointment, setAppointment] = useState(null);
-
+const [existingReview, setExistingReview] = useState(null);
   const [salonRating, setSalonRating] = useState(0);
   const [overallComment, setOverallComment] = useState("");
   const [wouldReturn, setWouldReturn] = useState(true);
@@ -60,56 +60,72 @@ export default function PublicReviewPage() {
     }
   }, [appointmentId]);
 
-  const loadAppointment = async () => {
-    setLoading(true);
-    setMessage("");
+ const loadAppointment = async () => {
+  setLoading(true);
+  setMessage("");
 
-    const { data, error } = await supabase
-      .from("appointments")
-      .select(
-        `
-        *,
-        clients (
-          id,
-          full_name,
-          phone
-        ),
-        appointment_services (
-          id,
-          service_id,
-          staff_id,
-          start_time,
-          end_time,
-          services (
-            id,
-            name,
-            category
-          ),
-          staff (
-            id,
-            full_name
-          )
-        )
-      `
-      )
-      .eq("id", appointmentId)
-      .maybeSingle();
+  const { data: reviewData, error: reviewError } = await supabase
+    .from("appointment_reviews")
+    .select("*")
+    .eq("appointment_id", appointmentId)
+    .maybeSingle();
 
-    if (error) {
-      setMessage(`No pudimos cargar tu cita: ${error.message}`);
-      setLoading(false);
-      return;
-    }
-
-    if (!data) {
-      setMessage("No encontramos la cita para calificar.");
-      setLoading(false);
-      return;
-    }
-
-    setAppointment(data);
+  if (reviewError) {
+    setMessage(`No pudimos validar si la cita ya fue calificada: ${reviewError.message}`);
     setLoading(false);
-  };
+    return;
+  }
+
+  if (reviewData) {
+    setExistingReview(reviewData);
+  }
+
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(
+      `
+      *,
+      clients (
+        id,
+        full_name,
+        phone
+      ),
+      appointment_services (
+        id,
+        service_id,
+        staff_id,
+        start_time,
+        end_time,
+        services (
+          id,
+          name,
+          category
+        ),
+        staff (
+          id,
+          full_name
+        )
+      )
+    `
+    )
+    .eq("id", appointmentId)
+    .maybeSingle();
+
+  if (error) {
+    setMessage(`No pudimos cargar tu cita: ${error.message}`);
+    setLoading(false);
+    return;
+  }
+
+  if (!data) {
+    setMessage("No encontramos la cita para calificar.");
+    setLoading(false);
+    return;
+  }
+
+  setAppointment(data);
+  setLoading(false);
+};
 
   const uniqueStaff = useMemo(() => {
     const result = {};
@@ -150,11 +166,22 @@ export default function PublicReviewPage() {
       .select()
       .single();
 
-    if (reviewError) {
-      setMessage(`No pudimos guardar tu calificación: ${reviewError.message}`);
-      setSaving(false);
-      return;
-    }
+  if (reviewError) {
+  if (
+    reviewError.code === "23505" ||
+    String(reviewError.message || "").toLowerCase().includes("duplicate")
+  ) {
+    setExistingReview({
+      salon_rating: salonRating,
+    });
+    setSaving(false);
+    return;
+  }
+
+  setMessage(`No pudimos guardar tu calificación: ${reviewError.message}`);
+  setSaving(false);
+  return;
+}
 
     const staffRows = uniqueStaff
       .filter((person) => staffRatings[person.id])
@@ -215,7 +242,36 @@ export default function PublicReviewPage() {
       </main>
     );
   }
+if (existingReview) {
+  return (
+    <main className="min-h-screen bg-[#eef1f3] px-5 py-10 text-[#263238]">
+      <div className="mx-auto max-w-2xl">
+        <Card>
+          <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
+            Gracias
+          </p>
+          <h1 className="mt-3 text-3xl font-light">
+            Esta cita ya fue calificada 💕
+          </h1>
+          <p className="mt-4 leading-7 text-[#68777c]">
+            Muchas gracias por compartir tu opinión con Alexandra Ruiz Salón Spa.
+            Tu experiencia nos ayuda a seguir mejorando y a consentirte cada vez mejor.
+          </p>
 
+          <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-5">
+            <p className="text-sm text-[#68777c]">Calificación registrada:</p>
+            <p className="mt-2 text-3xl text-[#bd7b83]">
+              {"★".repeat(Number(existingReview.salon_rating || 0))}
+              <span className="text-[#dde3e6]">
+                {"★".repeat(5 - Number(existingReview.salon_rating || 0))}
+              </span>
+            </p>
+          </div>
+        </Card>
+      </div>
+    </main>
+  );
+}
   if (sent) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-5 py-10 text-[#263238]">
