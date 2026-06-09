@@ -2881,6 +2881,11 @@ const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos 
 
 Puedes calificarnos aquí:
 ${reviewLink}`;
+
+const goToPayment = () => {
+  window.location.href = `/admin/cobros?appointmentId=${appointment.id}`;
+};
+
   return (
     <div className="fixed inset-0 z-50 flex
      items-center justify-center bg-black/40 p-4">
@@ -2961,6 +2966,14 @@ ${reviewLink}`;
               Solicitar calificación
             </button>
           </div>
+
+          <button
+  type="button"
+  onClick={goToPayment}
+  className="rounded-full bg-green-600 px-5 py-3 text-sm text-white transition hover:opacity-90"
+>
+  Cobrar cita
+</button>
 
           <p className="mt-3 text-xs text-[#68777c]">
             Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos textos serán editables desde configuración.

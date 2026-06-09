@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
@@ -85,6 +86,8 @@ function getAppointmentTotal(appointment) {
 }
 
 export default function CobrosPage() {
+  const searchParams = useSearchParams();
+const appointmentIdFromUrl = searchParams.get("appointmentId");
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [activeSection, setActiveSection] = useState("pendientes");
@@ -108,38 +111,42 @@ const [paymentForm, setPaymentForm] = useState({
 });
 
 const [extraLines, setExtraLines] = useState([]);
-  useEffect(() => {
-    const start = async () => {
-      const { data } = await supabase.auth.getSession();
 
-      if (!data.session) {
-        window.location.href = "/admin";
-        return;
-      }
+useEffect(() => {
+  const start = async () => {
+    const { data } = await supabase.auth.getSession();
 
-      setLoadingSession(false);
-      await loadData();
-    };
-
-    start();
-  }, []);
-
-  useEffect(() => {
-    if (!loadingSession) {
-      loadData();
+    if (!data.session) {
+      window.location.href = "/admin";
+      return;
     }
-  }, [selectedDate]);
 
-  useEffect(() => {
-    if (!message) return;
+    setLoadingSession(false);
+    await loadData();
+  };
 
-    const timer = setTimeout(() => {
-      setMessage("");
-    }, 15000);
+  start();
+}, []);
 
-    return () => clearTimeout(timer);
-  }, [message]);
+useEffect(() => {
+  if (!loadingSession) {
+    loadData();
+  }
+}, [selectedDate]);
 
+useEffect(() => {
+  if (!appointmentIdFromUrl || appointments.length === 0 || showPaymentModal) {
+    return;
+  }
+
+  const appointmentToCharge = appointments.find(
+    (appointment) => appointment.id === appointmentIdFromUrl
+  );
+
+  if (appointmentToCharge) {
+    openPaymentModal(appointmentToCharge);
+  }
+}, [appointmentIdFromUrl, appointments, showPaymentModal]);
   const loadData = async () => {
     setLoadingData(true);
     setMessage("");
