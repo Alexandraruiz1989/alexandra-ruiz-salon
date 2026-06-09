@@ -45,20 +45,23 @@ export default function AdminShell({
     window.location.href = "/admin";
   };
 
-  const mainModules = [
-    { label: "Inicio", href: "/admin", key: "inicio" },
-    { label: "Clientas", href: "/admin/clientas", key: "clientas" },
-    { label: "Servicios", href: "/admin/servicios", key: "servicios" },
-   { label: "Agenda", href: "/admin/agenda", key: "agenda" },
-    { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
-    { label: "Tareas", href: "/admin/tareas", key: "tareas" },
-    {
-      label: "Notificaciones",
-      href: "/admin/notificaciones",
-      key: "notificaciones",
-      badge: unreadNotifications,
-    },
-  ];
+ const mainModules = [
+  { label: "Inicio", href: "/admin", key: "inicio" },
+  { label: "Clientas", href: "/admin/clientas", key: "clientas" },
+  { label: "Servicios", href: "/admin/servicios", key: "servicios" },
+  { label: "Agenda", href: "/admin/agenda", key: "agenda" },
+  { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
+  { label: "Tareas", href: "/admin/tareas", key: "tareas" },
+  { label: "Configuración", href: "/admin/configuracion", key: "configuracion" },
+  { label: "Calificaciones", href: "/admin/calificaciones", key: "calificaciones" },
+  { label: "Seguimientos", href: "/admin/seguimientos", key: "seguimientos" },
+  {
+    label: "Notificaciones",
+    href: "/admin/notificaciones",
+    key: "notificaciones",
+    badge: unreadNotifications,
+  },
+];
 
  const futureModules = [
   "Caja próximamente",
