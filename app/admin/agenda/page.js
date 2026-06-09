@@ -339,6 +339,7 @@ export default function AgendaPage() {
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
+  const [followupRules, setFollowupRules] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [rangeAppointments, setRangeAppointments] = useState([]);
   const [staffSchedules, setStaffSchedules] = useState([]);
@@ -392,8 +393,13 @@ export default function AgendaPage() {
     setLoadingData(true);
     setMessage("");
 
-    const [clientsResult, staffResult, servicesResult, schedulesResult] =
-      await Promise.all([
+    const [
+  clientsResult,
+  staffResult,
+  servicesResult,
+  schedulesResult,
+  followupRulesResult,
+] = await Promise.all([
         supabase.from("clients").select("*").order("full_name"),
         supabase.from("staff").select("*").eq("active", true).order("full_name"),
         supabase
@@ -403,6 +409,11 @@ export default function AgendaPage() {
           .order("category", { ascending: true })
           .order("name", { ascending: true }),
         supabase.from("staff_schedules").select("*"),
+        supabase
+  .from("followup_rules")
+  .select("*")
+  .eq("is_active", true)
+  .order("created_at", { ascending: true }),
       ]);
 
     if (clientsResult.error) {
@@ -416,6 +427,13 @@ export default function AgendaPage() {
     } else {
       setStaff(staffResult.data || []);
     }
+    if (followupRulesResult.error) {
+  setMessage(
+    `Error al cargar reglas de seguimiento: ${followupRulesResult.error.message}`
+  );
+} else {
+  setFollowupRules(followupRulesResult.data || []);
+}
 
     if (servicesResult.error) {
       setMessage(`Error al cargar servicios: ${servicesResult.error.message}`);
@@ -1328,14 +1346,24 @@ const createAppointmentFollowups = async (appointment) => {
 
     if (!service) continue;
 
-    const rule = getFollowupRule(service.name, service.category);
+    const rule = getFollowupRuleFromConfig(
+  followupRules,
+  service.name,
+  service.category
+);
 
-    if (!rule.shouldCreate) continue;
+   if (!rule) continue;
 
     const followupDate =
-      rule.months && rule.months > 0
-        ? addMonthsToDate(appointment.appointment_date, rule.months)
-        : addDaysToDate(appointment.appointment_date, rule.days || 14);
+  Number(rule.followup_months || 0) > 0
+    ? addMonthsToDate(
+        appointment.appointment_date,
+        Number(rule.followup_months || 0)
+      )
+    : addDaysToDate(
+        appointment.appointment_date,
+        Number(rule.followup_days || 14)
+      );
 
     const client = clients.find((item) => item.id === appointment.client_id);
     const clientName = client?.full_name || "";
@@ -1345,10 +1373,10 @@ const createAppointmentFollowups = async (appointment) => {
       client_id: appointment.client_id,
       service_id: line.service_id,
       staff_id: line.staff_id || appointment.staff_id || null,
-      followup_type: rule.type || "reagendar",
+     followup_type: rule.followup_type || "reagendar",
       followup_date: followupDate,
       followup_status: "pendiente",
-      message_body: buildFollowupMessage(rule.message, clientName),
+     message_body: buildFollowupMessage(rule.message_body, clientName),
       notes: `Seguimiento generado automáticamente por el servicio: ${service.name}`,
     });
   }
@@ -2727,60 +2755,21 @@ function addMonthsToDate(dateString, monthsToAdd) {
   return date.toISOString().slice(0, 10);
 }
 
-function getFollowupRule(serviceName = "", serviceCategory = "") {
+function getFollowupRuleFromConfig(
+  rules = [],
+  serviceName = "",
+  serviceCategory = ""
+) {
   const text = `${serviceName} ${serviceCategory}`.toLowerCase();
 
-  const isHandsOrFeet =
-    text.includes("uña") ||
-    text.includes("uñas") ||
-    text.includes("mano") ||
-    text.includes("manos") ||
-    text.includes("pie") ||
-    text.includes("pies") ||
-    text.includes("mani") ||
-    text.includes("pedi") ||
-    text.includes("gel") ||
-    text.includes("gelish") ||
-    text.includes("rubber") ||
-    text.includes("acril") ||
-    text.includes("acrí") ||
-    text.includes("softgel") ||
-    text.includes("polygel");
+  return (rules || []).find((rule) => {
+    const keywords = String(rule.keywords || "")
+      .split(",")
+      .map((keyword) => keyword.trim().toLowerCase())
+      .filter(Boolean);
 
-  const isHairTreatment =
-    text.includes("cabello") ||
-    text.includes("capilar") ||
-    text.includes("keratina") ||
-    text.includes("cirugía") ||
-    text.includes("cirugia") ||
-    text.includes("botox") ||
-    text.includes("tratamiento");
-
-  if (isHandsOrFeet) {
-    return {
-      shouldCreate: true,
-      days: 14,
-      months: 0,
-      type: "manos_pies",
-      message:
-        "Hola {client_first_name} 💕 Esperamos que estés muy bien. Ya pasaron aproximadamente 2 semanas desde tu cita y queremos recordarte que es buen momento para agendar tu siguiente servicio de manos o pies. ¿Te ayudamos a buscar un espacio? ✨",
-    };
-  }
-
-  if (isHairTreatment) {
-    return {
-      shouldCreate: true,
-      days: 0,
-      months: 1,
-      type: "cabello_1_mes",
-      message:
-        "Hola {client_first_name} 💕 Esperamos que estés muy bien. Queríamos darte seguimiento a tu tratamiento capilar y recordarte que ya puedes agendar tu próxima cita de mantenimiento o valoración. ¿Te ayudamos a revisar disponibilidad? ✨",
-    };
-  }
-
-  return {
-    shouldCreate: false,
-  };
+    return keywords.some((keyword) => text.includes(keyword));
+  });
 }
 
 function buildFollowupMessage(template, clientName) {
