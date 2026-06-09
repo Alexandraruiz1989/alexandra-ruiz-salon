@@ -1302,6 +1302,54 @@ export default function AgendaPage() {
 
     setActiveSection("nueva");
   };
+  const createAppointmentFollowups = async (appointment) => {
+  if (!appointment?.id || !appointment?.client_id || !appointment?.appointment_date) {
+    return;
+  }
+
+  const rows = [];
+
+  for (const line of validServiceLines) {
+    const service = services.find((item) => item.id === line.service_id);
+
+    if (!service) continue;
+
+    const rule = getFollowupRule(service.name, service.category);
+
+    if (!rule.shouldCreate) continue;
+
+    const followupDate =
+      rule.months && rule.months > 0
+        ? addMonthsToDate(appointment.appointment_date, rule.months)
+        : addDaysToDate(appointment.appointment_date, rule.days || 14);
+
+    const client = clients.find((item) => item.id === appointment.client_id);
+    const clientName = client?.full_name || "";
+
+    rows.push({
+      appointment_id: appointment.id,
+      client_id: appointment.client_id,
+      service_id: line.service_id,
+      staff_id: line.staff_id || appointment.staff_id || null,
+      followup_type: rule.type || "reagendar",
+      followup_date: followupDate,
+      followup_status: "pendiente",
+      message_body: buildFollowupMessage(rule.message, clientName),
+      notes: `Seguimiento generado automáticamente por el servicio: ${service.name}`,
+    });
+  }
+
+  if (rows.length === 0) return;
+
+  const { error } = await supabase.from("appointment_followups").insert(rows);
+
+  if (error) {
+    setMessage(
+      `La cita se guardó, pero no se pudieron crear los seguimientos: ${error.message}`
+    );
+  }
+};
+
     const handleSubmit = async () => {
     setSaving(true);
     setMessage("");
@@ -1444,7 +1492,7 @@ export default function AgendaPage() {
       setSaving(false);
       return;
     }
-
+await createAppointmentFollowups(appointment);
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
     await loadRangeData(form.appointment_date);
@@ -2652,6 +2700,79 @@ function AvailabilitySection({
       />
     </div>
   );
+}
+function addDaysToDate(dateString, daysToAdd) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + daysToAdd);
+  return date.toISOString().slice(0, 10);
+}
+
+function addMonthsToDate(dateString, monthsToAdd) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setMonth(date.getMonth() + monthsToAdd);
+  return date.toISOString().slice(0, 10);
+}
+
+function getFollowupRule(serviceName = "", serviceCategory = "") {
+  const text = `${serviceName} ${serviceCategory}`.toLowerCase();
+
+  const isHandsOrFeet =
+    text.includes("uña") ||
+    text.includes("uñas") ||
+    text.includes("mano") ||
+    text.includes("manos") ||
+    text.includes("pie") ||
+    text.includes("pies") ||
+    text.includes("mani") ||
+    text.includes("pedi") ||
+    text.includes("gel") ||
+    text.includes("gelish") ||
+    text.includes("rubber") ||
+    text.includes("acril") ||
+    text.includes("acrí") ||
+    text.includes("softgel") ||
+    text.includes("polygel");
+
+  const isHairTreatment =
+    text.includes("cabello") ||
+    text.includes("capilar") ||
+    text.includes("keratina") ||
+    text.includes("cirugía") ||
+    text.includes("cirugia") ||
+    text.includes("botox") ||
+    text.includes("tratamiento");
+
+  if (isHandsOrFeet) {
+    return {
+      shouldCreate: true,
+      days: 14,
+      months: 0,
+      type: "manos_pies",
+      message:
+        "Hola {client_first_name} 💕 Esperamos que estés muy bien. Ya pasaron aproximadamente 2 semanas desde tu cita y queremos recordarte que es buen momento para agendar tu siguiente servicio de manos o pies. ¿Te ayudamos a buscar un espacio? ✨",
+    };
+  }
+
+  if (isHairTreatment) {
+    return {
+      shouldCreate: true,
+      days: 0,
+      months: 1,
+      type: "cabello_1_mes",
+      message:
+        "Hola {client_first_name} 💕 Esperamos que estés muy bien. Queríamos darte seguimiento a tu tratamiento capilar y recordarte que ya puedes agendar tu próxima cita de mantenimiento o valoración. ¿Te ayudamos a revisar disponibilidad? ✨",
+    };
+  }
+
+  return {
+    shouldCreate: false,
+  };
+}
+
+function buildFollowupMessage(template, clientName) {
+  const firstName = clientName ? clientName.split(" ")[0] : "hermosa";
+
+  return String(template || "").replaceAll("{client_first_name}", firstName);
 }
 function cleanPhoneForWhatsApp(phone) {
   if (!phone) return "";
