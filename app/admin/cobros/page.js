@@ -89,6 +89,7 @@ export default function CobrosPage() {
   const [loadingData, setLoadingData] = useState(false);
   const [activeSection, setActiveSection] = useState("pendientes");
   const [message, setMessage] = useState("");
+  const [paymentMessage, setPaymentMessage] = useState("");
 
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [appointments, setAppointments] = useState([]);
@@ -179,22 +180,37 @@ const [extraLines, setExtraLines] = useState([]);
           .order("start_time", { ascending: true }),
 
         supabase
-          .from("payments")
-          .select(
-            `
-            *,
-            clients (
-              full_name,
-              phone
-            ),
-            appointments (
-              appointment_date,
-              start_time
-            )
-          `
-          )
-          .order("created_at", { ascending: false })
-          .limit(30),
+  .from("payments")
+  .select(
+    `
+    *,
+    clients (
+      full_name,
+      phone
+    ),
+    appointments (
+      appointment_date,
+      start_time
+    ),
+    payment_service_items (
+      id,
+      name,
+      staff_name,
+      quantity,
+      unit_price,
+      total_price
+    ),
+    payment_extra_items (
+      id,
+      name,
+      quantity,
+      unit_price,
+      total_price
+    )
+  `
+  )
+  .order("created_at", { ascending: false })
+  .limit(30),
 
         supabase
           .from("service_extras")
@@ -261,6 +277,7 @@ const [extraLines, setExtraLines] = useState([]);
   }, [payments, selectedDate]);
 const openPaymentModal = (appointment) => {
   setSelectedAppointment(appointment);
+  setPaymentMessage("");
   setPaymentForm({
     discount_amount: 0,
     tip_amount: 0,
@@ -275,6 +292,7 @@ const closePaymentModal = () => {
   setSelectedAppointment(null);
   setShowPaymentModal(false);
   setSavingPayment(false);
+  setPaymentMessage("");
   setPaymentForm({
     discount_amount: 0,
     tip_amount: 0,
@@ -514,7 +532,7 @@ const savePayment = async () => {
   if (!selectedAppointment) return;
 
   setSavingPayment(true);
-  setMessage("");
+ setPaymentMessage("");
 
   const totals = getPaymentTotals();
 
@@ -541,10 +559,39 @@ const savePayment = async () => {
     .single();
 
   if (paymentError) {
-    setMessage(`No se pudo guardar el pago: ${paymentError.message}`);
+    setPaymentMessage(`No se pudo guardar el pago: ${paymentError.message}`);
     setSavingPayment(false);
     return;
   }
+  const serviceRows = (selectedAppointment.appointment_services || []).map(
+  (service) => ({
+    payment_id: payment.id,
+    appointment_service_id: service.id,
+    service_id: service.service_id,
+    staff_id: service.staff_id || null,
+    name: service.services?.name || "Servicio",
+    staff_name: service.staff?.full_name || null,
+    start_time: service.start_time || null,
+    end_time: service.end_time || null,
+    quantity: 1,
+    unit_price: Number(service.price || service.total_price || 0),
+    total_price: Number(service.total_price || service.price || 0),
+  })
+);
+
+if (serviceRows.length > 0) {
+  const { error: servicesError } = await supabase
+    .from("payment_service_items")
+    .insert(serviceRows);
+
+  if (servicesError) {
+    setPaymentMessage(
+      `El pago se guardó, pero no se pudieron guardar los servicios cobrados: ${servicesError.message}`
+    );
+    setSavingPayment(false);
+    return;
+  }
+}
 
   const validExtras = extraLines.filter(
     (line) => line.extra_id && Number(line.total_price || 0) > 0
@@ -566,7 +613,7 @@ const savePayment = async () => {
       .insert(extraRows);
 
     if (extrasError) {
-      setMessage(
+      setPaymentMessage(
         `El pago se guardó, pero no se pudieron guardar los extras: ${extrasError.message}`
       );
       setSavingPayment(false);
@@ -591,7 +638,7 @@ const savePayment = async () => {
       .insert(staffTotals);
 
     if (staffTotalsError) {
-      setMessage(
+      setPaymentMessage(
         `El pago se guardó, pero no se pudieron guardar los totales por técnica: ${staffTotalsError.message}`
       );
       setSavingPayment(false);
@@ -614,14 +661,14 @@ const savePayment = async () => {
   ]);
 
   if (cashError) {
-    setMessage(
+   setPaymentMessage(
       `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
     );
     setSavingPayment(false);
     return;
   }
 
-  setMessage("Pago guardado correctamente ✨");
+  setPaymentMessage("Pago guardado correctamente ✨");
   closePaymentModal();
   await loadData();
 };
@@ -768,68 +815,163 @@ const savePayment = async () => {
       )}
 
       {activeSection === "pagos" && (
-        <Card>
-          <SectionHeader
-            eyebrow="Pagos"
-            title="Pagos recientes"
-            description="Historial inicial de pagos registrados."
-          />
+  <Card>
+    <SectionHeader
+      eyebrow="Pagos"
+      title="Pagos recientes"
+      description="Historial inicial de pagos registrados con detalle de servicios, extras y propinas."
+    />
 
-          {loadingData ? (
-            <p className="text-sm text-[#68777c]">Cargando pagos...</p>
-          ) : payments.length === 0 ? (
-            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-              Aún no hay pagos registrados.
+    {loadingData ? (
+      <p className="text-sm text-[#68777c]">Cargando pagos...</p>
+    ) : payments.length === 0 ? (
+      <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+        Aún no hay pagos registrados.
+      </div>
+    ) : (
+      <div className="space-y-4">
+        {payments.map((payment) => (
+          <div
+            key={payment.id}
+            className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+          >
+            <div className="flex flex-col justify-between gap-4 md:flex-row">
+              <div>
+                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                  {payment.payment_date}
+                </p>
+
+                <h3 className="mt-2 text-xl font-light">
+                  {payment.clients?.full_name || "Clienta / Venta"}
+                </h3>
+
+                <p className="mt-2 text-sm text-[#68777c]">
+                  Método: {payment.payment_method || "Efectivo"}
+                </p>
+
+                {payment.appointments?.appointment_date && (
+                  <p className="text-sm text-[#68777c]">
+                    Cita: {payment.appointments.appointment_date} ·{" "}
+                    {formatTime(payment.appointments.start_time)}
+                  </p>
+                )}
+              </div>
+
+              <div className="text-right">
+                <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+                  Total
+                </p>
+                <p className="mt-2 text-3xl font-light">
+                  {formatMoney(payment.total_amount)}
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {payments.map((payment) => (
-                <div
-                  key={payment.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
-                >
-                  <div className="flex flex-col justify-between gap-4 md:flex-row">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-                        {payment.payment_date}
-                      </p>
 
-                      <h3 className="mt-2 text-xl font-light">
-                        {payment.clients?.full_name || "Clienta / Venta"}
-                      </h3>
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl bg-[#f7f9fa] p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                  Servicios cobrados
+                </p>
 
-                      <p className="mt-2 text-sm text-[#68777c]">
-                        Método: {payment.payment_method || "Efectivo"}
-                      </p>
-
-                      {payment.tip_amount > 0 && (
-                        <p className="text-sm text-[#68777c]">
-                          Propina: {formatMoney(payment.tip_amount)}
-                        </p>
-                      )}
-
-                      {payment.notes && (
-                        <p className="mt-3 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
-                          {payment.notes}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
-                        Total
-                      </p>
-                      <p className="mt-2 text-3xl font-light">
-                        {formatMoney(payment.total_amount)}
-                      </p>
-                    </div>
-                  </div>
+                <div className="mt-3 space-y-2">
+                  {(payment.payment_service_items || []).length === 0 ? (
+                    <p className="text-sm text-[#68777c]">
+                      Sin servicios registrados.
+                    </p>
+                  ) : (
+                    payment.payment_service_items.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex justify-between gap-3 text-sm text-[#68777c]"
+                      >
+                        <span>
+                          {item.name}
+                          {item.staff_name ? ` · ${item.staff_name}` : ""}
+                        </span>
+                        <span>{formatMoney(item.total_price)}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))}
+              </div>
+
+              <div className="rounded-2xl bg-[#f7f9fa] p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                  Extras / Decoraciones
+                </p>
+
+                <div className="mt-3 space-y-2">
+                  {(payment.payment_extra_items || []).length === 0 ? (
+                    <p className="text-sm text-[#68777c]">
+                      Sin extras registrados.
+                    </p>
+                  ) : (
+                    payment.payment_extra_items.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex justify-between gap-3 text-sm text-[#68777c]"
+                      >
+                        <span>
+                          {item.name} x {item.quantity}
+                        </span>
+                        <span>{formatMoney(item.total_price)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
-          )}
-        </Card>
-      )}
+
+            <div className="mt-5 rounded-2xl bg-[#fff6fb] p-4">
+              <div className="grid gap-3 text-sm md:grid-cols-5">
+                <div>
+                  <p className="text-[#8a969a]">Servicios</p>
+                  <p className="font-medium text-[#263238]">
+                    {formatMoney(payment.subtotal_services)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[#8a969a]">Extras</p>
+                  <p className="font-medium text-[#263238]">
+                    {formatMoney(payment.subtotal_extras)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[#8a969a]">Descuento</p>
+                  <p className="font-medium text-[#263238]">
+                    - {formatMoney(payment.discount_amount)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[#8a969a]">Anticipo</p>
+                  <p className="font-medium text-[#263238]">
+                    - {formatMoney(payment.deposit_amount)}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[#8a969a]">Propina</p>
+                  <p className="font-medium text-[#263238]">
+                    {formatMoney(payment.tip_amount)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {payment.notes && (
+              <p className="mt-4 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                {payment.notes}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+  </Card>
+)}
 
       {activeSection === "extras" && (
         <Card>
@@ -882,6 +1024,7 @@ const savePayment = async () => {
     paymentForm={paymentForm}
     extraLines={extraLines}
     savingPayment={savingPayment}
+    paymentMessage={paymentMessage}
     handlePaymentFormChange={handlePaymentFormChange}
     addExtraLine={addExtraLine}
     removeExtraLine={removeExtraLine}
@@ -901,6 +1044,7 @@ function PaymentModal({
   paymentForm,
   extraLines,
   savingPayment,
+  paymentMessage,
   handlePaymentFormChange,
   addExtraLine,
   removeExtraLine,
@@ -1239,11 +1383,24 @@ function PaymentModal({
               </div>
             </div>
 
+                       {paymentMessage && (
+              <div
+                className={`rounded-2xl px-5 py-4 text-sm font-medium ${
+                  paymentMessage.toLowerCase().includes("no se pudo") ||
+                  paymentMessage.toLowerCase().includes("error")
+                    ? "bg-red-600 text-white"
+                    : "bg-green-600 text-white"
+                }`}
+              >
+                {paymentMessage}
+              </div>
+            )}
+
             <button
               type="button"
               disabled={savingPayment}
               className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-             onClick={savePayment}
+              onClick={savePayment}
             >
               {savingPayment ? "Guardando..." : "Guardar pago"}
             </button>
