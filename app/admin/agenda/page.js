@@ -1302,8 +1302,22 @@ export default function AgendaPage() {
 
     setActiveSection("nueva");
   };
-  const createAppointmentFollowups = async (appointment) => {
+ 
+const createAppointmentFollowups = async (appointment) => {
   if (!appointment?.id || !appointment?.client_id || !appointment?.appointment_date) {
+    return;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("appointment_followups")
+    .delete()
+    .eq("appointment_id", appointment.id)
+    .eq("followup_status", "pendiente");
+
+  if (deleteError) {
+    setMessage(
+      `La cita se guardó, pero no se pudieron actualizar los seguimientos pendientes: ${deleteError.message}`
+    );
     return;
   }
 
@@ -1326,7 +1340,7 @@ export default function AgendaPage() {
     const client = clients.find((item) => item.id === appointment.client_id);
     const clientName = client?.full_name || "";
 
-    rows.push({
+     rows.push({
       appointment_id: appointment.id,
       client_id: appointment.client_id,
       service_id: line.service_id,
@@ -1350,7 +1364,7 @@ export default function AgendaPage() {
   }
 };
 
-    const handleSubmit = async () => {
+const handleSubmit = async () => {
     setSaving(true);
     setMessage("");
 
