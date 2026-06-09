@@ -29,6 +29,9 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function formatMoney(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
 function formatTime(time) {
   if (!time) return "";
   return time.slice(0, 5);
@@ -341,6 +344,7 @@ export default function AgendaPage() {
   const [services, setServices] = useState([]);
   const [followupRules, setFollowupRules] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [rangeAppointments, setRangeAppointments] = useState([]);
   const [staffSchedules, setStaffSchedules] = useState([]);
   const [timeBlocks, setTimeBlocks] = useState([]);
@@ -399,6 +403,7 @@ export default function AgendaPage() {
   servicesResult,
   schedulesResult,
   followupRulesResult,
+  paymentsResult,
 ] = await Promise.all([
         supabase.from("clients").select("*").order("full_name"),
         supabase.from("staff").select("*").eq("active", true).order("full_name"),
@@ -414,6 +419,10 @@ export default function AgendaPage() {
   .select("*")
   .eq("is_active", true)
   .order("created_at", { ascending: true }),
+  supabase
+  .from("payments")
+  .select("id, appointment_id, total_amount, payment_method, payment_date")
+  .not("appointment_id", "is", null),
       ]);
 
     if (clientsResult.error) {
@@ -451,6 +460,11 @@ export default function AgendaPage() {
     await loadRangeData(selectedDate);
 
     setLoadingData(false);
+    if (paymentsResult.error) {
+  setMessage(`Error al cargar pagos: ${paymentsResult.error.message}`);
+} else {
+  setPayments(paymentsResult.data || []);
+}
   };
 
   const loadDateData = async (date) => {
@@ -839,8 +853,13 @@ export default function AgendaPage() {
 
   const openAppointmentDetail = (appointment) => {
     setSelectedAppointment(appointment);
+   
   };
+const getPaymentForAppointment = (appointmentId) => {
+  if (!appointmentId) return null;
 
+  return payments.find((payment) => payment.appointment_id === appointmentId);
+};
   const openEditAppointment = (appointment) => {
     if (!appointment) return;
 
@@ -1699,6 +1718,7 @@ await createAppointmentFollowups(appointment);
           openNewAppointment={openNewAppointment}
           openAppointmentDetail={openAppointmentDetail}
           openEditAppointment={openEditAppointment}
+          getPaymentForAppointment={getPaymentForAppointment}
           activeSection={activeSection}
           setActiveSection={setActiveSection}
         />
@@ -1713,6 +1733,8 @@ await createAppointmentFollowups(appointment);
           openNewAppointment={openNewAppointment}
           openAppointmentDetail={openAppointmentDetail}
           openEditAppointment={openEditAppointment}
+          payment={getPaymentForAppointment(item.appointment?.id)}
+          getPaymentForAppointment={getPaymentForAppointment}
           activeSection={activeSection}
           setActiveSection={setActiveSection}
         />
@@ -1727,6 +1749,7 @@ await createAppointmentFollowups(appointment);
           openNewAppointment={openNewAppointment}
           openAppointmentDetail={openAppointmentDetail}
           openEditAppointment={openEditAppointment}
+          getPaymentForAppointment={getPaymentForAppointment}
           activeSection={activeSection}
           setActiveSection={setActiveSection}
         />
@@ -2312,7 +2335,7 @@ function NewAppointmentSection({
   );
 }
 
-function AppointmentCard({ item, person, onOpen, onEdit, compact = false }) {
+function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = false }) {
   if (item.isBlock) {
     return (
       <div
@@ -2334,7 +2357,9 @@ function AppointmentCard({ item, person, onOpen, onEdit, compact = false }) {
         event.stopPropagation();
         onOpen(item.appointment);
       }}
-      className="relative cursor-pointer rounded-xl px-3 py-2 text-xs text-white shadow-sm"
+  className={`relative cursor-pointer rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
+  payment ? "border-l-4 border-green-400 pl-4" : ""
+}`}
       style={{
         backgroundColor: item.staff?.color || person?.color || "#bd7b83",
       }}
@@ -2351,10 +2376,19 @@ function AppointmentCard({ item, person, onOpen, onEdit, compact = false }) {
         ✏️
       </button>
 
-      <p className="pr-8 font-medium">
+      {payment && (
+  <div
+    className="absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-[12px] font-bold text-white shadow-sm"
+    title={`Cita cobrada: ${formatMoney(payment.total_amount)}`}
+  >
+    $
+  </div>
+)}
+
+      <p className={payment ? "pl-7 pr-8 font-medium" : "pr-8 font-medium"}>
         {formatTime(item.start_time)} - {formatTime(item.end_time)}
       </p>
-      <p className="pr-8">
+      <p className={payment ? "pl-7 pr-8" : "pr-8"}>
         {item.appointment?.clients?.full_name || "Clienta"}
       </p>
       <p className={compact ? "truncate" : ""}>
@@ -2373,6 +2407,7 @@ function DailyViewSection({
   openNewAppointment,
   openAppointmentDetail,
   openEditAppointment,
+  getPaymentForAppointment,
   activeSection,
   setActiveSection,
 }) {
@@ -2486,6 +2521,7 @@ function DailyViewSection({
                                 key={item.id}
                                 item={item}
                                 person={person}
+                                payment={getPaymentForAppointment(item.appointment?.id)}
                                 onOpen={openAppointmentDetail}
                                 onEdit={openEditAppointment}
                               />
@@ -2513,6 +2549,7 @@ function WeeklyViewSection({
   openNewAppointment,
   openAppointmentDetail,
   openEditAppointment,
+  getPaymentForAppointment,
   activeSection,
   setActiveSection,
 }) {
@@ -2570,6 +2607,7 @@ function WeeklyViewSection({
                       key={item.id}
                       item={item}
                       onOpen={openAppointmentDetail}
+                      payment={getPaymentForAppointment(item.appointment?.id)}
                       onEdit={openEditAppointment}
                       compact
                     />
@@ -2598,6 +2636,7 @@ function MonthlyViewSection({
   openNewAppointment,
   openAppointmentDetail,
   openEditAppointment,
+  getPaymentForAppointment,
   activeSection,
   setActiveSection,
 }) {
@@ -2666,6 +2705,7 @@ function MonthlyViewSection({
                     key={item.id}
                     item={item}
                     onOpen={openAppointmentDetail}
+                    payment={getPaymentForAppointment(item.appointment?.id)}
                     onEdit={openEditAppointment}
                     compact
                   />
