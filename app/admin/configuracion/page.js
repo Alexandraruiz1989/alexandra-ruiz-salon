@@ -7,6 +7,7 @@ import AdminShell from "../components/AdminShell";
 const menuItems = [
   { key: "mensajes", label: "Mensajes WhatsApp" },
   { key: "negocio", label: "Datos del negocio" },
+  { key: "seguimientos", label: "Seguimientos" },
   { key: "automaticos", label: "Horarios automáticos" },
 ];
 
@@ -50,8 +51,10 @@ export default function ConfiguracionPage() {
 
   const [activeSection, setActiveSection] = useState("mensajes");
   const [message, setMessage] = useState("");
+const [activeMessageId, setActiveMessageId] = useState(null);
 
   const [templates, setTemplates] = useState([]);
+  const [followupRules, setFollowupRules] = useState([]);
   const [businessSettings, setBusinessSettings] = useState({
     id: "",
     business_name: "Alexandra Ruiz Salón Spa",
@@ -73,28 +76,32 @@ export default function ConfiguracionPage() {
 
     start();
   }, []);
+useEffect(() => {
+  if (!message) return;
 
-  useEffect(() => {
-    if (!message) return;
+  const timer = setTimeout(() => {
+    setMessage("");
+    setActiveMessageId(null);
+  }, 15000);
 
-    const timer = setTimeout(() => {
-      setMessage("");
-    }, 5000);
-
-    return () => clearTimeout(timer);
-  }, [message]);
+  return () => clearTimeout(timer);
+}, [message]);
 
   const loadData = async () => {
     setLoadingData(true);
     setMessage("");
 
-    const [settingsResult, templatesResult] = await Promise.all([
-      supabase.from("business_settings").select("*").limit(1).maybeSingle(),
-      supabase
-        .from("message_templates")
-        .select("*")
-        .order("created_at", { ascending: true }),
-    ]);
+   const [settingsResult, templatesResult, followupRulesResult] = await Promise.all([
+  supabase.from("business_settings").select("*").limit(1).maybeSingle(),
+  supabase
+    .from("message_templates")
+    .select("*")
+    .order("created_at", { ascending: true }),
+  supabase
+    .from("followup_rules")
+    .select("*")
+    .order("created_at", { ascending: true }),
+]);
 
     if (settingsResult.error) {
       setMessage(`No se pudo cargar datos del negocio: ${settingsResult.error.message}`);
@@ -111,7 +118,11 @@ export default function ConfiguracionPage() {
     } else {
       setTemplates(templatesResult.data || []);
     }
-
+if (followupRulesResult.error) {
+  setMessage(`No se pudieron cargar reglas de seguimiento: ${followupRulesResult.error.message}`);
+} else {
+  setFollowupRules(followupRulesResult.data || []);
+}
     setLoadingData(false);
   };
 
@@ -131,7 +142,48 @@ export default function ConfiguracionPage() {
       )
     );
   };
+const handleFollowupRuleChange = (id, field, value) => {
+  setFollowupRules((current) =>
+    current.map((rule) =>
+      rule.id === id ? { ...rule, [field]: value } : rule
+    )
+  );
+};
 
+const saveFollowupRule = async (rule) => {
+  setSaving(true);
+  setMessage("");
+  setActiveMessageId(rule.id);
+
+  if (!rule.title?.trim() || !rule.keywords?.trim() || !rule.message_body?.trim()) {
+    setMessage("El título, palabras clave y mensaje son obligatorios.");
+    setSaving(false);
+    return;
+  }
+
+  const { error } = await supabase
+    .from("followup_rules")
+    .update({
+      title: rule.title.trim(),
+      keywords: rule.keywords.trim(),
+      followup_days: Number(rule.followup_days || 0),
+      followup_months: Number(rule.followup_months || 0),
+      followup_type: rule.followup_type?.trim() || "reagendar",
+      message_body: rule.message_body.trim(),
+      is_active: Boolean(rule.is_active),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", rule.id);
+
+  if (error) {
+    setMessage(`No se pudo guardar la regla de seguimiento: ${error.message}`);
+    setSaving(false);
+    return;
+  }
+
+  setMessage("Regla de seguimiento guardada correctamente ✨");
+  setSaving(false);
+};
   const saveBusinessSettings = async () => {
     setSaving(true);
     setMessage("");
@@ -188,6 +240,7 @@ export default function ConfiguracionPage() {
   const saveTemplate = async (template) => {
     setSaving(true);
     setMessage("");
+    setActiveMessageId(template.id);
 
     if (!template.title.trim() || !template.message_body.trim()) {
       setMessage("El título y mensaje son obligatorios.");
@@ -307,16 +360,17 @@ export default function ConfiguracionPage() {
                       }
                       className="min-h-32 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                     />
-                  </div>
-{message && (
+                    {message && activeMessageId === template.id && (
   <div
     className={`mt-4 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
       message
     )}`}
   >
     {message}
-  </div>
-)}
+                  </div>
+                  )}
+                   </div>
+
                   <div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                     <label className="flex items-center gap-2 text-sm text-[#68777c]">
                       <input
@@ -332,6 +386,7 @@ export default function ConfiguracionPage() {
                       />
                       Mensaje activo
                     </label>
+
 
                     <button
                       type="button"
@@ -406,7 +461,176 @@ export default function ConfiguracionPage() {
           </div>
         </Card>
       )}
+{activeSection === "seguimientos" && (
+  <Card>
+    <SectionHeader
+      eyebrow="Seguimientos"
+      title="Reglas para reagendar clientas"
+      description="Configura cuándo se debe crear un recordatorio según las palabras clave del servicio."
+    />
 
+    <div className="mb-6 rounded-2xl bg-[#f7f9fa] p-4 text-sm leading-6 text-[#68777c]">
+      El sistema revisa el nombre y categoría del servicio. Si encuentra alguna
+      palabra clave, crea un seguimiento con los días o meses configurados.
+      Puedes usar variables como{" "}
+      <span className="font-medium text-[#263238]">{"{client_first_name}"}</span>.
+    </div>
+
+    {loadingData ? (
+      <p className="text-sm text-[#68777c]">Cargando reglas...</p>
+    ) : followupRules.length === 0 ? (
+      <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+        No hay reglas de seguimiento registradas.
+      </div>
+    ) : (
+      <div className="space-y-5">
+        {followupRules.map((rule) => (
+          <div
+            key={rule.id}
+            className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+          >
+            <div className="grid gap-4 md:grid-cols-[1fr_0.35fr_0.35fr]">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Título
+                </label>
+                <input
+                  value={rule.title || ""}
+                  onChange={(event) =>
+                    handleFollowupRuleChange(rule.id, "title", event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Días
+                </label>
+                <input
+                  type="number"
+                  value={rule.followup_days || 0}
+                  onChange={(event) =>
+                    handleFollowupRuleChange(
+                      rule.id,
+                      "followup_days",
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Meses
+                </label>
+                <input
+                  type="number"
+                  value={rule.followup_months || 0}
+                  onChange={(event) =>
+                    handleFollowupRuleChange(
+                      rule.id,
+                      "followup_months",
+                      event.target.value
+                    )
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Palabras clave
+              </label>
+              <textarea
+                value={rule.keywords || ""}
+                onChange={(event) =>
+                  handleFollowupRuleChange(rule.id, "keywords", event.target.value)
+                }
+                className="min-h-20 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Ej. uñas, manicure, pedicure, gel..."
+              />
+              <p className="mt-2 text-xs text-[#8a969a]">
+                Separa palabras clave con coma.
+              </p>
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Tipo interno
+              </label>
+              <input
+                value={rule.followup_type || ""}
+                onChange={(event) =>
+                  handleFollowupRuleChange(rule.id, "followup_type", event.target.value)
+                }
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="manos_pies, cabello_1_mes..."
+              />
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Mensaje WhatsApp
+              </label>
+              <textarea
+                value={rule.message_body || ""}
+                onChange={(event) =>
+                  handleFollowupRuleChange(
+                    rule.id,
+                    "message_body",
+                    event.target.value
+                  )
+                }
+                className="min-h-32 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              />
+            </div>
+
+            <div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <label className="flex items-center gap-2 text-sm text-[#68777c]">
+                <input
+                  type="checkbox"
+                  checked={Boolean(rule.is_active)}
+                  onChange={(event) =>
+                    handleFollowupRuleChange(
+                      rule.id,
+                      "is_active",
+                      event.target.checked
+                    )
+                  }
+                />
+                Regla activa
+              </label>
+{message && activeMessageId === rule.id && (
+  <div
+    className={`mt-4 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+      message
+    )}`}
+  >
+    {message}
+  </div>
+)}
+
+<div className="mt-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+  ...
+</div>
+              <button
+                type="button"
+                onClick={() => saveFollowupRule(rule)}
+                disabled={saving}
+                className="rounded-full bg-[#bd7b83] px-6 py-3 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                Guardar regla
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </Card>
+)}
       {activeSection === "automaticos" && (
         <Card>
           <SectionHeader
