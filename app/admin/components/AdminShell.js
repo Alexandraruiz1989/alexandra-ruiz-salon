@@ -50,6 +50,7 @@ export default function AdminShell({
   { label: "Clientas", href: "/admin/clientas", key: "clientas" },
   { label: "Servicios", href: "/admin/servicios", key: "servicios" },
   { label: "Agenda", href: "/admin/agenda", key: "agenda" },
+  { label: "Cobros", href: "/admin/cobros", key: "cobros" },
   { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
   { label: "Tareas", href: "/admin/tareas", key: "tareas" },
   { label: "Configuración", href: "/admin/configuracion", key: "configuracion" },
