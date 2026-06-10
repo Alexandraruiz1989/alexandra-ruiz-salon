@@ -342,6 +342,18 @@ export default function AgendaPage() {
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
+
+  const [showQuickClientModal, setShowQuickClientModal] = useState(false);
+const [savingQuickClient, setSavingQuickClient] = useState(false);
+const [quickClientMessage, setQuickClientMessage] = useState("");
+const [quickClientForm, setQuickClientForm] = useState({
+  full_name: "",
+  phone: "",
+  email: "",
+  birthday: "",
+  gender: "",
+  notes: "",
+});
   const [followupRules, setFollowupRules] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -590,6 +602,86 @@ export default function AgendaPage() {
       setRangeTimeBlocks(blocksResult.data || []);
     }
   };
+  const resetQuickClientForm = () => {
+  setQuickClientForm({
+    full_name: "",
+    phone: "",
+    email: "",
+    birthday: "",
+    gender: "",
+    notes: "",
+  });
+  setQuickClientMessage("");
+};
+
+const openQuickClientModal = () => {
+  resetQuickClientForm();
+  setShowQuickClientModal(true);
+};
+
+const closeQuickClientModal = () => {
+  setShowQuickClientModal(false);
+  resetQuickClientForm();
+};
+
+const handleQuickClientChange = (field, value) => {
+  setQuickClientForm((current) => ({
+    ...current,
+    [field]: value,
+  }));
+};
+
+const saveQuickClient = async () => {
+  setQuickClientMessage("");
+
+  const fullName = quickClientForm.full_name.trim();
+  const phone = quickClientForm.phone.trim();
+
+  if (!fullName || !phone) {
+    setQuickClientMessage("El nombre completo y el teléfono son obligatorios.");
+    return;
+  }
+
+  setSavingQuickClient(true);
+
+  const clientData = {
+    full_name: fullName,
+    phone,
+    email: quickClientForm.email.trim() || null,
+    birthday: quickClientForm.birthday || null,
+    gender: quickClientForm.gender || null,
+    notes: quickClientForm.notes.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("clients")
+    .insert([clientData])
+    .select()
+    .single();
+
+  if (error) {
+    setQuickClientMessage(`No se pudo registrar cliente: ${error.message}`);
+    setSavingQuickClient(false);
+    return;
+  }
+
+  setClients((current) =>
+    [...current, data].sort((a, b) =>
+      String(a.full_name || "").localeCompare(String(b.full_name || ""))
+    )
+  );
+
+  setForm((current) => ({
+    ...current,
+    client_id: data.id,
+  }));
+
+  setSavingQuickClient(false);
+  setShowQuickClientModal(false);
+  resetQuickClientForm();
+  setMessage("Cliente registrado y seleccionado correctamente ✨");
+};
     const handleFormChange = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -651,46 +743,64 @@ export default function AgendaPage() {
   };
 
   const handleServiceLineChange = (index, field, value) => {
-    setServiceLines((current) => {
-      const updated = [...current];
-      const line = { ...updated[index], [field]: value };
+  setServiceLines((current) => {
+    const updated = [...current];
+    const line = { ...updated[index], [field]: value };
 
-      if (field === "service_search") {
-        line.service_id = "";
+    if (field === "service_search") {
+      line.service_id = "";
+      line.duration_minutes = 0;
+      line.cleanup_minutes = 0;
+      line.price = 0;
+      line.end_time = "";
+    }
 
-        setActiveSuggestion((currentActive) => ({
-          ...currentActive,
-          [index]: 0,
-        }));
+    if (field === "staff_id" && value && !line.start_time) {
+      const previousSameStaffLine = updated
+        .slice(0, index)
+        .reverse()
+        .find(
+          (item) =>
+            item.staff_id === value &&
+            item.end_time &&
+            item.end_time !== ""
+        );
 
-        setClosedSuggestions((currentClosed) => ({
-          ...currentClosed,
-          [index]: false,
-        }));
-      }
+      if (previousSameStaffLine) {
+        line.start_time = previousSameStaffLine.end_time;
 
-      if (field === "start_time") {
         const totalMinutes =
           Number(line.duration_minutes || 0) +
           Number(line.cleanup_minutes || 0);
 
-        line.end_time = addMinutesToTime(value, totalMinutes);
-      }
-
-      if (field === "duration_minutes" || field === "cleanup_minutes") {
-        const totalMinutes =
-          Number(line.duration_minutes || 0) +
-          Number(line.cleanup_minutes || 0);
-
-        if (line.start_time) {
+        if (totalMinutes > 0) {
           line.end_time = addMinutesToTime(line.start_time, totalMinutes);
         }
       }
+    }
 
-      updated[index] = line;
-      return updated;
-    });
-  };
+    if (field === "start_time") {
+      const totalMinutes =
+        Number(line.duration_minutes || 0) +
+        Number(line.cleanup_minutes || 0);
+
+      line.end_time = addMinutesToTime(value, totalMinutes);
+    }
+
+    if (field === "duration_minutes" || field === "cleanup_minutes") {
+      const totalMinutes =
+        Number(line.duration_minutes || 0) +
+        Number(line.cleanup_minutes || 0);
+
+      if (line.start_time) {
+        line.end_time = addMinutesToTime(line.start_time, totalMinutes);
+      }
+    }
+
+    updated[index] = line;
+    return updated;
+  });
+};
 
   const handleServiceSearchKeyDown = (event, index, matches) => {
     if (!matches.length) return;
@@ -745,8 +855,8 @@ export default function AgendaPage() {
   };
 
   const addServiceLine = () => {
-    setServiceLines((current) => [...current, { ...emptyServiceLine }]);
-  };
+  setServiceLines((current) => [...current, { ...emptyServiceLine }]);
+};
 
   const removeServiceLine = (index) => {
     setServiceLines((current) => {
@@ -1692,6 +1802,7 @@ await createAppointmentFollowups(appointment);
           saving={saving}
           timeOptions={timeOptions}
           handleFormChange={handleFormChange}
+          openQuickClientModal={openQuickClientModal}
           getServiceMatches={getServiceMatches}
           applySelectedService={applySelectedService}
           handleServiceLineChange={handleServiceLineChange}
@@ -1708,7 +1819,7 @@ await createAppointmentFollowups(appointment);
         />
       )}
 
-      {activeSection === "diaria" && (
+  {activeSection === "diaria" && (
         <DailyViewSection
           selectedDate={selectedDate}
           setSelectedDate={setSelectedDate}
@@ -1774,6 +1885,16 @@ await createAppointmentFollowups(appointment);
           onEdit={() => openEditAppointment(selectedAppointment)}
         />
       )}
+      {showQuickClientModal && (
+  <QuickClientModal
+    form={quickClientForm}
+    saving={savingQuickClient}
+    message={quickClientMessage}
+    onChange={handleQuickClientChange}
+    onSave={saveQuickClient}
+    onClose={closeQuickClientModal}
+  />
+)}
     </AdminShell>
   );
 }
@@ -1791,6 +1912,7 @@ function NewAppointmentSection({
   saving,
   timeOptions,
   handleFormChange,
+  openQuickClientModal,
   getServiceMatches,
   applySelectedService,
   handleServiceLineChange,
@@ -1824,6 +1946,7 @@ function NewAppointmentSection({
               <label className="mb-2 block text-sm text-[#68777c]">
                 Clienta *
               </label>
+
               <select
                 name="client_id"
                 value={form.client_id}
@@ -1838,12 +1961,13 @@ function NewAppointmentSection({
                 ))}
               </select>
 
-              <a
-                href="/admin/clientas"
+              <button
+                type="button"
+                onClick={openQuickClientModal}
                 className="mt-2 inline-block text-sm text-[#bd7b83]"
               >
-                Registrar nueva clienta
-              </a>
+                + Registrar nueva clienta/cliente
+              </button>
             </div>
 
             <div>
@@ -2270,13 +2394,166 @@ function NewAppointmentSection({
         availabilityMessage={availabilityMessage}
         availabilitySuggestions={availabilitySuggestions}
         applyAvailabilitySuggestion={applyAvailabilitySuggestion}
+        getToastStyle={getToastStyle}
       />
     </div>
   );
-}function AvailabilityCard({
+}
+
+function QuickClientModal({
+  form,
+  saving,
+  message,
+  onChange,
+  onSave,
+  onClose,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-[1.5rem] bg-white p-6 shadow-2xl">
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
+              Nueva clienta/cliente
+            </p>
+            <h3 className="mt-2 text-2xl font-light">Registro rápido</h3>
+            <p className="mt-1 text-sm text-[#68777c]">
+              Al guardar, se seleccionará automáticamente en la cita.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
+          >
+            ×
+          </button>
+        </div>
+
+        {message && (
+          <div
+            className={`mb-5 rounded-2xl px-5 py-4 text-sm font-medium ${
+              message.toLowerCase().includes("no se pudo") ||
+              message.toLowerCase().includes("obligatorios")
+                ? "bg-red-600 text-white"
+                : "bg-green-600 text-white"
+            }`}
+          >
+            {message}
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Nombre completo *
+            </label>
+            <input
+              type="text"
+              value={form.full_name}
+              onChange={(event) => onChange("full_name", event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Ej. María López"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Teléfono / WhatsApp *
+            </label>
+            <input
+              type="tel"
+              value={form.phone}
+              onChange={(event) => onChange("phone", event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Ej. 9991234567"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Correo electrónico
+            </label>
+            <input
+              type="email"
+              value={form.email}
+              onChange={(event) => onChange("email", event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Ej. clienta@email.com"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Fecha de cumpleaños
+            </label>
+            <input
+              type="date"
+              value={form.birthday}
+              onChange={(event) => onChange("birthday", event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Género
+            </label>
+            <select
+              value={form.gender}
+              onChange={(event) => onChange("gender", event.target.value)}
+              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+            >
+              <option value="">No especificado</option>
+              <option value="Mujer">Mujer</option>
+              <option value="Hombre">Hombre</option>
+              <option value="Otro">Otro</option>
+              <option value="Prefiere no decir">Prefiere no decir</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm text-[#68777c]">
+              Notas
+            </label>
+            <textarea
+              value={form.notes}
+              onChange={(event) => onChange("notes", event.target.value)}
+              className="min-h-28 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              placeholder="Ej. alergias, preferencias, colores favoritos, observaciones..."
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving}
+            className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+          >
+            {saving ? "Guardando..." : "Guardar y usar en la cita"}
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AvailabilityCard({
   availabilityMessage,
   availabilitySuggestions,
   applyAvailabilitySuggestion,
+  getToastStyle,
 }) {
   return (
     <Card>
@@ -2357,9 +2634,9 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         event.stopPropagation();
         onOpen(item.appointment);
       }}
-  className={`relative cursor-pointer rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
-  payment ? "border-l-4 border-green-400 pl-4" : ""
-}`}
+      className={`relative cursor-pointer rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
+        payment ? "border-l-4 border-green-400 pl-4" : ""
+      }`}
       style={{
         backgroundColor: item.staff?.color || person?.color || "#bd7b83",
       }}
@@ -2377,13 +2654,13 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
       </button>
 
       {payment && (
-  <div
-    className="absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-[12px] font-bold text-white shadow-sm"
-    title={`Cita cobrada: ${formatMoney(payment.total_amount)}`}
-  >
-    $
-  </div>
-)}
+        <div
+          className="absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-[12px] font-bold text-white shadow-sm"
+          title={`Cita cobrada: ${formatMoney(payment.total_amount)}`}
+        >
+          $
+        </div>
+      )}
 
       <p className={payment ? "pl-7 pr-8 font-medium" : "pr-8 font-medium"}>
         {formatTime(item.start_time)} - {formatTime(item.end_time)}
@@ -2521,7 +2798,9 @@ function DailyViewSection({
                                 key={item.id}
                                 item={item}
                                 person={person}
-                                payment={getPaymentForAppointment(item.appointment?.id)}
+                                payment={getPaymentForAppointment(
+                                  item.appointment?.id
+                                )}
                                 onOpen={openAppointmentDetail}
                                 onEdit={openEditAppointment}
                               />
@@ -2842,8 +3121,8 @@ function openWhatsAppMessage(phone, message) {
 }
 
 function getClientFirstName(fullName) {
-  if (!fullName) return "hermosa";
-  return fullName.split(" ")[0];
+  if (!fullName) return "";
+  return ` ${fullName.split(" ")[0]}`;
 }
 
 function getAppointmentServicesText(appointment) {
@@ -2866,7 +3145,40 @@ function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const servicesText = getAppointmentServicesText(appointment);
  
   const [currentRole, setCurrentRole] = useState("tecnica");
- const canUseManualWhatsApp = currentRole !== "tecnica";
+
+useEffect(() => {
+  const loadRole = async () => {
+    const { data } = await supabase.auth.getSession();
+    const user = data.session?.user;
+
+    if (!user) return;
+
+    const { data: profileById } = await supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+
+    if (profileById?.role) {
+      setCurrentRole(profileById.role);
+      return;
+    }
+
+    const { data: profileByEmail } = await supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("email", user.email)
+      .maybeSingle();
+
+    if (profileByEmail?.role) {
+      setCurrentRole(profileByEmail.role);
+    }
+  };
+
+  loadRole();
+}, []);
+
+const canUseManualWhatsApp = currentRole !== "tecnica";
 
   const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
