@@ -153,38 +153,71 @@ useEffect(() => {
 
     const [appointmentsResult, paymentsResult, extrasResult, settingsResult] =
       await Promise.all([
-        supabase
-          .from("appointments")
-          .select(
-            `
-            *,
-            clients (
-              id,
-              full_name,
-              phone
-            ),
-            appointment_services (
-              id,
-              service_id,
-              staff_id,
-              start_time,
-              end_time,
-              price,
-              total_price,
-              services (
-                id,
-                name,
-                category
-              ),
-              staff (
-                id,
-                full_name
-              )
-            )
-          `
+        appointmentIdFromUrl
+  ? supabase
+      .from("appointments")
+      .select(
+        `
+        *,
+        clients (
+          id,
+          full_name,
+          phone
+        ),
+        appointment_services (
+          id,
+          service_id,
+          staff_id,
+          start_time,
+          end_time,
+          price,
+          total_price,
+          services (
+            id,
+            name,
+            category
+          ),
+          staff (
+            id,
+            full_name
           )
-          .eq("appointment_date", selectedDate)
-          .order("start_time", { ascending: true }),
+        )
+      `
+      )
+      .or(`appointment_date.eq.${selectedDate},id.eq.${appointmentIdFromUrl}`)
+      .order("start_time", { ascending: true })
+  : supabase
+      .from("appointments")
+      .select(
+        `
+        *,
+        clients (
+          id,
+          full_name,
+          phone
+        ),
+        appointment_services (
+          id,
+          service_id,
+          staff_id,
+          start_time,
+          end_time,
+          price,
+          total_price,
+          services (
+            id,
+            name,
+            category
+          ),
+          staff (
+            id,
+            full_name
+          )
+        )
+      `
+      )
+      .eq("appointment_date", selectedDate)
+      .order("start_time", { ascending: true }),
 
         supabase
   .from("payments")
@@ -307,6 +340,13 @@ const closePaymentModal = () => {
     notes: "",
   });
   setExtraLines([]);
+
+  if (
+    typeof window !== "undefined" &&
+    window.location.search.includes("appointmentId")
+  ) {
+    window.history.replaceState(null, "", "/admin/cobros");
+  }
 };
 
 const handlePaymentFormChange = (field, value) => {
@@ -654,30 +694,49 @@ if (serviceRows.length > 0) {
   }
 
   const { error: cashError } = await supabase.from("cash_movements").insert([
-    {
-      movement_date: selectedDate,
-      movement_type: "ingreso",
-      amount: totals.totalAmount,
-      payment_method: paymentForm.payment_method,
-      concept: `Cobro de cita - ${
-        selectedAppointment.clients?.full_name || "Clienta"
-      }`,
-      notes: paymentForm.notes?.trim() || null,
-      payment_id: payment.id,
-    },
-  ]);
+  {
+    movement_date: selectedDate,
+    movement_type: "ingreso",
+    amount: totals.totalAmount,
+    payment_method: paymentForm.payment_method,
+    concept: `Cobro de cita - ${
+      selectedAppointment.clients?.full_name || "Clienta"
+    }`,
+    notes: paymentForm.notes?.trim() || null,
+    payment_id: payment.id,
+  },
+]);
 
-  if (cashError) {
-   setPaymentMessage(
-      `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
-    );
-    setSavingPayment(false);
-    return;
-  }
+if (cashError) {
+  setPaymentMessage(
+    `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
+  );
+  setSavingPayment(false);
+  return;
+}
 
-  setPaymentMessage("Pago guardado correctamente ✨");
-  closePaymentModal();
-  await loadData();
+setMessage("Pago guardado correctamente ✨");
+setSavingPayment(false);
+
+setSelectedAppointment(null);
+setShowPaymentModal(false);
+setPaymentMessage("");
+setPaymentForm({
+  discount_amount: 0,
+  tip_amount: 0,
+  payment_method: "Efectivo",
+  notes: "",
+});
+setExtraLines([]);
+
+if (
+  typeof window !== "undefined" &&
+  window.location.search.includes("appointmentId")
+) {
+  window.history.replaceState(null, "", "/admin/cobros");
+}
+
+await loadData();
 };
   if (loadingSession) {
     return (
