@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
@@ -111,7 +111,7 @@ function getAppointmentTotal(appointment) {
   }, 0);
 }
 
-export default function CobrosPage() {
+function CobrosContent() {
   const searchParams = useSearchParams();
   const appointmentIdFromUrl = searchParams.get("appointmentId");
 
@@ -869,8 +869,8 @@ export default function CobrosPage() {
         ? `${window.location.origin}/recibo/${payment.id}`
         : "";
 
-    const clientName = payment.clients?.full_name || "hermosa";
-    const firstName = clientName.split(" ")[0];
+    const clientName = payment.clients?.full_name || "";
+const firstName = clientName ? ` ${clientName.split(" ")[0]}` : "";
 
     const message = `Hola ${firstName} 💕 Te compartimos tu recibo de pago de Alexandra Ruiz Salón Spa.
 
@@ -1654,5 +1654,18 @@ function PaymentModal({
         </div>
       </div>
     </div>
+  );
+}
+export default function CobrosPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
+          <p>Cargando cobros...</p>
+        </main>
+      }
+    >
+      <CobrosContent />
+    </Suspense>
   );
 }
