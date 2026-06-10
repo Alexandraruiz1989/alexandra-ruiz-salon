@@ -9,6 +9,7 @@ const menuItems = [
   { key: "conocimiento", label: "Base de conocimiento" },
   { key: "menu", label: "Menú del bot" },
   { key: "faqs", label: "Preguntas frecuentes" },
+  { key: "probar", label: "Probar bot" },
   { key: "solicitudes", label: "Solicitudes de cita" },
   { key: "conversaciones", label: "Conversaciones" },
 ];
@@ -107,6 +108,11 @@ export default function BotPage() {
 
   const [appointmentRequests, setAppointmentRequests] = useState([]);
   const [conversations, setConversations] = useState([]);
+const [testClientName, setTestClientName] = useState("Ana López");
+const [testClientPhone, setTestClientPhone] = useState("9991112233");
+const [testMessage, setTestMessage] = useState("");
+const [testLoading, setTestLoading] = useState(false);
+const [testResult, setTestResult] = useState(null);
 
   useEffect(() => {
     const start = async () => {
@@ -515,6 +521,46 @@ export default function BotPage() {
     setMessage(item.active ? "Pregunta desactivada." : "Pregunta activada ✨");
     await loadData();
   };
+const testBot = async () => {
+  setMessage("");
+  setTestResult(null);
+
+  if (!testMessage.trim()) {
+    setMessage("Escribe un mensaje para probar el bot.");
+    return;
+  }
+
+  setTestLoading(true);
+
+  try {
+    const response = await fetch("/api/bot/test", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: testMessage.trim(),
+        clientName: testClientName.trim(),
+        clientPhone: testClientPhone.trim() || "test",
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setMessage(data.error || "No se pudo probar el bot.");
+      setTestLoading(false);
+      return;
+    }
+
+    setTestResult(data);
+    setTestLoading(false);
+    await loadData();
+  } catch (error) {
+    setMessage(error.message || "Error al probar el bot.");
+    setTestLoading(false);
+  }
+};
 
   const updateRequestStatus = async (requestId, status) => {
     setMessage("");
@@ -955,6 +1001,102 @@ export default function BotPage() {
           </Card>
         </div>
       )}
+
+{activeSection === "probar" && (
+  <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+    <Card>
+      <SectionHeader
+        eyebrow="Prueba interna"
+        title="Probar respuesta del bot"
+        description="Escribe un mensaje como si fueras una clienta. Esto no envía WhatsApp real."
+      />
+
+      <div className="space-y-4">
+        <InputField
+          label="Nombre de prueba"
+          value={testClientName}
+          onChange={setTestClientName}
+          placeholder="Ana López"
+        />
+
+        <InputField
+          label="WhatsApp de prueba"
+          value={testClientPhone}
+          onChange={setTestClientPhone}
+          placeholder="9991112233"
+        />
+
+        <TextAreaField
+          label="Mensaje recibido"
+          value={testMessage}
+          onChange={setTestMessage}
+          placeholder="Ej. Hola, quiero agendar una cita"
+        />
+
+        <button
+          type="button"
+          disabled={testLoading}
+          onClick={testBot}
+          className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+        >
+          {testLoading ? "Probando..." : "Probar respuesta"}
+        </button>
+      </div>
+    </Card>
+
+    <Card>
+      <SectionHeader
+        eyebrow="Respuesta"
+        title="Resultado del bot"
+        description="Aquí verás qué contestaría el bot y de dónde tomó la respuesta."
+      />
+
+      {!testResult ? (
+        <EmptyState text="Aún no has probado ningún mensaje." />
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-[#f7f9fa] p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+              Mensaje enviado
+            </p>
+            <p className="mt-2 whitespace-pre-wrap text-sm text-[#263238]">
+              {testMessage}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-[#dde3e6] bg-white p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+              Respuesta del bot
+            </p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#263238]">
+              {testResult.reply}
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl bg-[#f7f9fa] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                Intención detectada
+              </p>
+              <p className="mt-2 text-sm text-[#263238]">
+                {testResult.intent || "-"}
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-[#f7f9fa] p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                Fuente
+              </p>
+              <p className="mt-2 text-sm text-[#263238]">
+                {testResult.matchedSource || "-"}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  </div>
+)}
 
       {activeSection === "solicitudes" && (
         <Card>
