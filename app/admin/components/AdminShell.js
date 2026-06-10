@@ -18,6 +18,7 @@ const roleModulePermissions = {
     "configuracion",
     "calificaciones",
     "seguimientos",
+    "bot",
     "notificaciones",
     "accesos",
   ],
@@ -33,6 +34,7 @@ const roleModulePermissions = {
     "tareas",
     "calificaciones",
     "seguimientos",
+    "bot",
     "notificaciones",
   ],
   tecnica: [
@@ -176,6 +178,7 @@ export default function AdminShell({
       key: "calificaciones",
     },
     { label: "Seguimientos", href: "/admin/seguimientos", key: "seguimientos" },
+    { label: "Bot / WhatsApp", href: "/admin/bot", key: "bot" },
     {
       label: "Notificaciones",
       href: "/admin/notificaciones",
@@ -193,7 +196,6 @@ export default function AdminShell({
     "Tienda / Productos próximamente",
     "Membresías próximamente",
     "Tarjetas de regalo próximamente",
-    "Bot / WhatsApp próximamente",
   ];
 
   const isModuleAllowed =
