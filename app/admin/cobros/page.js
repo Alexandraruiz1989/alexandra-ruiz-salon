@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
+import { supabase } from "../../lib/supabaseClient";
 
 const menuItems = [
   { key: "pendientes", label: "Citas por cobrar" },
@@ -22,6 +22,18 @@ function formatMoney(value) {
 function formatTime(time) {
   if (!time) return "";
   return String(time).slice(0, 5);
+}
+
+function cleanPhoneForWhatsApp(phone) {
+  if (!phone) return "";
+
+  const onlyNumbers = String(phone).replace(/\D/g, "");
+
+  if (onlyNumbers.startsWith("52")) {
+    return onlyNumbers;
+  }
+
+  return `52${onlyNumbers}`;
 }
 
 function Card({ children, className = "" }) {
@@ -62,6 +74,7 @@ function getAppointmentServicesText(appointment) {
 
 function getAppointmentStaffText(appointment) {
   const services = appointment.appointment_services || [];
+
   const staffNames = services
     .map((item) => item.staff?.full_name)
     .filter(Boolean);
@@ -87,7 +100,8 @@ function getAppointmentTotal(appointment) {
 
 export default function CobrosPage() {
   const searchParams = useSearchParams();
-const appointmentIdFromUrl = searchParams.get("appointmentId");
+  const appointmentIdFromUrl = searchParams.get("appointmentId");
+
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [activeSection, setActiveSection] = useState("pendientes");
@@ -99,158 +113,173 @@ const appointmentIdFromUrl = searchParams.get("appointmentId");
   const [payments, setPayments] = useState([]);
   const [extras, setExtras] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(null);
-const [selectedAppointment, setSelectedAppointment] = useState(null);
-const [showPaymentModal, setShowPaymentModal] = useState(false);
-const [savingPayment, setSavingPayment] = useState(false);
 
-const [paymentForm, setPaymentForm] = useState({
-  discount_amount: 0,
-  tip_amount: 0,
-  payment_method: "Efectivo",
-  notes: "",
-});
+  const [selectedAppointment, setSelectedAppointment] = useState(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [savingPayment, setSavingPayment] = useState(false);
 
-const [extraLines, setExtraLines] = useState([]);
+  const [paymentForm, setPaymentForm] = useState({
+    discount_amount: 0,
+    tip_amount: 0,
+    payment_method: "Efectivo",
+    notes: "",
+  });
 
-useEffect(() => {
-  const start = async () => {
-    const { data } = await supabase.auth.getSession();
+  const [extraLines, setExtraLines] = useState([]);
 
-    if (!data.session) {
-      window.location.href = "/admin";
+  useEffect(() => {
+    const start = async () => {
+      const { data } = await supabase.auth.getSession();
+
+      if (!data.session) {
+        window.location.href = "/admin";
+        return;
+      }
+
+      setLoadingSession(false);
+      await loadData();
+    };
+
+    start();
+  }, []);
+
+  useEffect(() => {
+    if (!loadingSession) {
+      loadData();
+    }
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (!appointmentIdFromUrl || appointments.length === 0 || showPaymentModal) {
       return;
     }
 
-    setLoadingSession(false);
-    await loadData();
-  };
+    const appointmentToCharge = appointments.find(
+      (appointment) => appointment.id === appointmentIdFromUrl
+    );
 
-  start();
-}, []);
+    if (appointmentToCharge) {
+      openPaymentModal(appointmentToCharge);
+    }
+  }, [appointmentIdFromUrl, appointments, showPaymentModal]);
 
-useEffect(() => {
-  if (!loadingSession) {
-    loadData();
-  }
-}, [selectedDate]);
+  useEffect(() => {
+    if (!message) return;
 
-useEffect(() => {
-  if (!appointmentIdFromUrl || appointments.length === 0 || showPaymentModal) {
-    return;
-  }
+    const timer = setTimeout(() => {
+      setMessage("");
+    }, 15000);
 
-  const appointmentToCharge = appointments.find(
-    (appointment) => appointment.id === appointmentIdFromUrl
-  );
+    return () => clearTimeout(timer);
+  }, [message]);
 
-  if (appointmentToCharge) {
-    openPaymentModal(appointmentToCharge);
-  }
-}, [appointmentIdFromUrl, appointments, showPaymentModal]);
   const loadData = async () => {
     setLoadingData(true);
     setMessage("");
 
+    const appointmentsQuery = appointmentIdFromUrl
+      ? supabase
+          .from("appointments")
+          .select(
+            `
+            *,
+            clients (
+              id,
+              full_name,
+              phone
+            ),
+            appointment_services (
+              id,
+              service_id,
+              staff_id,
+              start_time,
+              end_time,
+              price,
+              total_price,
+              services (
+                id,
+                name,
+                category
+              ),
+              staff (
+                id,
+                full_name
+              )
+            )
+          `
+          )
+          .or(`appointment_date.eq.${selectedDate},id.eq.${appointmentIdFromUrl}`)
+          .order("start_time", { ascending: true })
+      : supabase
+          .from("appointments")
+          .select(
+            `
+            *,
+            clients (
+              id,
+              full_name,
+              phone
+            ),
+            appointment_services (
+              id,
+              service_id,
+              staff_id,
+              start_time,
+              end_time,
+              price,
+              total_price,
+              services (
+                id,
+                name,
+                category
+              ),
+              staff (
+                id,
+                full_name
+              )
+            )
+          `
+          )
+          .eq("appointment_date", selectedDate)
+          .order("start_time", { ascending: true });
+
     const [appointmentsResult, paymentsResult, extrasResult, settingsResult] =
       await Promise.all([
-        appointmentIdFromUrl
-  ? supabase
-      .from("appointments")
-      .select(
-        `
-        *,
-        clients (
-          id,
-          full_name,
-          phone
-        ),
-        appointment_services (
-          id,
-          service_id,
-          staff_id,
-          start_time,
-          end_time,
-          price,
-          total_price,
-          services (
-            id,
-            name,
-            category
-          ),
-          staff (
-            id,
-            full_name
-          )
-        )
-      `
-      )
-      .or(`appointment_date.eq.${selectedDate},id.eq.${appointmentIdFromUrl}`)
-      .order("start_time", { ascending: true })
-  : supabase
-      .from("appointments")
-      .select(
-        `
-        *,
-        clients (
-          id,
-          full_name,
-          phone
-        ),
-        appointment_services (
-          id,
-          service_id,
-          staff_id,
-          start_time,
-          end_time,
-          price,
-          total_price,
-          services (
-            id,
-            name,
-            category
-          ),
-          staff (
-            id,
-            full_name
-          )
-        )
-      `
-      )
-      .eq("appointment_date", selectedDate)
-      .order("start_time", { ascending: true }),
+        appointmentsQuery,
 
         supabase
-  .from("payments")
-  .select(
-    `
-    *,
-    clients (
-      full_name,
-      phone
-    ),
-    appointments (
-      appointment_date,
-      start_time
-    ),
-    payment_service_items (
-      id,
-      name,
-      staff_name,
-      quantity,
-      unit_price,
-      total_price
-    ),
-    payment_extra_items (
-      id,
-      name,
-      quantity,
-      unit_price,
-      total_price
-    )
-  `
-  )
-  .order("created_at", { ascending: false })
-  .limit(30),
+          .from("payments")
+          .select(
+            `
+            *,
+            clients (
+              id,
+              full_name,
+              phone
+            ),
+            appointments (
+              appointment_date,
+              start_time
+            ),
+            payment_service_items (
+              id,
+              name,
+              staff_name,
+              quantity,
+              unit_price,
+              total_price
+            ),
+            payment_extra_items (
+              id,
+              name,
+              quantity,
+              unit_price,
+              total_price
+            )
+          `
+          )
+          .order("created_at", { ascending: false })
+          .limit(30),
 
         supabase
           .from("service_extras")
@@ -292,9 +321,7 @@ useEffect(() => {
   };
 
   const paidAppointmentIds = useMemo(() => {
-    return payments
-      .map((payment) => payment.appointment_id)
-      .filter(Boolean);
+    return payments.map((payment) => payment.appointment_id).filter(Boolean);
   }, [payments]);
 
   const pendingAppointments = useMemo(() => {
@@ -315,429 +342,461 @@ useEffect(() => {
       .filter((payment) => payment.payment_date === selectedDate)
       .reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0);
   }, [payments, selectedDate]);
-const openPaymentModal = (appointment) => {
-  setSelectedAppointment(appointment);
-  setPaymentMessage("");
-  setPaymentForm({
-    discount_amount: 0,
-    tip_amount: 0,
-    payment_method: "Efectivo",
-    notes: "",
-  });
-  setExtraLines([]);
-  setShowPaymentModal(true);
-};
 
-const closePaymentModal = () => {
-  setSelectedAppointment(null);
-  setShowPaymentModal(false);
-  setSavingPayment(false);
-  setPaymentMessage("");
-  setPaymentForm({
-    discount_amount: 0,
-    tip_amount: 0,
-    payment_method: "Efectivo",
-    notes: "",
-  });
-  setExtraLines([]);
+  const openPaymentModal = (appointment) => {
+    setSelectedAppointment(appointment);
+    setPaymentMessage("");
+    setPaymentForm({
+      discount_amount: 0,
+      tip_amount: 0,
+      payment_method: "Efectivo",
+      notes: "",
+    });
+    setExtraLines([]);
+    setShowPaymentModal(true);
+  };
 
-  if (
-    typeof window !== "undefined" &&
-    window.location.search.includes("appointmentId")
-  ) {
-    window.history.replaceState(null, "", "/admin/cobros");
-  }
-};
+  const closePaymentModal = () => {
+    setSelectedAppointment(null);
+    setShowPaymentModal(false);
+    setSavingPayment(false);
+    setPaymentMessage("");
+    setPaymentForm({
+      discount_amount: 0,
+      tip_amount: 0,
+      payment_method: "Efectivo",
+      notes: "",
+    });
+    setExtraLines([]);
 
-const handlePaymentFormChange = (field, value) => {
-  setPaymentForm((current) => ({
-    ...current,
-    [field]: value,
-  }));
-};
+    if (
+      typeof window !== "undefined" &&
+      window.location.search.includes("appointmentId")
+    ) {
+      window.history.replaceState(null, "", "/admin/cobros");
+    }
+  };
 
-const addExtraLine = () => {
-  setExtraLines((current) => [
-    ...current,
-    {
-      extra_id: "",
-      name: "",
-      quantity: 1,
-      unit_price: 0,
-      total_price: 0,
-      staff_id: "",
-    },
-  ]);
-};
+  const handlePaymentFormChange = (field, value) => {
+    setPaymentForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
 
-const removeExtraLine = (index) => {
-  setExtraLines((current) => current.filter((_, itemIndex) => itemIndex !== index));
-};
+  const addExtraLine = () => {
+    setExtraLines((current) => [
+      ...current,
+      {
+        extra_id: "",
+        name: "",
+        quantity: 1,
+        unit_price: 0,
+        total_price: 0,
+        staff_id: "",
+      },
+    ]);
+  };
 
-const handleExtraLineChange = (index, field, value) => {
-  setExtraLines((current) =>
-    current.map((line, itemIndex) => {
-      if (itemIndex !== index) return line;
+  const removeExtraLine = (index) => {
+    setExtraLines((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index)
+    );
+  };
 
-      const updatedLine = {
-        ...line,
-        [field]: value,
-      };
+  const handleExtraLineChange = (index, field, value) => {
+    setExtraLines((current) =>
+      current.map((line, itemIndex) => {
+        if (itemIndex !== index) return line;
 
-      if (field === "extra_id") {
-        const selectedExtra = extras.find((extra) => extra.id === value);
+        const updatedLine = {
+          ...line,
+          [field]: value,
+        };
 
-        if (selectedExtra) {
-          updatedLine.name = selectedExtra.name;
-          updatedLine.unit_price = Number(selectedExtra.price || 0);
-          updatedLine.quantity = selectedExtra.pricing_type === "fixed" ? 1 : updatedLine.quantity || 1;
+        if (field === "extra_id") {
+          const selectedExtra = extras.find((extra) => extra.id === value);
+
+          if (selectedExtra) {
+            updatedLine.name = selectedExtra.name;
+            updatedLine.unit_price = Number(selectedExtra.price || 0);
+            updatedLine.quantity =
+              selectedExtra.pricing_type === "fixed"
+                ? 1
+                : updatedLine.quantity || 1;
+          }
         }
+
+        const quantity = Number(updatedLine.quantity || 0);
+        const unitPrice = Number(updatedLine.unit_price || 0);
+        updatedLine.total_price = quantity * unitPrice;
+
+        return updatedLine;
+      })
+    );
+  };
+
+  const getPaymentTotals = () => {
+    const subtotalServices = selectedAppointment
+      ? getAppointmentTotal(selectedAppointment)
+      : 0;
+
+    const subtotalExtras = extraLines.reduce(
+      (sum, line) => sum + Number(line.total_price || 0),
+      0
+    );
+
+    const depositAmount = Number(selectedAppointment?.deposit_amount || 0);
+    const discountAmount = Number(paymentForm.discount_amount || 0);
+    const tipAmount = Number(paymentForm.tip_amount || 0);
+
+    const totalAmount =
+      subtotalServices + subtotalExtras - discountAmount - depositAmount + tipAmount;
+
+    return {
+      subtotalServices,
+      subtotalExtras,
+      depositAmount,
+      discountAmount,
+      tipAmount,
+      totalAmount: Math.max(totalAmount, 0),
+    };
+  };
+
+  const getUniqueAppointmentStaff = (appointment) => {
+    const services = appointment?.appointment_services || [];
+
+    return [
+      ...new Map(
+        services
+          .filter((item) => item.staff_id)
+          .map((item) => [
+            item.staff_id,
+            {
+              id: item.staff_id,
+              full_name: item.staff?.full_name || "Técnica",
+            },
+          ])
+      ).values(),
+    ];
+  };
+
+  const calculateTipDistribution = (appointment, tipAmount) => {
+    const amount = Number(tipAmount || 0);
+
+    if (amount <= 0) return [];
+
+    const rule = paymentSettings?.tip_rule || "appointment_staff";
+
+    let selectedStaff = [];
+
+    if (rule === "appointment_staff") {
+      selectedStaff = getUniqueAppointmentStaff(appointment);
+    }
+
+    if (rule === "all_active_staff") {
+      const allStaffFromAppointments = appointments.flatMap((item) =>
+        getUniqueAppointmentStaff(item)
+      );
+
+      selectedStaff = [
+        ...new Map(
+          allStaffFromAppointments.map((person) => [person.id, person])
+        ).values(),
+      ];
+    }
+
+    if (rule === "selected_staff") {
+      const selectedIds = paymentSettings?.selected_staff_ids || [];
+      const allStaffFromAppointments = appointments.flatMap((item) =>
+        getUniqueAppointmentStaff(item)
+      );
+
+      selectedStaff = [
+        ...new Map(
+          allStaffFromAppointments
+            .filter((person) => selectedIds.includes(person.id))
+            .map((person) => [person.id, person])
+        ).values(),
+      ];
+    }
+
+    if (selectedStaff.length === 0) {
+      selectedStaff = getUniqueAppointmentStaff(appointment);
+    }
+
+    if (selectedStaff.length === 0) return [];
+
+    const amountPerStaff = amount / selectedStaff.length;
+
+    return selectedStaff.map((person) => ({
+      staff_id: person.id,
+      tip_amount: Number(amountPerStaff.toFixed(2)),
+    }));
+  };
+
+  const calculateStaffTotals = (paymentId, appointment, tipDistribution) => {
+    const services = appointment?.appointment_services || [];
+    const result = {};
+
+    services.forEach((item) => {
+      if (!item.staff_id) return;
+
+      if (!result[item.staff_id]) {
+        result[item.staff_id] = {
+          payment_id: paymentId,
+          staff_id: item.staff_id,
+          service_total: 0,
+          extras_total: 0,
+          commission_base: 0,
+          commission_amount: 0,
+          tip_amount: 0,
+        };
       }
 
-      const quantity = Number(updatedLine.quantity || 0);
-      const unitPrice = Number(updatedLine.unit_price || 0);
-      updatedLine.total_price = quantity * unitPrice;
+      const serviceAmount = Number(item.total_price || item.price || 0);
 
-      return updatedLine;
-    })
-  );
-};
+      result[item.staff_id].service_total += serviceAmount;
+      result[item.staff_id].commission_base += serviceAmount;
+    });
 
-const getPaymentTotals = () => {
-  const subtotalServices = selectedAppointment
-    ? getAppointmentTotal(selectedAppointment)
-    : 0;
+    extraLines.forEach((line) => {
+      if (!line.staff_id) return;
 
-  const subtotalExtras = extraLines.reduce(
-    (sum, line) => sum + Number(line.total_price || 0),
-    0
-  );
+      if (!result[line.staff_id]) {
+        result[line.staff_id] = {
+          payment_id: paymentId,
+          staff_id: line.staff_id,
+          service_total: 0,
+          extras_total: 0,
+          commission_base: 0,
+          commission_amount: 0,
+          tip_amount: 0,
+        };
+      }
 
-  const depositAmount = Number(selectedAppointment?.deposit_amount || 0);
-  const discountAmount = Number(paymentForm.discount_amount || 0);
-  const tipAmount = Number(paymentForm.tip_amount || 0);
+      const extraAmount = Number(line.total_price || 0);
 
-  const totalAmount =
-    subtotalServices + subtotalExtras - discountAmount - depositAmount + tipAmount;
+      result[line.staff_id].extras_total += extraAmount;
+      result[line.staff_id].commission_base += extraAmount;
+    });
 
-  return {
-    subtotalServices,
-    subtotalExtras,
-    depositAmount,
-    discountAmount,
-    tipAmount,
-    totalAmount: Math.max(totalAmount, 0),
-  };
-};
-const getUniqueAppointmentStaff = (appointment) => {
-  const services = appointment?.appointment_services || [];
+    tipDistribution.forEach((item) => {
+      if (!item.staff_id) return;
 
-  return [
-    ...new Map(
-      services
-        .filter((item) => item.staff_id)
-        .map((item) => [
-          item.staff_id,
-          {
-            id: item.staff_id,
-            full_name: item.staff?.full_name || "Técnica",
-          },
-        ])
-    ).values(),
-  ];
-};
+      if (!result[item.staff_id]) {
+        result[item.staff_id] = {
+          payment_id: paymentId,
+          staff_id: item.staff_id,
+          service_total: 0,
+          extras_total: 0,
+          commission_base: 0,
+          commission_amount: 0,
+          tip_amount: 0,
+        };
+      }
 
-const calculateTipDistribution = (appointment, tipAmount) => {
-  const amount = Number(tipAmount || 0);
+      result[item.staff_id].tip_amount += Number(item.tip_amount || 0);
+    });
 
-  if (amount <= 0) return [];
-
-  const rule = paymentSettings?.tip_rule || "appointment_staff";
-
-  let selectedStaff = [];
-
-  if (rule === "appointment_staff") {
-    selectedStaff = getUniqueAppointmentStaff(appointment);
-  }
-
-  if (rule === "all_active_staff") {
-    const allStaffFromAppointments = appointments.flatMap((item) =>
-      getUniqueAppointmentStaff(item)
-    );
-
-    selectedStaff = [
-      ...new Map(
-        allStaffFromAppointments.map((person) => [person.id, person])
-      ).values(),
-    ];
-  }
-
-  if (rule === "selected_staff") {
-    const selectedIds = paymentSettings?.selected_staff_ids || [];
-    const allStaffFromAppointments = appointments.flatMap((item) =>
-      getUniqueAppointmentStaff(item)
-    );
-
-    selectedStaff = [
-      ...new Map(
-        allStaffFromAppointments
-          .filter((person) => selectedIds.includes(person.id))
-          .map((person) => [person.id, person])
-      ).values(),
-    ];
-  }
-
-  if (selectedStaff.length === 0) {
-    selectedStaff = getUniqueAppointmentStaff(appointment);
-  }
-
-  if (selectedStaff.length === 0) return [];
-
-  const amountPerStaff = amount / selectedStaff.length;
-
-  return selectedStaff.map((person) => ({
-    staff_id: person.id,
-    tip_amount: Number(amountPerStaff.toFixed(2)),
-  }));
-};
-
-const calculateStaffTotals = (paymentId, appointment, tipDistribution) => {
-  const services = appointment?.appointment_services || [];
-  const result = {};
-
-  services.forEach((item) => {
-    if (!item.staff_id) return;
-
-    if (!result[item.staff_id]) {
-      result[item.staff_id] = {
-        payment_id: paymentId,
-        staff_id: item.staff_id,
-        service_total: 0,
-        extras_total: 0,
-        commission_base: 0,
-        commission_amount: 0,
-        tip_amount: 0,
-      };
-    }
-
-    const serviceAmount = Number(item.total_price || item.price || 0);
-
-    result[item.staff_id].service_total += serviceAmount;
-    result[item.staff_id].commission_base += serviceAmount;
-  });
-
-  extraLines.forEach((line) => {
-    if (!line.staff_id) return;
-
-    if (!result[line.staff_id]) {
-      result[line.staff_id] = {
-        payment_id: paymentId,
-        staff_id: line.staff_id,
-        service_total: 0,
-        extras_total: 0,
-        commission_base: 0,
-        commission_amount: 0,
-        tip_amount: 0,
-      };
-    }
-
-    const extraAmount = Number(line.total_price || 0);
-
-    result[line.staff_id].extras_total += extraAmount;
-    result[line.staff_id].commission_base += extraAmount;
-  });
-
-  tipDistribution.forEach((item) => {
-    if (!item.staff_id) return;
-
-    if (!result[item.staff_id]) {
-      result[item.staff_id] = {
-        payment_id: paymentId,
-        staff_id: item.staff_id,
-        service_total: 0,
-        extras_total: 0,
-        commission_base: 0,
-        commission_amount: 0,
-        tip_amount: 0,
-      };
-    }
-
-    result[item.staff_id].tip_amount += Number(item.tip_amount || 0);
-  });
-
-  return Object.values(result).map((item) => ({
-    ...item,
-    service_total: Number(item.service_total.toFixed(2)),
-    extras_total: Number(item.extras_total.toFixed(2)),
-    commission_base: Number(item.commission_base.toFixed(2)),
-    commission_amount: Number(item.commission_amount.toFixed(2)),
-    tip_amount: Number(item.tip_amount.toFixed(2)),
-  }));
-};
-
-const savePayment = async () => {
-  if (!selectedAppointment) return;
-
-  setSavingPayment(true);
- setPaymentMessage("");
-
-  const totals = getPaymentTotals();
-
-  const paymentPayload = {
-    appointment_id: selectedAppointment.id,
-    client_id: selectedAppointment.client_id,
-    payment_date: selectedDate,
-    subtotal_services: totals.subtotalServices,
-    subtotal_extras: totals.subtotalExtras,
-    discount_amount: totals.discountAmount,
-    deposit_amount: totals.depositAmount,
-    tip_amount: totals.tipAmount,
-    total_amount: totals.totalAmount,
-    payment_method: paymentForm.payment_method,
-    payment_status: "pagado",
-    notes: paymentForm.notes?.trim() || null,
-    updated_at: new Date().toISOString(),
-  };
-
-  const { data: payment, error: paymentError } = await supabase
-    .from("payments")
-    .insert([paymentPayload])
-    .select()
-    .single();
-
-  if (paymentError) {
-    setPaymentMessage(`No se pudo guardar el pago: ${paymentError.message}`);
-    setSavingPayment(false);
-    return;
-  }
-  const serviceRows = (selectedAppointment.appointment_services || []).map(
-  (service) => ({
-    payment_id: payment.id,
-    appointment_service_id: service.id,
-    service_id: service.service_id,
-    staff_id: service.staff_id || null,
-    name: service.services?.name || "Servicio",
-    staff_name: service.staff?.full_name || null,
-    start_time: service.start_time || null,
-    end_time: service.end_time || null,
-    quantity: 1,
-    unit_price: Number(service.price || service.total_price || 0),
-    total_price: Number(service.total_price || service.price || 0),
-  })
-);
-
-if (serviceRows.length > 0) {
-  const { error: servicesError } = await supabase
-    .from("payment_service_items")
-    .insert(serviceRows);
-
-  if (servicesError) {
-    setPaymentMessage(
-      `El pago se guardó, pero no se pudieron guardar los servicios cobrados: ${servicesError.message}`
-    );
-    setSavingPayment(false);
-    return;
-  }
-}
-
-  const validExtras = extraLines.filter(
-    (line) => line.extra_id && Number(line.total_price || 0) > 0
-  );
-
-  if (validExtras.length > 0) {
-    const extraRows = validExtras.map((line) => ({
-      payment_id: payment.id,
-      extra_id: line.extra_id,
-      name: line.name,
-      quantity: Number(line.quantity || 0),
-      unit_price: Number(line.unit_price || 0),
-      total_price: Number(line.total_price || 0),
-      staff_id: line.staff_id || null,
+    return Object.values(result).map((item) => ({
+      ...item,
+      service_total: Number(item.service_total.toFixed(2)),
+      extras_total: Number(item.extras_total.toFixed(2)),
+      commission_base: Number(item.commission_base.toFixed(2)),
+      commission_amount: Number(item.commission_amount.toFixed(2)),
+      tip_amount: Number(item.tip_amount.toFixed(2)),
     }));
+  };
 
-    const { error: extrasError } = await supabase
-      .from("payment_extra_items")
-      .insert(extraRows);
+  const savePayment = async () => {
+    if (!selectedAppointment) return;
 
-    if (extrasError) {
+    setSavingPayment(true);
+    setPaymentMessage("");
+    setMessage("");
+
+    const totals = getPaymentTotals();
+
+    const existingPayment = payments.find(
+      (payment) => payment.appointment_id === selectedAppointment.id
+    );
+
+    if (existingPayment) {
+      setPaymentMessage("Esta cita ya tiene un pago registrado.");
+      setSavingPayment(false);
+      return;
+    }
+
+    const paymentPayload = {
+      appointment_id: selectedAppointment.id,
+      client_id: selectedAppointment.client_id,
+      payment_date: selectedDate,
+      subtotal_services: totals.subtotalServices,
+      subtotal_extras: totals.subtotalExtras,
+      discount_amount: totals.discountAmount,
+      deposit_amount: totals.depositAmount,
+      tip_amount: totals.tipAmount,
+      total_amount: totals.totalAmount,
+      payment_method: paymentForm.payment_method,
+      payment_status: "pagado",
+      notes: paymentForm.notes?.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: payment, error: paymentError } = await supabase
+      .from("payments")
+      .insert([paymentPayload])
+      .select()
+      .single();
+
+    if (paymentError) {
+      setPaymentMessage(`No se pudo guardar el pago: ${paymentError.message}`);
+      setSavingPayment(false);
+      return;
+    }
+
+    const serviceRows = (selectedAppointment.appointment_services || []).map(
+      (service) => ({
+        payment_id: payment.id,
+        appointment_service_id: service.id,
+        service_id: service.service_id,
+        staff_id: service.staff_id || null,
+        name: service.services?.name || "Servicio",
+        staff_name: service.staff?.full_name || null,
+        start_time: service.start_time || null,
+        end_time: service.end_time || null,
+        quantity: 1,
+        unit_price: Number(service.price || service.total_price || 0),
+        total_price: Number(service.total_price || service.price || 0),
+      })
+    );
+
+    if (serviceRows.length > 0) {
+      const { error: servicesError } = await supabase
+        .from("payment_service_items")
+        .insert(serviceRows);
+
+      if (servicesError) {
+        setPaymentMessage(
+          `El pago se guardó, pero no se pudieron guardar los servicios cobrados: ${servicesError.message}`
+        );
+        setSavingPayment(false);
+        return;
+      }
+    }
+
+    const validExtras = extraLines.filter(
+      (line) => line.extra_id && Number(line.total_price || 0) > 0
+    );
+
+    if (validExtras.length > 0) {
+      const extraRows = validExtras.map((line) => ({
+        payment_id: payment.id,
+        extra_id: line.extra_id,
+        name: line.name,
+        quantity: Number(line.quantity || 0),
+        unit_price: Number(line.unit_price || 0),
+        total_price: Number(line.total_price || 0),
+        staff_id: line.staff_id || null,
+      }));
+
+      const { error: extrasError } = await supabase
+        .from("payment_extra_items")
+        .insert(extraRows);
+
+      if (extrasError) {
+        setPaymentMessage(
+          `El pago se guardó, pero no se pudieron guardar los extras: ${extrasError.message}`
+        );
+        setSavingPayment(false);
+        return;
+      }
+    }
+
+    const tipDistribution = calculateTipDistribution(
+      selectedAppointment,
+      totals.tipAmount
+    );
+
+    const staffTotals = calculateStaffTotals(
+      payment.id,
+      selectedAppointment,
+      tipDistribution
+    );
+
+    if (staffTotals.length > 0) {
+      const { error: staffTotalsError } = await supabase
+        .from("payment_staff_totals")
+        .insert(staffTotals);
+
+      if (staffTotalsError) {
+        setPaymentMessage(
+          `El pago se guardó, pero no se pudieron guardar los totales por técnica: ${staffTotalsError.message}`
+        );
+        setSavingPayment(false);
+        return;
+      }
+    }
+
+    const { error: cashError } = await supabase.from("cash_movements").insert([
+      {
+        movement_date: selectedDate,
+        movement_type: "ingreso",
+        amount: totals.totalAmount,
+        payment_method: paymentForm.payment_method,
+        concept: `Cobro de cita - ${
+          selectedAppointment.clients?.full_name || "Clienta"
+        }`,
+        notes: paymentForm.notes?.trim() || null,
+        payment_id: payment.id,
+      },
+    ]);
+
+    if (cashError) {
       setPaymentMessage(
-        `El pago se guardó, pero no se pudieron guardar los extras: ${extrasError.message}`
+        `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
       );
       setSavingPayment(false);
       return;
     }
-  }
 
-  const tipDistribution = calculateTipDistribution(
-    selectedAppointment,
-    totals.tipAmount
-  );
+    setMessage("Pago guardado correctamente ✨");
+    setSavingPayment(false);
+    closePaymentModal();
+    await loadData();
+  };
 
-  const staffTotals = calculateStaffTotals(
-    payment.id,
-    selectedAppointment,
-    tipDistribution
-  );
+  const sendReceiptWhatsApp = (payment) => {
+    const phone = payment.clients?.phone;
 
-  if (staffTotals.length > 0) {
-    const { error: staffTotalsError } = await supabase
-      .from("payment_staff_totals")
-      .insert(staffTotals);
-
-    if (staffTotalsError) {
-      setPaymentMessage(
-        `El pago se guardó, pero no se pudieron guardar los totales por técnica: ${staffTotalsError.message}`
-      );
-      setSavingPayment(false);
+    if (!phone) {
+      setMessage("Esta clienta no tiene teléfono registrado.");
       return;
     }
-  }
 
-  const { error: cashError } = await supabase.from("cash_movements").insert([
-  {
-    movement_date: selectedDate,
-    movement_type: "ingreso",
-    amount: totals.totalAmount,
-    payment_method: paymentForm.payment_method,
-    concept: `Cobro de cita - ${
-      selectedAppointment.clients?.full_name || "Clienta"
-    }`,
-    notes: paymentForm.notes?.trim() || null,
-    payment_id: payment.id,
-  },
-]);
+    const cleanPhone = cleanPhoneForWhatsApp(phone);
+    const receiptUrl =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/recibo/${payment.id}`
+        : "";
 
-if (cashError) {
-  setPaymentMessage(
-    `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
-  );
-  setSavingPayment(false);
-  return;
-}
+    const clientName = payment.clients?.full_name || "hermosa";
+    const firstName = clientName.split(" ")[0];
 
-setMessage("Pago guardado correctamente ✨");
-setSavingPayment(false);
+    const message = `Hola ${firstName} 💕 Te compartimos tu recibo de pago de Alexandra Ruiz Salón Spa.
 
-setSelectedAppointment(null);
-setShowPaymentModal(false);
-setPaymentMessage("");
-setPaymentForm({
-  discount_amount: 0,
-  tip_amount: 0,
-  payment_method: "Efectivo",
-  notes: "",
-});
-setExtraLines([]);
+Puedes verlo aquí:
+${receiptUrl}
 
-if (
-  typeof window !== "undefined" &&
-  window.location.search.includes("appointmentId")
-) {
-  window.history.replaceState(null, "", "/admin/cobros");
-}
+Gracias por tu visita, fue un gusto atenderte ✨`;
 
-await loadData();
-};
+    window.open(
+      `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`,
+      "_blank"
+    );
+  };
+
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
@@ -756,7 +815,7 @@ await loadData();
       setActiveSection={setActiveSection}
     >
       {message && (
-        <div className="mb-6 rounded-2xl bg-red-600 px-5 py-4 text-sm font-medium text-white">
+        <div className="mb-6 rounded-2xl bg-green-600 px-5 py-4 text-sm font-medium text-white">
           {message}
         </div>
       )}
@@ -787,7 +846,9 @@ await loadData();
           <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
             Estimado pendiente
           </p>
-          <p className="mt-3 text-4xl font-light">{formatMoney(totalPending)}</p>
+          <p className="mt-3 text-4xl font-light">
+            {formatMoney(totalPending)}
+          </p>
         </Card>
 
         <Card>
@@ -864,13 +925,13 @@ await loadData();
                         {formatMoney(getAppointmentTotal(appointment))}
                       </p>
 
-                     <button
-  type="button"
-  className="mt-4 w-full rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
-  onClick={() => openPaymentModal(appointment)}
->
-  Cobrar cita
-</button>
+                      <button
+                        type="button"
+                        className="mt-4 w-full rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
+                        onClick={() => openPaymentModal(appointment)}
+                      >
+                        Cobrar cita
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -881,163 +942,181 @@ await loadData();
       )}
 
       {activeSection === "pagos" && (
-  <Card>
-    <SectionHeader
-      eyebrow="Pagos"
-      title="Pagos recientes"
-      description="Historial inicial de pagos registrados con detalle de servicios, extras y propinas."
-    />
+        <Card>
+          <SectionHeader
+            eyebrow="Pagos"
+            title="Pagos recientes"
+            description="Historial de pagos registrados con recibo visual y WhatsApp."
+          />
 
-    {loadingData ? (
-      <p className="text-sm text-[#68777c]">Cargando pagos...</p>
-    ) : payments.length === 0 ? (
-      <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-        Aún no hay pagos registrados.
-      </div>
-    ) : (
-      <div className="space-y-4">
-        {payments.map((payment) => (
-          <div
-            key={payment.id}
-            className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
-          >
-            <div className="flex flex-col justify-between gap-4 md:flex-row">
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-                  {payment.payment_date}
-                </p>
-
-                <h3 className="mt-2 text-xl font-light">
-                  {payment.clients?.full_name || "Clienta / Venta"}
-                </h3>
-
-                <p className="mt-2 text-sm text-[#68777c]">
-                  Método: {payment.payment_method || "Efectivo"}
-                </p>
-
-                {payment.appointments?.appointment_date && (
-                  <p className="text-sm text-[#68777c]">
-                    Cita: {payment.appointments.appointment_date} ·{" "}
-                    {formatTime(payment.appointments.start_time)}
-                  </p>
-                )}
-              </div>
-
-              <div className="text-right">
-                <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
-                  Total
-                </p>
-                <p className="mt-2 text-3xl font-light">
-                  {formatMoney(payment.total_amount)}
-                </p>
-              </div>
+          {loadingData ? (
+            <p className="text-sm text-[#68777c]">Cargando pagos...</p>
+          ) : payments.length === 0 ? (
+            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+              Aún no hay pagos registrados.
             </div>
+          ) : (
+            <div className="space-y-4">
+              {payments.map((payment) => (
+                <div
+                  key={payment.id}
+                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+                >
+                  <div className="flex flex-col justify-between gap-4 md:flex-row">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                        {payment.payment_date}
+                      </p>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-2">
-              <div className="rounded-2xl bg-[#f7f9fa] p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                  Servicios cobrados
-                </p>
+                      <h3 className="mt-2 text-xl font-light">
+                        {payment.clients?.full_name || "Clienta / Venta"}
+                      </h3>
 
-                <div className="mt-3 space-y-2">
-                  {(payment.payment_service_items || []).length === 0 ? (
-                    <p className="text-sm text-[#68777c]">
-                      Sin servicios registrados.
-                    </p>
-                  ) : (
-                    payment.payment_service_items.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex justify-between gap-3 text-sm text-[#68777c]"
-                      >
-                        <span>
-                          {item.name}
-                          {item.staff_name ? ` · ${item.staff_name}` : ""}
-                        </span>
-                        <span>{formatMoney(item.total_price)}</span>
+                      <p className="mt-2 text-sm text-[#68777c]">
+                        Método: {payment.payment_method || "Efectivo"}
+                      </p>
+
+                      {payment.appointments?.appointment_date && (
+                        <p className="text-sm text-[#68777c]">
+                          Cita: {payment.appointments.appointment_date} ·{" "}
+                          {formatTime(payment.appointments.start_time)}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+                        Total
+                      </p>
+                      <p className="mt-2 text-3xl font-light">
+                        {formatMoney(payment.total_amount)}
+                      </p>
+
+                      <div className="mt-4 flex flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => window.open(`/recibo/${payment.id}`, "_blank")}
+                          className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Ver recibo
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => sendReceiptWhatsApp(payment)}
+                          className="rounded-full bg-[#25D366] px-5 py-2 text-sm text-white transition hover:opacity-90"
+                        >
+                          Enviar WhatsApp
+                        </button>
                       </div>
-                    ))
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-2xl bg-[#f7f9fa] p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                        Servicios cobrados
+                      </p>
+
+                      <div className="mt-3 space-y-2">
+                        {(payment.payment_service_items || []).length === 0 ? (
+                          <p className="text-sm text-[#68777c]">
+                            Sin servicios registrados.
+                          </p>
+                        ) : (
+                          payment.payment_service_items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="flex justify-between gap-3 text-sm text-[#68777c]"
+                            >
+                              <span>
+                                {item.name}
+                                {item.staff_name ? ` · ${item.staff_name}` : ""}
+                              </span>
+                              <span>{formatMoney(item.total_price)}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-[#f7f9fa] p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                        Extras / Decoraciones
+                      </p>
+
+                      <div className="mt-3 space-y-2">
+                        {(payment.payment_extra_items || []).length === 0 ? (
+                          <p className="text-sm text-[#68777c]">
+                            Sin extras registrados.
+                          </p>
+                        ) : (
+                          payment.payment_extra_items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="flex justify-between gap-3 text-sm text-[#68777c]"
+                            >
+                              <span>
+                                {item.name} x {item.quantity}
+                              </span>
+                              <span>{formatMoney(item.total_price)}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 rounded-2xl bg-[#fff6fb] p-4">
+                    <div className="grid gap-3 text-sm md:grid-cols-5">
+                      <div>
+                        <p className="text-[#8a969a]">Servicios</p>
+                        <p className="font-medium text-[#263238]">
+                          {formatMoney(payment.subtotal_services)}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[#8a969a]">Extras</p>
+                        <p className="font-medium text-[#263238]">
+                          {formatMoney(payment.subtotal_extras)}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[#8a969a]">Descuento</p>
+                        <p className="font-medium text-[#263238]">
+                          - {formatMoney(payment.discount_amount)}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[#8a969a]">Anticipo</p>
+                        <p className="font-medium text-[#263238]">
+                          - {formatMoney(payment.deposit_amount)}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-[#8a969a]">Propina</p>
+                        <p className="font-medium text-[#263238]">
+                          {formatMoney(payment.tip_amount)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {payment.notes && (
+                    <p className="mt-4 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                      {payment.notes}
+                    </p>
                   )}
                 </div>
-              </div>
-
-              <div className="rounded-2xl bg-[#f7f9fa] p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                  Extras / Decoraciones
-                </p>
-
-                <div className="mt-3 space-y-2">
-                  {(payment.payment_extra_items || []).length === 0 ? (
-                    <p className="text-sm text-[#68777c]">
-                      Sin extras registrados.
-                    </p>
-                  ) : (
-                    payment.payment_extra_items.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex justify-between gap-3 text-sm text-[#68777c]"
-                      >
-                        <span>
-                          {item.name} x {item.quantity}
-                        </span>
-                        <span>{formatMoney(item.total_price)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+              ))}
             </div>
-
-            <div className="mt-5 rounded-2xl bg-[#fff6fb] p-4">
-              <div className="grid gap-3 text-sm md:grid-cols-5">
-                <div>
-                  <p className="text-[#8a969a]">Servicios</p>
-                  <p className="font-medium text-[#263238]">
-                    {formatMoney(payment.subtotal_services)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[#8a969a]">Extras</p>
-                  <p className="font-medium text-[#263238]">
-                    {formatMoney(payment.subtotal_extras)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[#8a969a]">Descuento</p>
-                  <p className="font-medium text-[#263238]">
-                    - {formatMoney(payment.discount_amount)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[#8a969a]">Anticipo</p>
-                  <p className="font-medium text-[#263238]">
-                    - {formatMoney(payment.deposit_amount)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[#8a969a]">Propina</p>
-                  <p className="font-medium text-[#263238]">
-                    {formatMoney(payment.tip_amount)}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {payment.notes && (
-              <p className="mt-4 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
-                {payment.notes}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    )}
-  </Card>
-)}
+          )}
+        </Card>
+      )}
 
       {activeSection === "extras" && (
         <Card>
@@ -1082,27 +1161,29 @@ await loadData();
           )}
         </Card>
       )}
-     {showPaymentModal && selectedAppointment && (
-  <PaymentModal
-    appointment={selectedAppointment}
-    extras={extras}
-    paymentSettings={paymentSettings}
-    paymentForm={paymentForm}
-    extraLines={extraLines}
-    savingPayment={savingPayment}
-    paymentMessage={paymentMessage}
-    handlePaymentFormChange={handlePaymentFormChange}
-    addExtraLine={addExtraLine}
-    removeExtraLine={removeExtraLine}
-    handleExtraLineChange={handleExtraLineChange}
-    getPaymentTotals={getPaymentTotals}
-    savePayment={savePayment}
-    onClose={closePaymentModal}
-  />
-)} 
+
+      {showPaymentModal && selectedAppointment && (
+        <PaymentModal
+          appointment={selectedAppointment}
+          extras={extras}
+          paymentSettings={paymentSettings}
+          paymentForm={paymentForm}
+          extraLines={extraLines}
+          savingPayment={savingPayment}
+          paymentMessage={paymentMessage}
+          handlePaymentFormChange={handlePaymentFormChange}
+          addExtraLine={addExtraLine}
+          removeExtraLine={removeExtraLine}
+          handleExtraLineChange={handleExtraLineChange}
+          getPaymentTotals={getPaymentTotals}
+          savePayment={savePayment}
+          onClose={closePaymentModal}
+        />
+      )}
     </AdminShell>
   );
 }
+
 function PaymentModal({
   appointment,
   extras,
@@ -1120,7 +1201,6 @@ function PaymentModal({
   onClose,
 }) {
   const totals = getPaymentTotals();
-
   const services = appointment.appointment_services || [];
 
   const staffFromAppointment = [
@@ -1449,7 +1529,7 @@ function PaymentModal({
               </div>
             </div>
 
-                       {paymentMessage && (
+            {paymentMessage && (
               <div
                 className={`rounded-2xl px-5 py-4 text-sm font-medium ${
                   paymentMessage.toLowerCase().includes("no se pudo") ||
