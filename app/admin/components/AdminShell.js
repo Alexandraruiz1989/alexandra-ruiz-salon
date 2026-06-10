@@ -11,6 +11,7 @@ const roleModulePermissions = {
     "agenda",
     "cobros",
     "caja",
+    "extras",
     "reportes",
     "tecnicas",
     "tareas",
@@ -27,6 +28,7 @@ const roleModulePermissions = {
     "agenda",
     "cobros",
     "caja",
+    "extras",
     "reportes",
     "tareas",
     "calificaciones",
@@ -37,6 +39,7 @@ const roleModulePermissions = {
     "inicio",
     "clientas",
     "agenda",
+    "cobros",
     "seguimientos",
     "notificaciones",
   ],
@@ -157,19 +160,12 @@ export default function AdminShell({
     { label: "Agenda", href: "/admin/agenda", key: "agenda" },
     { label: "Cobros", href: "/admin/cobros", key: "cobros" },
     { label: "Caja chica", href: "/admin/caja", key: "caja" },
+    { label: "Extras / Decoraciones", href: "/admin/extras", key: "extras" },
     { label: "Reportes", href: "/admin/reportes", key: "reportes" },
     { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
     { label: "Tareas", href: "/admin/tareas", key: "tareas" },
-    {
-      label: "Configuración",
-      href: "/admin/configuracion",
-      key: "configuracion",
-    },
-    {
-      label: "Calificaciones",
-      href: "/admin/calificaciones",
-      key: "calificaciones",
-    },
+    { label: "Configuración", href: "/admin/configuracion", key: "configuracion" },
+    { label: "Calificaciones", href: "/admin/calificaciones", key: "calificaciones" },
     { label: "Seguimientos", href: "/admin/seguimientos", key: "seguimientos" },
     {
       label: "Notificaciones",
@@ -221,8 +217,7 @@ export default function AdminShell({
           </p>
           <h1 className="mt-2 text-2xl font-light">Tu acceso no está activo</h1>
           <p className="mt-3 text-sm leading-6 text-[#68777c]">
-            Pide a administración que reactive tu cuenta para poder entrar al
-            sistema.
+            Pide a administración que reactive tu cuenta para poder entrar al sistema.
           </p>
 
           <button
