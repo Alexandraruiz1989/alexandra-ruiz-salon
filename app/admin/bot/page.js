@@ -6,26 +6,43 @@ import { supabase } from "../../lib/supabaseClient";
 
 const menuItems = [
   { key: "configuracion", label: "Configuración" },
+  { key: "conocimiento", label: "Base de conocimiento" },
   { key: "menu", label: "Menú del bot" },
   { key: "faqs", label: "Preguntas frecuentes" },
   { key: "solicitudes", label: "Solicitudes de cita" },
   { key: "conversaciones", label: "Conversaciones" },
 ];
 
+const emptyKnowledgeForm = {
+  title: "",
+  category: "General",
+  content: "",
+  keywords: "",
+  active: true,
+};
+
 function Card({ children }) {
-  return <div className="rounded-[1.5rem] bg-white p-6 shadow-sm">{children}</div>;
+  return (
+    <div className="rounded-[1.5rem] bg-white p-6 shadow-sm">
+      {children}
+    </div>
+  );
 }
 
-function SectionHeader({ eyebrow, title, description }) {
+function SectionHeader({ eyebrow, title, description, action }) {
   return (
-    <div className="mb-6">
-      <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
-        {eyebrow}
-      </p>
-      <h3 className="mt-2 text-2xl font-light">{title}</h3>
-      {description && (
-        <p className="mt-1 text-sm text-[#68777c]">{description}</p>
-      )}
+    <div className="mb-6 flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
+      <div>
+        <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
+          {eyebrow}
+        </p>
+        <h3 className="mt-2 text-2xl font-light">{title}</h3>
+        {description && (
+          <p className="mt-1 text-sm text-[#68777c]">{description}</p>
+        )}
+      </div>
+
+      {action}
     </div>
   );
 }
@@ -61,6 +78,10 @@ export default function BotPage() {
     active: true,
   });
 
+  const [knowledgeItems, setKnowledgeItems] = useState([]);
+  const [knowledgeForm, setKnowledgeForm] = useState(emptyKnowledgeForm);
+  const [editingKnowledgeId, setEditingKnowledgeId] = useState(null);
+
   const [menuOptions, setMenuOptions] = useState([]);
   const [faqs, setFaqs] = useState([]);
   const [appointmentRequests, setAppointmentRequests] = useState([]);
@@ -82,18 +103,34 @@ export default function BotPage() {
     start();
   }, []);
 
+  useEffect(() => {
+    if (!message) return;
+
+    const timer = setTimeout(() => {
+      setMessage("");
+    }, 15000);
+
+    return () => clearTimeout(timer);
+  }, [message]);
+
   const loadData = async () => {
     setLoadingData(true);
     setMessage("");
 
     const [
       settingsResult,
+      knowledgeResult,
       menuResult,
       faqsResult,
       requestsResult,
       conversationsResult,
     ] = await Promise.all([
       supabase.from("bot_settings").select("*").limit(1).maybeSingle(),
+      supabase
+        .from("bot_knowledge_base")
+        .select("*")
+        .order("category", { ascending: true })
+        .order("title", { ascending: true }),
       supabase
         .from("bot_menu_options")
         .select("*")
@@ -127,6 +164,12 @@ export default function BotPage() {
           settingsResult.data.appointment_deposit_message || "",
         active: settingsResult.data.active !== false,
       });
+    }
+
+    if (knowledgeResult.error) {
+      setMessage(`No se pudo cargar base de conocimiento: ${knowledgeResult.error.message}`);
+    } else {
+      setKnowledgeItems(knowledgeResult.data || []);
     }
 
     if (menuResult.error) {
@@ -203,6 +246,90 @@ export default function BotPage() {
     await loadData();
   };
 
+  const resetKnowledgeForm = () => {
+    setKnowledgeForm(emptyKnowledgeForm);
+    setEditingKnowledgeId(null);
+  };
+
+  const handleKnowledgeChange = (field, value) => {
+    setKnowledgeForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const editKnowledge = (item) => {
+    setEditingKnowledgeId(item.id);
+    setKnowledgeForm({
+      title: item.title || "",
+      category: item.category || "General",
+      content: item.content || "",
+      keywords: item.keywords || "",
+      active: item.active !== false,
+    });
+    setMessage("");
+  };
+
+  const saveKnowledge = async () => {
+    setSaving(true);
+    setMessage("");
+
+    if (!knowledgeForm.title.trim() || !knowledgeForm.content.trim()) {
+      setMessage("El título y el contenido son obligatorios.");
+      setSaving(false);
+      return;
+    }
+
+    const payload = {
+      title: knowledgeForm.title.trim(),
+      category: knowledgeForm.category.trim() || "General",
+      content: knowledgeForm.content.trim(),
+      keywords: knowledgeForm.keywords.trim() || null,
+      active: knowledgeForm.active,
+      updated_at: new Date().toISOString(),
+    };
+
+    const query = editingKnowledgeId
+      ? supabase
+          .from("bot_knowledge_base")
+          .update(payload)
+          .eq("id", editingKnowledgeId)
+      : supabase.from("bot_knowledge_base").insert([payload]);
+
+    const { error } = await query;
+
+    if (error) {
+      setMessage(`No se pudo guardar conocimiento: ${error.message}`);
+      setSaving(false);
+      return;
+    }
+
+    setMessage("Base de conocimiento guardada correctamente ✨");
+    resetKnowledgeForm();
+    setSaving(false);
+    await loadData();
+  };
+
+  const toggleKnowledgeStatus = async (item) => {
+    setMessage("");
+
+    const { error } = await supabase
+      .from("bot_knowledge_base")
+      .update({
+        active: !item.active,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id);
+
+    if (error) {
+      setMessage(`No se pudo cambiar el estado: ${error.message}`);
+      return;
+    }
+
+    setMessage(item.active ? "Información desactivada." : "Información activada ✨");
+    await loadData();
+  };
+
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
@@ -236,6 +363,15 @@ export default function BotPage() {
             eyebrow="Configuración"
             title="Mensajes principales del bot"
             description="Estos textos serán usados cuando conectemos WhatsApp API."
+            action={
+              <button
+                type="button"
+                onClick={loadData}
+                className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Actualizar
+              </button>
+            }
           />
 
           <div className="space-y-5">
@@ -303,6 +439,184 @@ export default function BotPage() {
         </Card>
       )}
 
+      {activeSection === "conocimiento" && (
+        <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Card>
+            <SectionHeader
+              eyebrow={editingKnowledgeId ? "Editar" : "Nueva información"}
+              title={
+                editingKnowledgeId
+                  ? "Editar base de conocimiento"
+                  : "Agregar información al bot"
+              }
+              description="Aquí puedes escribir información general para que el bot la use al responder."
+            />
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Título *
+                </label>
+                <input
+                  value={knowledgeForm.title}
+                  onChange={(event) =>
+                    handleKnowledgeChange("title", event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="Ej. Política de anticipos"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Categoría
+                </label>
+                <input
+                  value={knowledgeForm.category}
+                  onChange={(event) =>
+                    handleKnowledgeChange("category", event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="General, Servicios, Políticas, Promociones..."
+                />
+              </div>
+
+              <TextAreaField
+                label="Contenido *"
+                value={knowledgeForm.content}
+                onChange={(value) => handleKnowledgeChange("content", value)}
+                placeholder="Escribe aquí toda la información que quieres que el bot sepa sobre este tema..."
+              />
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Palabras clave
+                </label>
+                <input
+                  value={knowledgeForm.keywords}
+                  onChange={(event) =>
+                    handleKnowledgeChange("keywords", event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                  placeholder="anticipo, pago, cita, comprobante..."
+                />
+              </div>
+
+              <label className="flex items-center gap-3 rounded-2xl bg-[#f7f9fa] px-4 py-3 text-sm text-[#68777c]">
+                <input
+                  type="checkbox"
+                  checked={knowledgeForm.active}
+                  onChange={(event) =>
+                    handleKnowledgeChange("active", event.target.checked)
+                  }
+                />
+                Información activa
+              </label>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={saveKnowledge}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                >
+                  {saving ? "Guardando..." : "Guardar información"}
+                </button>
+
+                {editingKnowledgeId && (
+                  <button
+                    type="button"
+                    onClick={resetKnowledgeForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar edición
+                  </button>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              eyebrow="Información guardada"
+              title="Base de conocimiento"
+              description="Esta información alimentará las respuestas inteligentes del bot."
+              action={
+                <button
+                  type="button"
+                  onClick={loadData}
+                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Actualizar
+                </button>
+              }
+            />
+
+            {loadingData ? (
+              <p className="text-sm text-[#68777c]">Cargando información...</p>
+            ) : knowledgeItems.length === 0 ? (
+              <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+                Aún no hay información en la base de conocimiento.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {knowledgeItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+                  >
+                    <div className="flex flex-col justify-between gap-4 md:flex-row">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                          {item.category || "General"} ·{" "}
+                          {item.active ? "Activa" : "Inactiva"}
+                        </p>
+
+                        <h4 className="mt-2 text-xl font-light">
+                          {item.title}
+                        </h4>
+
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[#68777c]">
+                          {item.content}
+                        </p>
+
+                        {item.keywords && (
+                          <p className="mt-3 text-xs text-[#8a969a]">
+                            Palabras clave: {item.keywords}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex shrink-0 flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editKnowledge(item)}
+                          className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleKnowledgeStatus(item)}
+                          className={`rounded-full border px-5 py-2 text-sm transition ${
+                            item.active
+                              ? "border-red-500 text-red-600 hover:bg-red-600 hover:text-white"
+                              : "border-green-600 text-green-700 hover:bg-green-600 hover:text-white"
+                          }`}
+                        >
+                          {item.active ? "Desactivar" : "Activar"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {activeSection === "menu" && (
         <Card>
           <SectionHeader
@@ -311,9 +625,7 @@ export default function BotPage() {
             description="Opciones configuradas en la base de datos."
           />
 
-          {loadingData ? (
-            <p className="text-sm text-[#68777c]">Cargando menú...</p>
-          ) : menuOptions.length === 0 ? (
+          {menuOptions.length === 0 ? (
             <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
               Aún no hay opciones del menú.
             </div>
@@ -454,7 +766,7 @@ export default function BotPage() {
   );
 }
 
-function TextAreaField({ label, value, onChange }) {
+function TextAreaField({ label, value, onChange, placeholder = "" }) {
   return (
     <div>
       <label className="mb-2 block text-sm text-[#68777c]">{label}</label>
@@ -462,6 +774,7 @@ function TextAreaField({ label, value, onChange }) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="min-h-28 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+        placeholder={placeholder}
       />
     </div>
   );
