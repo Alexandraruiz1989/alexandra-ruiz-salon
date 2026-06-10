@@ -2860,10 +2860,13 @@ function getAppointmentServicesText(appointment) {
 function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const services = appointment.appointment_services || [];
   const clientName = appointment.clients?.full_name || "";
-  const clientFirstName = getClientFirstName(clientName);
+ const clientFirstName = getClientFirstName(clientName);
   const clientPhone = appointment.clients?.phone || "";
   const appointmentTime = formatTime(appointment.start_time);
   const servicesText = getAppointmentServicesText(appointment);
+ 
+  const [currentRole, setCurrentRole] = useState("tecnica");
+ const canUseManualWhatsApp = currentRole !== "tecnica";
 
   const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
@@ -2920,65 +2923,69 @@ const goToPayment = () => {
           {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
           {formatTime(appointment.end_time)}
         </p>
-        <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-            Mensajes rápidos por WhatsApp
-          </p>
+     {canUseManualWhatsApp && (
+  <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
+    <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+      Mensajes rápidos por WhatsApp
+    </p>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => openWhatsAppMessage(clientPhone, reminderMessage)}
-              className="rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
-            >
-              Enviar recordatorio
-            </button>
+    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <button
+        type="button"
+        onClick={() => openWhatsAppMessage(clientPhone, reminderMessage)}
+        className="rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+      >
+        Enviar recordatorio
+      </button>
 
-            <button
-              type="button"
-              onClick={() => openWhatsAppMessage(clientPhone, onTheWayMessage)}
-              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-            >
-              ¿Viene en camino?
-            </button>
+      <button
+        type="button"
+        onClick={() => openWhatsAppMessage(clientPhone, onTheWayMessage)}
+        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+      >
+        ¿Viene en camino?
+      </button>
 
-            <button
-              type="button"
-              onClick={() => openWhatsAppMessage(clientPhone, lateMessage)}
-              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-            >
-              Preguntar si viene retrasada
-            </button>
+      <button
+        type="button"
+        onClick={() => openWhatsAppMessage(clientPhone, lateMessage)}
+        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+      >
+        Preguntar si viene retrasada
+      </button>
 
-            <button
-              type="button"
-              onClick={() => openWhatsAppMessage(clientPhone, thankYouMessage)}
-              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-            >
-              Enviar agradecimiento
-            </button>
+      <button
+        type="button"
+        onClick={() => openWhatsAppMessage(clientPhone, thankYouMessage)}
+        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+      >
+        Enviar agradecimiento
+      </button>
 
-            <button
-              type="button"
-              onClick={() => openWhatsAppMessage(clientPhone, reviewMessage)}
-              className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:col-span-2"
-            >
-              Solicitar calificación
-            </button>
-          </div>
+      <button
+        type="button"
+        onClick={() => openWhatsAppMessage(clientPhone, reviewMessage)}
+        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:col-span-2"
+      >
+        Solicitar calificación
+      </button>
+    </div>
 
-          <button
-  type="button"
-  onClick={goToPayment}
-  className="rounded-full bg-green-600 px-5 py-3 text-sm text-white transition hover:opacity-90"
->
-  Cobrar cita
-</button>
+    <p className="mt-3 text-xs text-[#68777c]">
+      Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos mensajes se enviarán desde el número del salón mediante API.
+    </p>
+  </div>
+)}
 
-          <p className="mt-3 text-xs text-[#68777c]">
-            Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos textos serán editables desde configuración.
-          </p>
-        </div>
+<div className="mt-6">
+  <button
+    type="button"
+    onClick={goToPayment}
+    className="rounded-full bg-green-600 px-5 py-3 text-sm text-white transition hover:opacity-90"
+  >
+    Cobrar cita
+  </button>
+</div>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl bg-[#f7f9fa] p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
