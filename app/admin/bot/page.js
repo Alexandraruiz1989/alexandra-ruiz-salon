@@ -21,6 +21,21 @@ const emptyKnowledgeForm = {
   active: true,
 };
 
+const emptyMenuForm = {
+  option_order: 1,
+  option_key: "",
+  option_label: "",
+  response_message: "",
+  active: true,
+};
+
+const emptyFaqForm = {
+  question: "",
+  answer: "",
+  keywords: "",
+  active: true,
+};
+
 function Card({ children }) {
   return (
     <div className="rounded-[1.5rem] bg-white p-6 shadow-sm">
@@ -83,7 +98,13 @@ export default function BotPage() {
   const [editingKnowledgeId, setEditingKnowledgeId] = useState(null);
 
   const [menuOptions, setMenuOptions] = useState([]);
+  const [menuForm, setMenuForm] = useState(emptyMenuForm);
+  const [editingMenuId, setEditingMenuId] = useState(null);
+
   const [faqs, setFaqs] = useState([]);
+  const [faqForm, setFaqForm] = useState(emptyFaqForm);
+  const [editingFaqId, setEditingFaqId] = useState(null);
+
   const [appointmentRequests, setAppointmentRequests] = useState([]);
   const [conversations, setConversations] = useState([]);
 
@@ -167,7 +188,9 @@ export default function BotPage() {
     }
 
     if (knowledgeResult.error) {
-      setMessage(`No se pudo cargar base de conocimiento: ${knowledgeResult.error.message}`);
+      setMessage(
+        `No se pudo cargar base de conocimiento: ${knowledgeResult.error.message}`
+      );
     } else {
       setKnowledgeItems(knowledgeResult.data || []);
     }
@@ -330,6 +353,189 @@ export default function BotPage() {
     await loadData();
   };
 
+  const resetMenuForm = () => {
+    setMenuForm(emptyMenuForm);
+    setEditingMenuId(null);
+  };
+
+  const handleMenuChange = (field, value) => {
+    setMenuForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const editMenuOption = (item) => {
+    setEditingMenuId(item.id);
+    setMenuForm({
+      option_order: item.option_order || 1,
+      option_key: item.option_key || "",
+      option_label: item.option_label || "",
+      response_message: item.response_message || "",
+      active: item.active !== false,
+    });
+    setMessage("");
+  };
+
+  const saveMenuOption = async () => {
+    setSaving(true);
+    setMessage("");
+
+    if (!menuForm.option_key.trim() || !menuForm.option_label.trim()) {
+      setMessage("La clave interna y el texto de la opción son obligatorios.");
+      setSaving(false);
+      return;
+    }
+
+    const payload = {
+      option_order: Number(menuForm.option_order || 1),
+      option_key: menuForm.option_key.trim(),
+      option_label: menuForm.option_label.trim(),
+      response_message: menuForm.response_message.trim() || null,
+      active: menuForm.active,
+      updated_at: new Date().toISOString(),
+    };
+
+    const query = editingMenuId
+      ? supabase
+          .from("bot_menu_options")
+          .update(payload)
+          .eq("id", editingMenuId)
+      : supabase.from("bot_menu_options").insert([payload]);
+
+    const { error } = await query;
+
+    if (error) {
+      setMessage(`No se pudo guardar opción del menú: ${error.message}`);
+      setSaving(false);
+      return;
+    }
+
+    setMessage("Opción del menú guardada correctamente ✨");
+    resetMenuForm();
+    setSaving(false);
+    await loadData();
+  };
+
+  const toggleMenuStatus = async (item) => {
+    setMessage("");
+
+    const { error } = await supabase
+      .from("bot_menu_options")
+      .update({
+        active: !item.active,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id);
+
+    if (error) {
+      setMessage(`No se pudo cambiar el estado: ${error.message}`);
+      return;
+    }
+
+    setMessage(item.active ? "Opción desactivada." : "Opción activada ✨");
+    await loadData();
+  };
+
+  const resetFaqForm = () => {
+    setFaqForm(emptyFaqForm);
+    setEditingFaqId(null);
+  };
+
+  const handleFaqChange = (field, value) => {
+    setFaqForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const editFaq = (item) => {
+    setEditingFaqId(item.id);
+    setFaqForm({
+      question: item.question || "",
+      answer: item.answer || "",
+      keywords: item.keywords || "",
+      active: item.active !== false,
+    });
+    setMessage("");
+  };
+
+  const saveFaq = async () => {
+    setSaving(true);
+    setMessage("");
+
+    if (!faqForm.question.trim() || !faqForm.answer.trim()) {
+      setMessage("La pregunta y la respuesta son obligatorias.");
+      setSaving(false);
+      return;
+    }
+
+    const payload = {
+      question: faqForm.question.trim(),
+      answer: faqForm.answer.trim(),
+      keywords: faqForm.keywords.trim() || null,
+      active: faqForm.active,
+      updated_at: new Date().toISOString(),
+    };
+
+    const query = editingFaqId
+      ? supabase.from("bot_faqs").update(payload).eq("id", editingFaqId)
+      : supabase.from("bot_faqs").insert([payload]);
+
+    const { error } = await query;
+
+    if (error) {
+      setMessage(`No se pudo guardar pregunta frecuente: ${error.message}`);
+      setSaving(false);
+      return;
+    }
+
+    setMessage("Pregunta frecuente guardada correctamente ✨");
+    resetFaqForm();
+    setSaving(false);
+    await loadData();
+  };
+
+  const toggleFaqStatus = async (item) => {
+    setMessage("");
+
+    const { error } = await supabase
+      .from("bot_faqs")
+      .update({
+        active: !item.active,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id);
+
+    if (error) {
+      setMessage(`No se pudo cambiar el estado: ${error.message}`);
+      return;
+    }
+
+    setMessage(item.active ? "Pregunta desactivada." : "Pregunta activada ✨");
+    await loadData();
+  };
+
+  const updateRequestStatus = async (requestId, status) => {
+    setMessage("");
+
+    const { error } = await supabase
+      .from("bot_appointment_requests")
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", requestId);
+
+    if (error) {
+      setMessage(`No se pudo actualizar solicitud: ${error.message}`);
+      return;
+    }
+
+    setMessage("Solicitud actualizada correctamente ✨");
+    await loadData();
+  };
+
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
@@ -375,18 +581,11 @@ export default function BotPage() {
           />
 
           <div className="space-y-5">
-            <div>
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Nombre del bot
-              </label>
-              <input
-                value={settingsForm.bot_name}
-                onChange={(event) =>
-                  handleSettingsChange("bot_name", event.target.value)
-                }
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-              />
-            </div>
+            <InputField
+              label="Nombre del bot"
+              value={settingsForm.bot_name}
+              onChange={(value) => handleSettingsChange("bot_name", value)}
+            />
 
             <TextAreaField
               label="Mensaje de bienvenida"
@@ -416,16 +615,11 @@ export default function BotPage() {
               }
             />
 
-            <label className="flex items-center gap-3 rounded-2xl bg-[#f7f9fa] px-4 py-3 text-sm text-[#68777c]">
-              <input
-                type="checkbox"
-                checked={settingsForm.active}
-                onChange={(event) =>
-                  handleSettingsChange("active", event.target.checked)
-                }
-              />
-              Bot activo
-            </label>
+            <CheckField
+              label="Bot activo"
+              checked={settingsForm.active}
+              onChange={(value) => handleSettingsChange("active", value)}
+            />
 
             <button
               type="button"
@@ -453,33 +647,19 @@ export default function BotPage() {
             />
 
             <div className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm text-[#68777c]">
-                  Título *
-                </label>
-                <input
-                  value={knowledgeForm.title}
-                  onChange={(event) =>
-                    handleKnowledgeChange("title", event.target.value)
-                  }
-                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                  placeholder="Ej. Política de anticipos"
-                />
-              </div>
+              <InputField
+                label="Título *"
+                value={knowledgeForm.title}
+                onChange={(value) => handleKnowledgeChange("title", value)}
+                placeholder="Ej. Política de anticipos"
+              />
 
-              <div>
-                <label className="mb-2 block text-sm text-[#68777c]">
-                  Categoría
-                </label>
-                <input
-                  value={knowledgeForm.category}
-                  onChange={(event) =>
-                    handleKnowledgeChange("category", event.target.value)
-                  }
-                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                  placeholder="General, Servicios, Políticas, Promociones..."
-                />
-              </div>
+              <InputField
+                label="Categoría"
+                value={knowledgeForm.category}
+                onChange={(value) => handleKnowledgeChange("category", value)}
+                placeholder="General, Servicios, Políticas, Promociones..."
+              />
 
               <TextAreaField
                 label="Contenido *"
@@ -488,30 +668,18 @@ export default function BotPage() {
                 placeholder="Escribe aquí toda la información que quieres que el bot sepa sobre este tema..."
               />
 
-              <div>
-                <label className="mb-2 block text-sm text-[#68777c]">
-                  Palabras clave
-                </label>
-                <input
-                  value={knowledgeForm.keywords}
-                  onChange={(event) =>
-                    handleKnowledgeChange("keywords", event.target.value)
-                  }
-                  className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                  placeholder="anticipo, pago, cita, comprobante..."
-                />
-              </div>
+              <InputField
+                label="Palabras clave"
+                value={knowledgeForm.keywords}
+                onChange={(value) => handleKnowledgeChange("keywords", value)}
+                placeholder="anticipo, pago, cita, comprobante..."
+              />
 
-              <label className="flex items-center gap-3 rounded-2xl bg-[#f7f9fa] px-4 py-3 text-sm text-[#68777c]">
-                <input
-                  type="checkbox"
-                  checked={knowledgeForm.active}
-                  onChange={(event) =>
-                    handleKnowledgeChange("active", event.target.checked)
-                  }
-                />
-                Información activa
-              </label>
+              <CheckField
+                label="Información activa"
+                checked={knowledgeForm.active}
+                onChange={(value) => handleKnowledgeChange("active", value)}
+              />
 
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
@@ -552,64 +720,23 @@ export default function BotPage() {
               }
             />
 
-            {loadingData ? (
-              <p className="text-sm text-[#68777c]">Cargando información...</p>
-            ) : knowledgeItems.length === 0 ? (
-              <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-                Aún no hay información en la base de conocimiento.
-              </div>
+            {knowledgeItems.length === 0 ? (
+              <EmptyState text="Aún no hay información en la base de conocimiento." />
             ) : (
               <div className="space-y-4">
                 {knowledgeItems.map((item) => (
-                  <div
+                  <InfoCard
                     key={item.id}
-                    className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
-                  >
-                    <div className="flex flex-col justify-between gap-4 md:flex-row">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                          {item.category || "General"} ·{" "}
-                          {item.active ? "Activa" : "Inactiva"}
-                        </p>
-
-                        <h4 className="mt-2 text-xl font-light">
-                          {item.title}
-                        </h4>
-
-                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[#68777c]">
-                          {item.content}
-                        </p>
-
-                        {item.keywords && (
-                          <p className="mt-3 text-xs text-[#8a969a]">
-                            Palabras clave: {item.keywords}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex shrink-0 flex-col gap-2">
-                        <button
-                          type="button"
-                          onClick={() => editKnowledge(item)}
-                          className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                        >
-                          Editar
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleKnowledgeStatus(item)}
-                          className={`rounded-full border px-5 py-2 text-sm transition ${
-                            item.active
-                              ? "border-red-500 text-red-600 hover:bg-red-600 hover:text-white"
-                              : "border-green-600 text-green-700 hover:bg-green-600 hover:text-white"
-                          }`}
-                        >
-                          {item.active ? "Desactivar" : "Activar"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    eyebrow={`${item.category || "General"} · ${
+                      item.active ? "Activa" : "Inactiva"
+                    }`}
+                    title={item.title}
+                    content={item.content}
+                    keywords={item.keywords}
+                    onEdit={() => editKnowledge(item)}
+                    onToggle={() => toggleKnowledgeStatus(item)}
+                    active={item.active}
+                  />
                 ))}
               </div>
             )}
@@ -618,73 +745,215 @@ export default function BotPage() {
       )}
 
       {activeSection === "menu" && (
-        <Card>
-          <SectionHeader
-            eyebrow="Menú"
-            title="Opciones actuales del bot"
-            description="Opciones configuradas en la base de datos."
-          />
+        <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Card>
+            <SectionHeader
+              eyebrow={editingMenuId ? "Editar opción" : "Nueva opción"}
+              title={
+                editingMenuId
+                  ? "Editar opción del menú"
+                  : "Agregar opción al menú"
+              }
+              description="Estas son las opciones principales que verá la clienta en WhatsApp."
+            />
 
-          {menuOptions.length === 0 ? (
-            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-              Aún no hay opciones del menú.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {menuOptions.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-4"
+            <div className="space-y-4">
+              <InputField
+                label="Orden"
+                type="number"
+                value={menuForm.option_order}
+                onChange={(value) => handleMenuChange("option_order", value)}
+              />
+
+              <InputField
+                label="Clave interna *"
+                value={menuForm.option_key}
+                onChange={(value) => handleMenuChange("option_key", value)}
+                placeholder="agendar, servicios, promociones..."
+              />
+
+              <InputField
+                label="Texto de la opción *"
+                value={menuForm.option_label}
+                onChange={(value) => handleMenuChange("option_label", value)}
+                placeholder="Agendar cita"
+              />
+
+              <TextAreaField
+                label="Respuesta automática"
+                value={menuForm.response_message}
+                onChange={(value) => handleMenuChange("response_message", value)}
+                placeholder="Mensaje que responderá el bot al elegir esta opción..."
+              />
+
+              <CheckField
+                label="Opción activa"
+                checked={menuForm.active}
+                onChange={(value) => handleMenuChange("active", value)}
+              />
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={saveMenuOption}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
                 >
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                    {item.option_order} · {item.option_key}
-                  </p>
-                  <h4 className="mt-2 text-lg font-light">
-                    {item.option_label}
-                  </h4>
-                  {item.response_message && (
-                    <p className="mt-2 whitespace-pre-wrap text-sm text-[#68777c]">
-                      {item.response_message}
-                    </p>
-                  )}
-                </div>
-              ))}
+                  {saving ? "Guardando..." : "Guardar opción"}
+                </button>
+
+                {editingMenuId && (
+                  <button
+                    type="button"
+                    onClick={resetMenuForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar edición
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </Card>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              eyebrow="Menú"
+              title="Opciones actuales del bot"
+              description="Puedes editar, activar o desactivar opciones."
+              action={
+                <button
+                  type="button"
+                  onClick={loadData}
+                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Actualizar
+                </button>
+              }
+            />
+
+            {menuOptions.length === 0 ? (
+              <EmptyState text="Aún no hay opciones del menú." />
+            ) : (
+              <div className="space-y-4">
+                {menuOptions.map((item) => (
+                  <InfoCard
+                    key={item.id}
+                    eyebrow={`${item.option_order} · ${item.option_key} · ${
+                      item.active ? "Activa" : "Inactiva"
+                    }`}
+                    title={item.option_label}
+                    content={item.response_message || "Sin respuesta configurada."}
+                    onEdit={() => editMenuOption(item)}
+                    onToggle={() => toggleMenuStatus(item)}
+                    active={item.active}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {activeSection === "faqs" && (
-        <Card>
-          <SectionHeader
-            eyebrow="FAQs"
-            title="Preguntas frecuentes"
-            description="Preguntas que el bot podrá responder automáticamente."
-          />
+        <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+          <Card>
+            <SectionHeader
+              eyebrow={editingFaqId ? "Editar pregunta" : "Nueva pregunta"}
+              title={
+                editingFaqId
+                  ? "Editar pregunta frecuente"
+                  : "Agregar pregunta frecuente"
+              }
+              description="Estas respuestas serán usadas por el bot cuando detecte preguntas comunes."
+            />
 
-          {faqs.length === 0 ? (
-            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-              Aún no hay preguntas frecuentes.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {faqs.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-4"
+            <div className="space-y-4">
+              <TextAreaField
+                label="Pregunta *"
+                value={faqForm.question}
+                onChange={(value) => handleFaqChange("question", value)}
+                placeholder="Ej. ¿Dónde están ubicadas?"
+              />
+
+              <TextAreaField
+                label="Respuesta *"
+                value={faqForm.answer}
+                onChange={(value) => handleFaqChange("answer", value)}
+                placeholder="Respuesta que dará el bot..."
+              />
+
+              <InputField
+                label="Palabras clave"
+                value={faqForm.keywords}
+                onChange={(value) => handleFaqChange("keywords", value)}
+                placeholder="ubicación, dirección, maps..."
+              />
+
+              <CheckField
+                label="Pregunta activa"
+                checked={faqForm.active}
+                onChange={(value) => handleFaqChange("active", value)}
+              />
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={saveFaq}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
                 >
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                    {item.active ? "Activa" : "Inactiva"}
-                  </p>
-                  <h4 className="mt-2 text-lg font-light">{item.question}</h4>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-[#68777c]">
-                    {item.answer}
-                  </p>
-                </div>
-              ))}
+                  {saving ? "Guardando..." : "Guardar pregunta"}
+                </button>
+
+                {editingFaqId && (
+                  <button
+                    type="button"
+                    onClick={resetFaqForm}
+                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Cancelar edición
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </Card>
+          </Card>
+
+          <Card>
+            <SectionHeader
+              eyebrow="FAQs"
+              title="Preguntas frecuentes"
+              description="Puedes editar, activar o desactivar preguntas."
+              action={
+                <button
+                  type="button"
+                  onClick={loadData}
+                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Actualizar
+                </button>
+              }
+            />
+
+            {faqs.length === 0 ? (
+              <EmptyState text="Aún no hay preguntas frecuentes." />
+            ) : (
+              <div className="space-y-4">
+                {faqs.map((item) => (
+                  <InfoCard
+                    key={item.id}
+                    eyebrow={item.active ? "Activa" : "Inactiva"}
+                    title={item.question}
+                    content={item.answer}
+                    keywords={item.keywords}
+                    onEdit={() => editFaq(item)}
+                    onToggle={() => toggleFaqStatus(item)}
+                    active={item.active}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {activeSection === "solicitudes" && (
@@ -693,32 +962,83 @@ export default function BotPage() {
             eyebrow="Solicitudes"
             title="Solicitudes de cita recibidas"
             description="Aquí aparecerán las solicitudes antes de convertirlas en cita."
+            action={
+              <button
+                type="button"
+                onClick={loadData}
+                className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Actualizar
+              </button>
+            }
           />
 
           {appointmentRequests.length === 0 ? (
-            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-              Aún no hay solicitudes de cita del bot.
-            </div>
+            <EmptyState text="Aún no hay solicitudes de cita del bot." />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {appointmentRequests.map((request) => (
                 <div
                   key={request.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-4"
+                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
                 >
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                    {request.status}
-                  </p>
-                  <h4 className="mt-2 text-lg font-light">
-                    {request.client_name || "Cliente sin nombre"}
-                  </h4>
-                  <p className="mt-2 text-sm text-[#68777c]">
-                    Servicio: {request.requested_service || "-"}
-                  </p>
-                  <p className="text-sm text-[#68777c]">
-                    Fecha/hora: {request.requested_date || "-"} ·{" "}
-                    {request.requested_time || "-"}
-                  </p>
+                  <div className="flex flex-col justify-between gap-4 md:flex-row">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                        {request.status}
+                      </p>
+                      <h4 className="mt-2 text-xl font-light">
+                        {request.client_name || "Cliente sin nombre"}
+                      </h4>
+                      <p className="mt-2 text-sm text-[#68777c]">
+                        WhatsApp: {request.client_phone || "-"}
+                      </p>
+                      <p className="text-sm text-[#68777c]">
+                        Servicio: {request.requested_service || "-"}
+                      </p>
+                      <p className="text-sm text-[#68777c]">
+                        Fecha/hora: {request.requested_date || "-"} ·{" "}
+                        {request.requested_time || "-"}
+                      </p>
+                      {request.notes && (
+                        <p className="mt-3 rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
+                          {request.notes}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex shrink-0 flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateRequestStatus(request.id, "en_revision")
+                        }
+                        className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                      >
+                        En revisión
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateRequestStatus(request.id, "convertida")
+                        }
+                        className="rounded-full bg-green-600 px-5 py-2 text-sm text-white transition hover:opacity-90"
+                      >
+                        Marcar convertida
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateRequestStatus(request.id, "cancelada")
+                        }
+                        className="rounded-full border border-red-500 px-5 py-2 text-sm text-red-600 transition hover:bg-red-600 hover:text-white"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -732,27 +1052,37 @@ export default function BotPage() {
             eyebrow="Conversaciones"
             title="Conversaciones del bot"
             description="Historial general de contactos recibidos por WhatsApp."
+            action={
+              <button
+                type="button"
+                onClick={loadData}
+                className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Actualizar
+              </button>
+            }
           />
 
           {conversations.length === 0 ? (
-            <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-              Aún no hay conversaciones del bot.
-            </div>
+            <EmptyState text="Aún no hay conversaciones del bot." />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {conversations.map((conversation) => (
                 <div
                   key={conversation.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-4"
+                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
                 >
                   <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
                     {conversation.status} · {conversation.current_step}
                   </p>
-                  <h4 className="mt-2 text-lg font-light">
+                  <h4 className="mt-2 text-xl font-light">
                     {conversation.client_name || conversation.client_phone}
                   </h4>
+                  <p className="mt-2 text-sm text-[#68777c]">
+                    WhatsApp: {conversation.client_phone}
+                  </p>
                   {conversation.last_message && (
-                    <p className="mt-2 whitespace-pre-wrap text-sm text-[#68777c]">
+                    <p className="mt-3 whitespace-pre-wrap rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
                       {conversation.last_message}
                     </p>
                   )}
@@ -766,6 +1096,21 @@ export default function BotPage() {
   );
 }
 
+function InputField({ label, value, onChange, placeholder = "", type = "text" }) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm text-[#68777c]">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
 function TextAreaField({ label, value, onChange, placeholder = "" }) {
   return (
     <div>
@@ -776,6 +1121,85 @@ function TextAreaField({ label, value, onChange, placeholder = "" }) {
         className="min-h-28 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
         placeholder={placeholder}
       />
+    </div>
+  );
+}
+
+function CheckField({ label, checked, onChange }) {
+  return (
+    <label className="flex items-center gap-3 rounded-2xl bg-[#f7f9fa] px-4 py-3 text-sm text-[#68777c]">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+function EmptyState({ text }) {
+  return (
+    <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+      {text}
+    </div>
+  );
+}
+
+function InfoCard({
+  eyebrow,
+  title,
+  content,
+  keywords,
+  onEdit,
+  onToggle,
+  active,
+}) {
+  return (
+    <div className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5">
+      <div className="flex flex-col justify-between gap-4 md:flex-row">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            {eyebrow}
+          </p>
+
+          <h4 className="mt-2 text-xl font-light">{title}</h4>
+
+          {content && (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[#68777c]">
+              {content}
+            </p>
+          )}
+
+          {keywords && (
+            <p className="mt-3 text-xs text-[#8a969a]">
+              Palabras clave: {keywords}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 flex-col gap-2">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+          >
+            Editar
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggle}
+            className={`rounded-full border px-5 py-2 text-sm transition ${
+              active
+                ? "border-red-500 text-red-600 hover:bg-red-600 hover:text-white"
+                : "border-green-600 text-green-700 hover:bg-green-600 hover:text-white"
+            }`}
+          >
+            {active ? "Desactivar" : "Activar"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
