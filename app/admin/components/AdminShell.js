@@ -73,6 +73,7 @@ export default function AdminShell({
   const [sessionEmail, setSessionEmail] = useState("");
   const [currentProfile, setCurrentProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const start = async () => {
@@ -154,7 +155,7 @@ export default function AdminShell({
     roleModulePermissions[profileRole] || roleModulePermissions.tecnica;
 
   const mainModules = [
-    { label: "Inicio", href: "/admin", key: "inicio" },
+    { label: "Inicio", href: "/admin/agenda", key: "inicio" },
     { label: "Clientas", href: "/admin/clientas", key: "clientas" },
     { label: "Servicios", href: "/admin/servicios", key: "servicios" },
     { label: "Agenda", href: "/admin/agenda", key: "agenda" },
@@ -164,8 +165,16 @@ export default function AdminShell({
     { label: "Reportes", href: "/admin/reportes", key: "reportes" },
     { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
     { label: "Tareas", href: "/admin/tareas", key: "tareas" },
-    { label: "Configuración", href: "/admin/configuracion", key: "configuracion" },
-    { label: "Calificaciones", href: "/admin/calificaciones", key: "calificaciones" },
+    {
+      label: "Configuración",
+      href: "/admin/configuracion",
+      key: "configuracion",
+    },
+    {
+      label: "Calificaciones",
+      href: "/admin/calificaciones",
+      key: "calificaciones",
+    },
     { label: "Seguimientos", href: "/admin/seguimientos", key: "seguimientos" },
     {
       label: "Notificaciones",
@@ -193,7 +202,7 @@ export default function AdminShell({
   useEffect(() => {
     if (!loadingProfile && currentProfile?.active !== false && !isModuleAllowed) {
       const timer = setTimeout(() => {
-        window.location.href = "/admin";
+        window.location.href = "/admin/agenda";
       }, 2500);
 
       return () => clearTimeout(timer);
@@ -217,7 +226,8 @@ export default function AdminShell({
           </p>
           <h1 className="mt-2 text-2xl font-light">Tu acceso no está activo</h1>
           <p className="mt-3 text-sm leading-6 text-[#68777c]">
-            Pide a administración que reactive tu cuenta para poder entrar al sistema.
+            Pide a administración que reactive tu cuenta para poder entrar al
+            sistema.
           </p>
 
           <button
@@ -252,15 +262,15 @@ export default function AdminShell({
           </p>
 
           <p className="mt-3 text-sm leading-6 text-[#68777c]">
-            Te redirigiremos al inicio del sistema en unos segundos.
+            Te redirigiremos a Agenda en unos segundos.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-3">
             <a
-              href="/admin"
+              href="/admin/agenda"
               className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
             >
-              Ir al inicio
+              Ir a Agenda
             </a>
 
             <button
@@ -301,7 +311,8 @@ export default function AdminShell({
                 key={item.key}
                 href={item.href}
                 className={`flex items-center justify-between rounded-2xl px-4 py-3 text-sm transition ${
-                  activeModule === item.key
+                  activeModule === item.key ||
+                  (activeModule === "agenda" && item.key === "inicio")
                     ? "bg-[#bd7b83] text-white"
                     : "text-[#536166] hover:bg-[#f7eeee]"
                 }`}
@@ -382,7 +393,22 @@ export default function AdminShell({
                 )}
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(true)}
+                  className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 lg:hidden"
+                >
+                  ☰ Menú
+                </button>
+
+                <a
+                  href="/admin/agenda"
+                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Agenda
+                </a>
+
                 {allowedModules.includes("notificaciones") && (
                   <a
                     href="/admin/notificaciones"
@@ -430,27 +456,108 @@ export default function AdminShell({
                 ))}
               </div>
             )}
-
-            <div className="mt-4 flex gap-2 overflow-auto lg:hidden">
-              {visibleMainModules.map((item) => (
-                <a
-                  key={item.key}
-                  href={item.href}
-                  className={`shrink-0 rounded-full px-4 py-2 text-sm ${
-                    activeModule === item.key
-                      ? "bg-[#bd7b83] text-white"
-                      : "bg-[#f7eeee] text-[#8a5f63]"
-                  }`}
-                >
-                  {item.label}
-                </a>
-              ))}
-            </div>
           </header>
 
           <div className="p-4 md:p-8">{children}</div>
         </section>
       </div>
+
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-[999] bg-black/35 lg:hidden">
+          <div className="absolute right-0 top-0 flex h-full w-[86%] max-w-sm flex-col bg-white shadow-2xl">
+            <div className="border-b border-[#dde3e6] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
+                    Alexandra Ruiz
+                  </p>
+                  <h3 className="mt-1 text-2xl font-light">Menú</h3>
+                  <p className="mt-1 text-xs text-[#68777c]">
+                    {roleLabels[profileRole] || profileRole}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c]"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="grid gap-2">
+                {visibleMainModules.map((item) => (
+                  <a
+                    key={item.key}
+                    href={item.href}
+                    className={`flex items-center justify-between rounded-2xl px-4 py-3 text-sm transition ${
+                      activeModule === item.key ||
+                      (activeModule === "agenda" && item.key === "inicio")
+                        ? "bg-[#bd7b83] text-white"
+                        : "bg-[#f7f9fa] text-[#536166]"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+
+                    {item.badge > 0 && (
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-bold ${
+                          activeModule === item.key
+                            ? "bg-white text-[#d6007f]"
+                            : "bg-[#d6007f] text-white"
+                        }`}
+                      >
+                        {item.badge > 99 ? "99+" : item.badge}
+                      </span>
+                    )}
+                  </a>
+                ))}
+              </div>
+
+              {menuItems.length > 0 && (
+                <div className="mt-5 border-t border-[#edf0f2] pt-5">
+                  <p className="mb-3 px-1 text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                    Secciones
+                  </p>
+
+                  <div className="grid gap-2">
+                    {menuItems.map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => {
+                          setActiveSection(item.key);
+                          setMobileMenuOpen(false);
+                        }}
+                        className={`rounded-2xl px-4 py-3 text-left text-sm transition ${
+                          activeSection === item.key
+                            ? "bg-[#bd7b83] text-white"
+                            : "bg-[#f7f9fa] text-[#536166]"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-5 border-t border-[#edf0f2] pt-5">
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="w-full rounded-2xl border border-[#bd7b83] px-4 py-3 text-left text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Cerrar sesión
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
