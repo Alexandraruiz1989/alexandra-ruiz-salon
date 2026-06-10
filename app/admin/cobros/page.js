@@ -62,14 +62,27 @@ function SectionHeader({ eyebrow, title, description, action }) {
   );
 }
 
+function getToastStyle(message) {
+  const text = String(message || "").toLowerCase();
+
+  if (
+    text.includes("no se pudo") ||
+    text.includes("error") ||
+    text.includes("obligatorio") ||
+    text.includes("válido")
+  ) {
+    return "bg-red-600 text-white";
+  }
+
+  return "bg-green-600 text-white";
+}
+
 function getAppointmentServicesText(appointment) {
   const services = appointment.appointment_services || [];
 
   if (services.length === 0) return "Sin servicios";
 
-  return services
-    .map((item) => item.services?.name || "Servicio")
-    .join(", ");
+  return services.map((item) => item.services?.name || "Servicio").join(", ");
 }
 
 function getAppointmentStaffText(appointment) {
@@ -108,9 +121,13 @@ export default function CobrosPage() {
   const [message, setMessage] = useState("");
   const [paymentMessage, setPaymentMessage] = useState("");
 
+  const [currentUser, setCurrentUser] = useState(null);
+  const [currentProfile, setCurrentProfile] = useState(null);
+
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [appointments, setAppointments] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [allPaidAppointmentIds, setAllPaidAppointmentIds] = useState([]);
   const [extras, setExtras] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(null);
 
@@ -127,6 +144,9 @@ export default function CobrosPage() {
 
   const [extraLines, setExtraLines] = useState([]);
 
+  const currentRole = currentProfile?.role || "tecnica";
+  const isAdmin = currentRole === "admin";
+
   useEffect(() => {
     const start = async () => {
       const { data } = await supabase.auth.getSession();
@@ -136,16 +156,22 @@ export default function CobrosPage() {
         return;
       }
 
+      const user = data.session.user;
+      setCurrentUser(user);
+
+      const profile = await loadCurrentProfile(user);
+      setCurrentProfile(profile);
+
       setLoadingSession(false);
-      await loadData();
+      await loadData(user, profile);
     };
 
     start();
   }, []);
 
   useEffect(() => {
-    if (!loadingSession) {
-      loadData();
+    if (!loadingSession && currentUser) {
+      loadData(currentUser, currentProfile);
     }
   }, [selectedDate]);
 
@@ -173,9 +199,37 @@ export default function CobrosPage() {
     return () => clearTimeout(timer);
   }, [message]);
 
-  const loadData = async () => {
+  const loadCurrentProfile = async (user) => {
+    const { data, error } = await supabase
+      .from("user_profiles")
+      .select("*")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+
+    if (!error && data) return data;
+
+    const { data: profileByEmail, error: emailError } = await supabase
+      .from("user_profiles")
+      .select("*")
+      .eq("email", user.email)
+      .maybeSingle();
+
+    if (!emailError && profileByEmail) return profileByEmail;
+
+    return {
+      email: user.email,
+      full_name: user.email,
+      role: "tecnica",
+      active: true,
+      staff_id: null,
+    };
+  };
+
+  const loadData = async (userParam = currentUser, profileParam = currentProfile) => {
     setLoadingData(true);
     setMessage("");
+
+    const role = profileParam?.role || "tecnica";
 
     const appointmentsQuery = appointmentIdFromUrl
       ? supabase
@@ -243,43 +297,54 @@ export default function CobrosPage() {
           .eq("appointment_date", selectedDate)
           .order("start_time", { ascending: true });
 
-    const [appointmentsResult, paymentsResult, extrasResult, settingsResult] =
+    let paymentsQuery = supabase
+      .from("payments")
+      .select(
+        `
+        *,
+        clients (
+          id,
+          full_name,
+          phone
+        ),
+        appointments (
+          appointment_date,
+          start_time
+        ),
+        payment_service_items (
+          id,
+          name,
+          staff_name,
+          quantity,
+          unit_price,
+          total_price
+        ),
+        payment_extra_items (
+          id,
+          name,
+          quantity,
+          unit_price,
+          total_price
+        )
+      `
+      )
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (role === "tecnica" && userParam?.id) {
+      paymentsQuery = paymentsQuery.eq("created_by_user_id", userParam.id);
+    }
+
+    const [appointmentsResult, paymentsResult, allPaymentsResult, extrasResult, settingsResult] =
       await Promise.all([
         appointmentsQuery,
 
+        paymentsQuery,
+
         supabase
           .from("payments")
-          .select(
-            `
-            *,
-            clients (
-              id,
-              full_name,
-              phone
-            ),
-            appointments (
-              appointment_date,
-              start_time
-            ),
-            payment_service_items (
-              id,
-              name,
-              staff_name,
-              quantity,
-              unit_price,
-              total_price
-            ),
-            payment_extra_items (
-              id,
-              name,
-              quantity,
-              unit_price,
-              total_price
-            )
-          `
-          )
-          .order("created_at", { ascending: false })
-          .limit(30),
+          .select("id, appointment_id")
+          .not("appointment_id", "is", null),
 
         supabase
           .from("service_extras")
@@ -303,6 +368,16 @@ export default function CobrosPage() {
       setPayments(paymentsResult.data || []);
     }
 
+    if (allPaymentsResult.error) {
+      setMessage(`No se pudo validar citas cobradas: ${allPaymentsResult.error.message}`);
+    } else {
+      setAllPaidAppointmentIds(
+        (allPaymentsResult.data || [])
+          .map((payment) => payment.appointment_id)
+          .filter(Boolean)
+      );
+    }
+
     if (extrasResult.error) {
       setMessage(`No se pudieron cargar extras: ${extrasResult.error.message}`);
     } else {
@@ -320,15 +395,21 @@ export default function CobrosPage() {
     setLoadingData(false);
   };
 
-  const paidAppointmentIds = useMemo(() => {
-    return payments.map((payment) => payment.appointment_id).filter(Boolean);
-  }, [payments]);
-
   const pendingAppointments = useMemo(() => {
-    return appointments.filter(
-      (appointment) => !paidAppointmentIds.includes(appointment.id)
+    let result = appointments.filter(
+      (appointment) => !allPaidAppointmentIds.includes(appointment.id)
     );
-  }, [appointments, paidAppointmentIds]);
+
+    if (currentRole === "tecnica" && currentProfile?.staff_id) {
+      result = result.filter((appointment) =>
+        (appointment.appointment_services || []).some(
+          (service) => service.staff_id === currentProfile.staff_id
+        )
+      );
+    }
+
+    return result;
+  }, [appointments, allPaidAppointmentIds, currentRole, currentProfile]);
 
   const totalPending = useMemo(() => {
     return pendingAppointments.reduce(
@@ -618,9 +699,7 @@ export default function CobrosPage() {
 
     const totals = getPaymentTotals();
 
-    const existingPayment = payments.find(
-      (payment) => payment.appointment_id === selectedAppointment.id
-    );
+    const existingPayment = allPaidAppointmentIds.includes(selectedAppointment.id);
 
     if (existingPayment) {
       setPaymentMessage("Esta cita ya tiene un pago registrado.");
@@ -641,6 +720,8 @@ export default function CobrosPage() {
       payment_method: paymentForm.payment_method,
       payment_status: "pagado",
       notes: paymentForm.notes?.trim() || null,
+      created_by_user_id: currentUser?.id || null,
+      created_by_email: currentUser?.email || null,
       updated_at: new Date().toISOString(),
     };
 
@@ -750,6 +831,8 @@ export default function CobrosPage() {
         }`,
         notes: paymentForm.notes?.trim() || null,
         payment_id: payment.id,
+        created_by_user_id: currentUser?.id || null,
+        created_by_email: currentUser?.email || null,
       },
     ]);
 
@@ -764,10 +847,15 @@ export default function CobrosPage() {
     setMessage("Pago guardado correctamente ✨");
     setSavingPayment(false);
     closePaymentModal();
-    await loadData();
+    await loadData(currentUser, currentProfile);
   };
 
   const sendReceiptWhatsApp = (payment) => {
+    if (!isAdmin) {
+      setMessage("Por ahora solo admin puede enviar recibos por WhatsApp.");
+      return;
+    }
+
     const phone = payment.clients?.phone;
 
     if (!phone) {
@@ -808,14 +896,22 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
   return (
     <AdminShell
       title="Cobros"
-      subtitle="Registra pagos, extras, propinas y movimientos de caja."
+      subtitle={
+        currentRole === "tecnica"
+          ? "Registra cobros y consulta los pagos que tú realizaste."
+          : "Registra pagos, extras, propinas y movimientos de caja."
+      }
       activeModule="cobros"
       menuItems={menuItems}
       activeSection={activeSection}
       setActiveSection={setActiveSection}
     >
       {message && (
-        <div className="mb-6 rounded-2xl bg-green-600 px-5 py-4 text-sm font-medium text-white">
+        <div
+          className={`mb-6 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+            message
+          )}`}
+        >
           {message}
         </div>
       )}
@@ -837,9 +933,7 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
           <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
             Por cobrar
           </p>
-          <p className="mt-3 text-4xl font-light">
-            {pendingAppointments.length}
-          </p>
+          <p className="mt-3 text-4xl font-light">{pendingAppointments.length}</p>
         </Card>
 
         <Card>
@@ -853,7 +947,7 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
 
         <Card>
           <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
-            Cobrado hoy
+            {currentRole === "tecnica" ? "Cobrado por mí" : "Cobrado hoy"}
           </p>
           <p className="mt-3 text-4xl font-light">
             {formatMoney(totalPaidToday)}
@@ -866,11 +960,15 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
           <SectionHeader
             eyebrow="Citas por cobrar"
             title="Pendientes de cobro"
-            description="Aquí aparecerán las citas del día que todavía no tienen pago registrado."
+            description={
+              currentRole === "tecnica"
+                ? "Aquí aparecerán las citas pendientes que están relacionadas con tu técnica."
+                : "Aquí aparecerán las citas del día que todavía no tienen pago registrado."
+            }
             action={
               <button
                 type="button"
-                onClick={loadData}
+                onClick={() => loadData(currentUser, currentProfile)}
                 className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
               >
                 Actualizar
@@ -945,8 +1043,14 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
         <Card>
           <SectionHeader
             eyebrow="Pagos"
-            title="Pagos recientes"
-            description="Historial de pagos registrados con recibo visual y WhatsApp."
+            title={
+              currentRole === "tecnica" ? "Mis pagos recientes" : "Pagos recientes"
+            }
+            description={
+              currentRole === "tecnica"
+                ? "Aquí verás únicamente los cobros que tú registraste."
+                : "Historial de pagos registrados con recibo visual y WhatsApp."
+            }
           />
 
           {loadingData ? (
@@ -976,6 +1080,12 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
                         Método: {payment.payment_method || "Efectivo"}
                       </p>
 
+                      {payment.created_by_email && (
+                        <p className="text-sm text-[#68777c]">
+                          Cobró: {payment.created_by_email}
+                        </p>
+                      )}
+
                       {payment.appointments?.appointment_date && (
                         <p className="text-sm text-[#68777c]">
                           Cita: {payment.appointments.appointment_date} ·{" "}
@@ -1001,13 +1111,15 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
                           Ver recibo
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => sendReceiptWhatsApp(payment)}
-                          className="rounded-full bg-[#25D366] px-5 py-2 text-sm text-white transition hover:opacity-90"
-                        >
-                          Enviar WhatsApp
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => sendReceiptWhatsApp(payment)}
+                            className="rounded-full bg-[#25D366] px-5 py-2 text-sm text-white transition hover:opacity-90"
+                          >
+                            Enviar WhatsApp
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1318,11 +1430,7 @@ function PaymentModal({
                           <select
                             value={line.extra_id}
                             onChange={(event) =>
-                              handleExtraLineChange(
-                                index,
-                                "extra_id",
-                                event.target.value
-                              )
+                              handleExtraLineChange(index, "extra_id", event.target.value)
                             }
                             className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                           >
@@ -1345,11 +1453,7 @@ function PaymentModal({
                             step="1"
                             value={line.quantity}
                             onChange={(event) =>
-                              handleExtraLineChange(
-                                index,
-                                "quantity",
-                                event.target.value
-                              )
+                              handleExtraLineChange(index, "quantity", event.target.value)
                             }
                             className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                           />
@@ -1364,11 +1468,7 @@ function PaymentModal({
                             min="0"
                             value={line.unit_price}
                             onChange={(event) =>
-                              handleExtraLineChange(
-                                index,
-                                "unit_price",
-                                event.target.value
-                              )
+                              handleExtraLineChange(index, "unit_price", event.target.value)
                             }
                             className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                           />
@@ -1412,10 +1512,7 @@ function PaymentModal({
                     min="0"
                     value={paymentForm.discount_amount}
                     onChange={(event) =>
-                      handlePaymentFormChange(
-                        "discount_amount",
-                        event.target.value
-                      )
+                      handlePaymentFormChange("discount_amount", event.target.value)
                     }
                     className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
                   />
@@ -1466,9 +1563,7 @@ function PaymentModal({
                   <div className="rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 text-sm text-[#263238]">
                     {staffFromAppointment.length === 0
                       ? "Sin técnicas"
-                      : staffFromAppointment
-                          .map((person) => person.full_name)
-                          .join(", ")}
+                      : staffFromAppointment.map((person) => person.full_name).join(", ")}
                   </div>
                 </div>
               </div>
@@ -1531,12 +1626,9 @@ function PaymentModal({
 
             {paymentMessage && (
               <div
-                className={`rounded-2xl px-5 py-4 text-sm font-medium ${
-                  paymentMessage.toLowerCase().includes("no se pudo") ||
-                  paymentMessage.toLowerCase().includes("error")
-                    ? "bg-red-600 text-white"
-                    : "bg-green-600 text-white"
-                }`}
+                className={`rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+                  paymentMessage
+                )}`}
               >
                 {paymentMessage}
               </div>

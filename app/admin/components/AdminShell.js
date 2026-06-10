@@ -10,6 +10,7 @@ const roleModulePermissions = {
     "servicios",
     "agenda",
     "cobros",
+    "caja",
     "reportes",
     "tecnicas",
     "tareas",
@@ -25,6 +26,7 @@ const roleModulePermissions = {
     "servicios",
     "agenda",
     "cobros",
+    "caja",
     "reportes",
     "tareas",
     "calificaciones",
@@ -43,6 +45,7 @@ const roleModulePermissions = {
     "clientas",
     "agenda",
     "cobros",
+    "caja",
     "notificaciones",
   ],
 };
@@ -153,6 +156,7 @@ export default function AdminShell({
     { label: "Servicios", href: "/admin/servicios", key: "servicios" },
     { label: "Agenda", href: "/admin/agenda", key: "agenda" },
     { label: "Cobros", href: "/admin/cobros", key: "cobros" },
+    { label: "Caja chica", href: "/admin/caja", key: "caja" },
     { label: "Reportes", href: "/admin/reportes", key: "reportes" },
     { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
     { label: "Tareas", href: "/admin/tareas", key: "tareas" },
@@ -181,7 +185,6 @@ export default function AdminShell({
   }, [allowedModules, unreadNotifications]);
 
   const futureModules = [
-    "Caja próximamente",
     "Tienda / Productos próximamente",
     "Membresías próximamente",
     "Tarjetas de regalo próximamente",
@@ -399,9 +402,7 @@ export default function AdminShell({
 
                     {unreadNotifications > 0 && (
                       <span className="absolute -right-2 -top-2 flex min-h-6 min-w-6 items-center justify-center rounded-full bg-white px-2 text-xs font-bold text-[#d6007f] shadow-md">
-                        {unreadNotifications > 99
-                          ? "99+"
-                          : unreadNotifications}
+                        {unreadNotifications > 99 ? "99+" : unreadNotifications}
                       </span>
                     )}
                   </a>
