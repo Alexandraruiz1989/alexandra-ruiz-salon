@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -212,7 +212,7 @@ function getMessageType(message) {
     text.includes("descanso") ||
     text.includes("bloqueo") ||
     text.includes("no trabaja") ||
-    text.includes("no encontrÃ©") ||
+    text.includes("no encontré") ||
     text.includes("selecciona") ||
     text.includes("no hay") ||
     text.includes("no tiene") ||
@@ -221,7 +221,7 @@ function getMessageType(message) {
 
   const isSuccess =
     text.includes("correctamente") ||
-    text.includes("encontrÃ©") ||
+    text.includes("encontré") ||
     text.includes("seleccionado") ||
     text.includes("seleccionados");
 
@@ -444,7 +444,7 @@ const [quickClientForm, setQuickClientForm] = useState({
     }
 
     if (staffResult.error) {
-      setMessage(`Error al cargar tÃ©cnicas: ${staffResult.error.message}`);
+      setMessage(`Error al cargar técnicas: ${staffResult.error.message}`);
     } else {
       setStaff(staffResult.data || []);
     }
@@ -638,7 +638,7 @@ const saveQuickClient = async () => {
   const phone = quickClientForm.phone.trim();
 
   if (!fullName || !phone) {
-    setQuickClientMessage("El nombre completo y el telÃ©fono son obligatorios.");
+    setQuickClientMessage("El nombre completo y el teléfono son obligatorios.");
     return;
   }
 
@@ -680,7 +680,7 @@ const saveQuickClient = async () => {
   setSavingQuickClient(false);
   setShowQuickClientModal(false);
   resetQuickClientForm();
-  setMessage("Cliente registrado y seleccionado correctamente âœ¨");
+  setMessage("Cliente registrado y seleccionado correctamente ✨");
 };
     const handleFormChange = (event) => {
     const { name, value, type, checked } = event.target;
@@ -903,7 +903,7 @@ const saveQuickClient = async () => {
 
   const getStaffName = (staffId) => {
     const person = staff.find((item) => item.id === staffId);
-    return person?.full_name || "TÃ©cnica";
+    return person?.full_name || "Técnica";
   };
 
   const resetForm = () => {
@@ -954,8 +954,8 @@ const saveQuickClient = async () => {
 
     setMessage(
       startTime && staffId
-        ? "Horario y tÃ©cnica seleccionados para nueva cita âœ¨"
-        : "DÃ­a seleccionado para nueva cita âœ¨"
+        ? "Horario y técnica seleccionados para nueva cita ✨"
+        : "Día seleccionado para nueva cita ✨"
     );
 
     setActiveSection("nueva");
@@ -1002,7 +1002,7 @@ const getPaymentForAppointment = (appointmentId) => {
     }));
 
     setServiceLines(lines.length > 0 ? lines : [{ ...emptyServiceLine }]);
-    setMessage("Cita cargada para ediciÃ³n âœ¨");
+    setMessage("Cita cargada para edición ✨");
     setActiveSection("nueva");
   };
 
@@ -1056,14 +1056,14 @@ const getPaymentForAppointment = (appointmentId) => {
       if (!schedule || !schedule.is_active) {
         return {
           hasConflict: true,
-          message: `${staffName} no tiene horario activo para ese dÃ­a. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+          message: `${staffName} no tiene horario activo para ese día. Marca “Forzar cita” si deseas guardarla de todos modos.`,
         };
       }
 
       if (schedule.is_day_off) {
         return {
           hasConflict: true,
-          message: `${staffName} tiene marcado ese dÃ­a como descanso. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+          message: `${staffName} tiene marcado ese día como descanso. Marca “Forzar cita” si deseas guardarla de todos modos.`,
         };
       }
 
@@ -1142,12 +1142,12 @@ const getPaymentForAppointment = (appointmentId) => {
           return {
             hasConflict: true,
             message: `${
-              block.staff?.full_name || "La tÃ©cnica"
+              block.staff?.full_name || "La técnica"
             } tiene bloqueo "${block.title}" de ${formatTime(
               block.start_time
             )} a ${formatTime(
               block.end_time
-            )}. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+            )}. Marca “Forzar cita” si deseas guardarla de todos modos.`,
           };
         }
       }
@@ -1216,13 +1216,13 @@ const getPaymentForAppointment = (appointmentId) => {
         if (overlap) {
           return {
             hasConflict: true,
-            message: `${existing.staff?.full_name || "La tÃ©cnica"} ya tiene ${
+            message: `${existing.staff?.full_name || "La técnica"} ya tiene ${
               existing.services?.name || "un servicio"
             } con ${
               existing.appointments?.clients?.full_name || "una clienta"
             } de ${formatTime(existing.start_time)} a ${formatTime(
               existing.end_time
-            )}. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+            )}. Marca “Forzar cita” si deseas guardarla de todos modos.`,
           };
         }
       }
@@ -1318,7 +1318,7 @@ const getPaymentForAppointment = (appointmentId) => {
 
     if (totalDuration <= 0) {
       setAvailabilityMessage(
-        "Los servicios seleccionados no tienen duraciÃ³n registrada."
+        "Los servicios seleccionados no tienen duración registrada."
       );
       return;
     }
@@ -1334,7 +1334,7 @@ const getPaymentForAppointment = (appointmentId) => {
 
     if (staffToCheck.length === 0) {
       setAvailabilityMessage(
-        "No hay tÃ©cnicas disponibles para revisar espacios."
+        "No hay técnicas disponibles para revisar espacios."
       );
       return;
     }
@@ -1409,13 +1409,13 @@ const getPaymentForAppointment = (appointmentId) => {
 
     if (suggestions.length === 0) {
       setAvailabilityMessage(
-        "No encontrÃ© espacios libres con esos servicios y tÃ©cnica. Prueba otra fecha o marca una tÃ©cnica diferente."
+        "No encontré espacios libres con esos servicios y técnica. Prueba otra fecha o marca una técnica diferente."
       );
       return;
     }
 
     setAvailabilityMessage(
-      `EncontrÃ© ${suggestions.length} espacio(s) disponible(s) âœ¨`
+      `Encontré ${suggestions.length} espacio(s) disponible(s) ✨`
     );
   };
 
@@ -1444,7 +1444,7 @@ const getPaymentForAppointment = (appointmentId) => {
     });
 
     setAvailabilityMessage(
-      `Espacio seleccionado con ${suggestion.staff_name} de ${suggestion.start_time} a ${suggestion.end_time} âœ¨`
+      `Espacio seleccionado con ${suggestion.staff_name} de ${suggestion.start_time} a ${suggestion.end_time} ✨`
     );
 
     setActiveSection("nueva");
@@ -1463,7 +1463,7 @@ const createAppointmentFollowups = async (appointment) => {
 
   if (deleteError) {
     setMessage(
-      `La cita se guardÃ³, pero no se pudieron actualizar los seguimientos pendientes: ${deleteError.message}`
+      `La cita se guardó, pero no se pudieron actualizar los seguimientos pendientes: ${deleteError.message}`
     );
     return;
   }
@@ -1506,7 +1506,7 @@ const createAppointmentFollowups = async (appointment) => {
       followup_date: followupDate,
       followup_status: "pendiente",
      message_body: buildFollowupMessage(rule.message_body, clientName),
-      notes: `Seguimiento generado automÃ¡ticamente por el servicio: ${service.name}`,
+      notes: `Seguimiento generado automáticamente por el servicio: ${service.name}`,
     });
   }
 
@@ -1516,7 +1516,7 @@ const createAppointmentFollowups = async (appointment) => {
 
   if (error) {
     setMessage(
-      `La cita se guardÃ³, pero no se pudieron crear los seguimientos: ${error.message}`
+      `La cita se guardó, pero no se pudieron crear los seguimientos: ${error.message}`
     );
   }
 };
@@ -1533,7 +1533,7 @@ const handleSubmit = async () => {
 
     if (validServiceLines.length === 0) {
       setMessage(
-        "Agrega al menos un servicio con servicio, tÃ©cnica, hora de inicio y hora de fin."
+        "Agrega al menos un servicio con servicio, técnica, hora de inicio y hora de fin."
       );
       setSaving(false);
       return;
@@ -1611,7 +1611,7 @@ const handleSubmit = async () => {
 
       if (deleteServicesError) {
         setMessage(
-          `La cita se actualizÃ³, pero no se pudieron reemplazar los servicios: ${deleteServicesError.message}`
+          `La cita se actualizó, pero no se pudieron reemplazar los servicios: ${deleteServicesError.message}`
         );
         setSaving(false);
         return;
@@ -1658,7 +1658,7 @@ const handleSubmit = async () => {
 
     if (servicesError) {
       setMessage(
-        `La cita se guardÃ³, pero no se pudieron guardar los servicios: ${servicesError.message}`
+        `La cita se guardó, pero no se pudieron guardar los servicios: ${servicesError.message}`
       );
       setSaving(false);
       return;
@@ -1671,8 +1671,8 @@ await createAppointmentFollowups(appointment);
     resetForm();
     setMessage(
       wasEditing
-        ? "Cita actualizada correctamente âœ¨"
-        : "Cita registrada correctamente âœ¨"
+        ? "Cita actualizada correctamente ✨"
+        : "Cita registrada correctamente ✨"
     );
     setSaving(false);
     setActiveSection("diaria");
@@ -1781,7 +1781,7 @@ await createAppointmentFollowups(appointment);
   return (
     <AdminShell
       title="Agenda"
-      subtitle="Agenda citas, consulta disponibilidad y visualiza la operaciÃ³n diaria, semanal y mensual."
+      subtitle="Agenda citas, consulta disponibilidad y visualiza la operación diaria, semanal y mensual."
       activeModule="agenda"
       menuItems={agendaMenuItems}
       activeSection={activeSection}
@@ -1927,62 +1927,6 @@ function NewAppointmentSection({
   applyAvailabilitySuggestion,
   getToastStyle,
 }) {
-  const [clientSearch, setClientSearch] = useState("");
-  const [showClientResults, setShowClientResults] = useState(false);
-
-  const selectedClient = clients.find((client) => client.id === form.client_id);
-
-  useEffect(() => {
-    if (selectedClient && !showClientResults) {
-      setClientSearch(
-        `${selectedClient.full_name || "Sin nombre"}${
-          selectedClient.phone ? ` - ${selectedClient.phone}` : ""
-        }`
-      );
-    }
-
-    if (!form.client_id) {
-      setClientSearch("");
-    }
-  }, [form.client_id, selectedClient, showClientResults]);
-
-  const filteredClients = useMemo(() => {
-    const term = clientSearch.trim().toLowerCase();
-
-    if (!term) {
-      return clients.slice(0, 8);
-    }
-
-    return clients
-      .filter((client) => {
-        return (
-          client.full_name?.toLowerCase().includes(term) ||
-          client.phone?.toLowerCase().includes(term) ||
-          client.email?.toLowerCase().includes(term)
-        );
-      })
-      .slice(0, 8);
-  }, [clients, clientSearch]);
-
-  const selectClient = (client) => {
-    handleFormChange({
-      target: {
-        name: "client_id",
-        value: client.id,
-        type: "text",
-        checked: false,
-      },
-    });
-
-    setClientSearch(
-      `${client.full_name || "Sin nombre"}${
-        client.phone ? ` - ${client.phone}` : ""
-      }`
-    );
-
-    setShowClientResults(false);
-  };
-
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_0.45fr]">
       <Card>
@@ -1993,7 +1937,7 @@ function NewAppointmentSection({
               ? "Actualizar cita con servicios"
               : "Registrar cita con servicios"
           }
-          description="Agrega uno o varios servicios, asigna tÃ©cnica y valida disponibilidad."
+          description="Agrega uno o varios servicios, asigna técnica y valida disponibilidad."
         />
 
         <div className="space-y-5">
@@ -2028,7 +1972,7 @@ function NewAppointmentSection({
     <div className="absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[#dde3e6] bg-white p-2 shadow-xl">
       {filteredClients.length === 0 ? (
         <div className="px-4 py-3 text-sm text-[#68777c]">
-          No encontrÃ© clientas con esa bÃºsqueda.
+          No encontré clientas con esa búsqueda.
         </div>
       ) : (
         filteredClients.map((client) => (
@@ -2043,8 +1987,8 @@ function NewAppointmentSection({
               {client.full_name || "Sin nombre"}
             </span>
             <span className="text-xs text-[#68777c]">
-              {client.phone || "Sin telÃ©fono"}
-              {client.email ? ` Â· ${client.email}` : ""}
+              {client.phone || "Sin teléfono"}
+              {client.email ? ` · ${client.email}` : ""}
             </span>
           </button>
         ))
@@ -2055,7 +1999,7 @@ function NewAppointmentSection({
   {form.client_id && selectedClient && (
     <p className="mt-2 text-xs text-[#68777c]">
       Seleccionada: {selectedClient.full_name}{" "}
-      {selectedClient.phone ? `Â· ${selectedClient.phone}` : ""}
+      {selectedClient.phone ? `· ${selectedClient.phone}` : ""}
     </p>
   )}
 </div>
@@ -2090,7 +2034,7 @@ function NewAppointmentSection({
                   Servicios de la cita
                 </p>
                 <p className="mt-1 text-sm text-[#68777c]">
-                  Escribe para buscar, usa â†‘ â†“ y Enter para seleccionar.
+                  Escribe para buscar, usa ↑ ↓ y Enter para seleccionar.
                 </p>
               </div>
 
@@ -2187,7 +2131,7 @@ function NewAppointmentSection({
                                     {service.name} - ${service.base_price}
                                   </span>
                                   <span className="text-xs text-[#68777c]">
-                                    {service.category} Â·{" "}
+                                    {service.category} ·{" "}
                                     {service.duration_minutes || 0} min +{" "}
                                     {service.cleanup_minutes || 0} min limpieza
                                   </span>
@@ -2216,7 +2160,7 @@ function NewAppointmentSection({
 
                       <div>
                         <label className="mb-2 block text-sm text-[#68777c]">
-                          TÃ©cnica *
+                          Técnica *
                         </label>
                         <select
                           value={line.staff_id}
@@ -2229,7 +2173,7 @@ function NewAppointmentSection({
                           }
                           className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                         >
-                          <option value="">Seleccionar tÃ©cnica</option>
+                          <option value="">Seleccionar técnica</option>
                           {staff.map((person) => (
                             <option key={person.id} value={person.id}>
                               {person.full_name}
@@ -2266,7 +2210,7 @@ function NewAppointmentSection({
 
                       <div>
                         <label className="mb-2 block text-sm text-[#68777c]">
-                          Fin automÃ¡tico
+                          Fin automático
                         </label>
                         <select
                           value={line.end_time}
@@ -2334,7 +2278,7 @@ function NewAppointmentSection({
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <div>
                         <label className="mb-2 block text-sm text-[#68777c]">
-                          DuraciÃ³n min.
+                          Duración min.
                         </label>
                         <input
                           type="number"
@@ -2379,7 +2323,7 @@ function NewAppointmentSection({
                         )
                       }
                       className="mt-4 min-h-20 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                      placeholder="DiseÃ±o, detalles, observaciones..."
+                      placeholder="Diseño, detalles, observaciones..."
                     />
                   </div>
                 );
@@ -2418,7 +2362,7 @@ function NewAppointmentSection({
 
             <div>
               <label className="mb-2 block text-sm text-[#68777c]">
-                MÃ©todo anticipo
+                Método anticipo
               </label>
               <select
                 name="deposit_payment_method"
@@ -2507,6 +2451,64 @@ function QuickClientModal({
   onSave,
   onClose,
 }) {
+  const [clientSearch, setClientSearch] = useState("");
+const [showClientResults, setShowClientResults] = useState(false);
+
+const selectedClient = clients.find((client) => client.id === form.client_id);
+
+useEffect(() => {
+  if (selectedClient && !showClientResults) {
+    setClientSearch(
+      `${selectedClient.full_name || "Sin nombre"}${
+        selectedClient.phone ? ` - ${selectedClient.phone}` : ""
+      }`
+    );
+  }
+
+  if (!form.client_id) {
+    setClientSearch("");
+  }
+}, [form.client_id, selectedClient, showClientResults]);
+
+const filteredClients = useMemo(() => {
+  const term = clientSearch.trim().toLowerCase();
+
+  if (!term || selectedClient?.id === form.client_id) {
+    return clients.slice(0, 8);
+  }
+
+  return clients
+    .filter((client) => {
+ selectedClient?.id === form.client_id) {
+    return clients.slice(0, 8);
+  }
+
+  return clients      return (
+        client.full_name?.toLowerCase().includes(term) ||
+        client.phone?.toLowerCase().includes(term) ||
+        client.email?.toLowerCase().includes(term)
+      );
+    })
+    .slice(0, 8);
+}, [clients, clientSearch, selectedClient, form.client_id]);
+
+const selectClient = (client) => {
+  handleFormChange({
+    target: {
+      name: "client_id",
+      value: client.id,
+      type: "text",
+      checked: false,
+    },
+  });
+
+  setClientSearch(
+    `${client.full_name || "Sin nombre"}${
+      client.phone ? ` - ${client.phone}` : ""
+    }`
+  );
+  setShowClientResults(false);
+};
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-[1.5rem] bg-white p-6 shadow-2xl">
@@ -2515,9 +2517,9 @@ function QuickClientModal({
             <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
               Nueva clienta/cliente
             </p>
-            <h3 className="mt-2 text-2xl font-light">Registro rÃ¡pido</h3>
+            <h3 className="mt-2 text-2xl font-light">Registro rápido</h3>
             <p className="mt-1 text-sm text-[#68777c]">
-              Al guardar, se seleccionarÃ¡ automÃ¡ticamente en la cita.
+              Al guardar, se seleccionará automáticamente en la cita.
             </p>
           </div>
 
@@ -2526,7 +2528,7 @@ function QuickClientModal({
             onClick={onClose}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
           >
-            Ã—
+            ×
           </button>
         </div>
 
@@ -2553,13 +2555,13 @@ function QuickClientModal({
               value={form.full_name}
               onChange={(event) => onChange("full_name", event.target.value)}
               className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-              placeholder="Ej. MarÃ­a LÃ³pez"
+              placeholder="Ej. María López"
             />
           </div>
 
           <div>
             <label className="mb-2 block text-sm text-[#68777c]">
-              TelÃ©fono / WhatsApp *
+              Teléfono / WhatsApp *
             </label>
             <input
               type="tel"
@@ -2572,7 +2574,7 @@ function QuickClientModal({
 
           <div>
             <label className="mb-2 block text-sm text-[#68777c]">
-              Correo electrÃ³nico
+              Correo electrónico
             </label>
             <input
               type="email"
@@ -2585,7 +2587,7 @@ function QuickClientModal({
 
           <div>
             <label className="mb-2 block text-sm text-[#68777c]">
-              Fecha de cumpleaÃ±os
+              Fecha de cumpleaños
             </label>
             <input
               type="date"
@@ -2597,7 +2599,7 @@ function QuickClientModal({
 
           <div>
             <label className="mb-2 block text-sm text-[#68777c]">
-              GÃ©nero
+              Género
             </label>
             <select
               value={form.gender}
@@ -2659,7 +2661,7 @@ function AvailabilityCard({
       <SectionHeader
         eyebrow="Disponibilidad"
         title="Espacios sugeridos"
-        description="AquÃ­ aparecerÃ¡n opciones libres segÃºn servicios, fecha y tÃ©cnica."
+        description="Aquí aparecerán opciones libres según servicios, fecha y técnica."
       />
 
       {availabilityMessage && (
@@ -2674,8 +2676,8 @@ function AvailabilityCard({
 
       {availabilitySuggestions.length === 0 ? (
         <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-          AÃºn no hay sugerencias. Selecciona servicios y presiona â€œBuscar
-          espacio disponibleâ€.
+          Aún no hay sugerencias. Selecciona servicios y presiona “Buscar
+          espacio disponible”.
         </div>
       ) : (
         <div className="space-y-3">
@@ -2701,7 +2703,7 @@ function AvailabilityCard({
               </p>
 
               <p className="text-xs text-[#8a969a]">
-                DuraciÃ³n: {suggestion.duration_minutes} min
+                Duración: {suggestion.duration_minutes} min
               </p>
             </button>
           ))}
@@ -2749,7 +2751,7 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-[12px] text-[#bd7b83] shadow-sm"
         title="Editar cita"
       >
-        âœï¸
+        ✏️
       </button>
 
       {payment && (
@@ -2792,7 +2794,7 @@ function DailyViewSection({
       <SectionHeader
         eyebrow="Vista diaria"
         title={getDateLabel(selectedDate)}
-        description="Filas por horario y columnas por tÃ©cnica. Da clic en una celda libre para agendar."
+        description="Filas por horario y columnas por técnica. Da clic en una celda libre para agendar."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
@@ -2822,7 +2824,7 @@ function DailyViewSection({
         <p className="text-sm text-[#68777c]">Cargando agenda...</p>
       ) : staff.length === 0 ? (
         <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-          No hay tÃ©cnicas activas registradas.
+          No hay técnicas activas registradas.
         </div>
       ) : (
         <div className="overflow-auto rounded-2xl border border-[#dde3e6]">
@@ -2888,7 +2890,7 @@ function DailyViewSection({
                       >
                         {items.length === 0 ? (
                           <span className="text-xs text-[#b0b8bb]">
-                            Libre Â· clic para agendar
+                            Libre · clic para agendar
                           </span>
                         ) : (
                           <div className="space-y-2">
@@ -2938,7 +2940,7 @@ function WeeklyViewSection({
       <SectionHeader
         eyebrow="Vista semanal"
         title={`${weekRange.start} al ${weekRange.end}`}
-        description="Da clic en un dÃ­a para crear una cita con esa fecha preseleccionada."
+        description="Da clic en un día para crear una cita con esa fecha preseleccionada."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
@@ -2994,7 +2996,7 @@ function WeeklyViewSection({
 
                 {items.length > 8 && (
                   <p className="text-xs text-[#68777c]">
-                    + {items.length - 8} mÃ¡s
+                    + {items.length - 8} más
                   </p>
                 )}
               </div>
@@ -3030,7 +3032,7 @@ function MonthlyViewSection({
       <SectionHeader
         eyebrow="Vista mensual"
         title={monthTitle}
-        description="Da clic en cualquier dÃ­a para crear una cita con esa fecha preseleccionada."
+        description="Da clic en cualquier día para crear una cita con esa fecha preseleccionada."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
@@ -3049,7 +3051,7 @@ function MonthlyViewSection({
       />
 
       <div className="grid grid-cols-7 rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] text-center text-xs font-medium uppercase tracking-[0.18em] text-[#68777c]">
-        {["Lun", "Mar", "MiÃ©", "Jue", "Vie", "SÃ¡b", "Dom"].map((day) => (
+        {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((day) => (
           <div
             key={day}
             className="border-r border-[#dde3e6] px-2 py-3 last:border-r-0"
@@ -3091,7 +3093,7 @@ function MonthlyViewSection({
 
                 {items.length > 4 && (
                   <p className="text-[11px] text-[#68777c]">
-                    + {items.length - 4} mÃ¡s
+                    + {items.length - 4} más
                   </p>
                 )}
               </div>
@@ -3118,7 +3120,7 @@ function AvailabilitySection({
         <SectionHeader
           eyebrow="Buscar disponibilidad"
           title="Encontrar espacios libres"
-          description="Primero agrega los servicios en Nueva cita. DespuÃ©s busca opciones libres para la fecha seleccionada."
+          description="Primero agrega los servicios en Nueva cita. Después busca opciones libres para la fecha seleccionada."
         />
 
         <div className="space-y-4">
@@ -3211,7 +3213,7 @@ function openWhatsAppMessage(phone, message) {
   const cleanPhone = cleanPhoneForWhatsApp(phone);
 
   if (!cleanPhone) {
-    alert("Esta clienta no tiene telÃ©fono registrado.");
+    alert("Esta clienta no tiene teléfono registrado.");
     return;
   }
 
@@ -3279,21 +3281,21 @@ useEffect(() => {
 
 const canUseManualWhatsApp = currentRole !== "tecnica";
 
-  const reminderMessage = `Hola ${clientFirstName} ðŸ’• Te recordamos con mucho gusto tu cita en Alexandra Ruiz SalÃ³n Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte âœ¨`;
+  const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
-  const onTheWayMessage = `Hola ${clientFirstName} ðŸ’• Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos âœ¨`;
+  const onTheWayMessage = `Hola ${clientFirstName} 💕 Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos ✨`;
 
-  const lateMessage = `Hola ${clientFirstName} ðŸ’• Notamos que tu cita era a las ${appointmentTime}. Â¿Nos confirmas si vienes en camino o si tuviste algÃºn retraso?`;
+  const lateMessage = `Hola ${clientFirstName} 💕 Notamos que tu cita era a las ${appointmentTime}. ¿Nos confirmas si vienes en camino o si tuviste algún retraso?`;
 
-  const thankYouMessage = `Hola ${clientFirstName} ðŸ’• Muchas gracias por visitarnos y confiar en Alexandra Ruiz SalÃ³n Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto âœ¨`;
+  const thankYouMessage = `Hola ${clientFirstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
 
  const reviewBaseUrl = "https://alexandra-ruiz-salon.vercel.app";
 
 const reviewLink = `${reviewBaseUrl}/calificar/${appointment.id}`;
 
-const reviewMessage = `Hola ${clientFirstName} ðŸ’• Gracias por visitarnos. Nos encantarÃ­a conocer tu opiniÃ³n sobre tu experiencia en Alexandra Ruiz SalÃ³n Spa. Tu calificaciÃ³n nos ayuda muchÃ­simo a seguir mejorando âœ¨
+const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
 
-Puedes calificarnos aquÃ­:
+Puedes calificarnos aquí:
 ${reviewLink}`;
 
 const goToPayment = () => {
@@ -3310,7 +3312,7 @@ const goToPayment = () => {
           className="absolute right-14 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7eeee] text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
           title="Editar cita"
         >
-          âœï¸
+          ✏️
         </button>
 
         <button
@@ -3319,7 +3321,7 @@ const goToPayment = () => {
           className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
           title="Cerrar"
         >
-          Ã—
+          ×
         </button>
 
         <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
@@ -3331,13 +3333,13 @@ const goToPayment = () => {
         </h3>
 
         <p className="mt-1 text-sm text-[#68777c]">
-          {appointment.appointment_date} Â· {formatTime(appointment.start_time)} -{" "}
+          {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
           {formatTime(appointment.end_time)}
         </p>
      {canUseManualWhatsApp && (
   <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
     <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-      Mensajes rÃ¡pidos por WhatsApp
+      Mensajes rápidos por WhatsApp
     </p>
 
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -3354,7 +3356,7 @@ const goToPayment = () => {
         onClick={() => openWhatsAppMessage(clientPhone, onTheWayMessage)}
         className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
       >
-        Â¿Viene en camino?
+        ¿Viene en camino?
       </button>
 
       <button
@@ -3378,12 +3380,12 @@ const goToPayment = () => {
         onClick={() => openWhatsAppMessage(clientPhone, reviewMessage)}
         className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:col-span-2"
       >
-        Solicitar calificaciÃ³n
+        Solicitar calificación
       </button>
     </div>
 
     <p className="mt-3 text-xs text-[#68777c]">
-      Por ahora se abrirÃ¡ WhatsApp con el mensaje listo para enviar. MÃ¡s adelante estos mensajes se enviarÃ¡n desde el nÃºmero del salÃ³n mediante API.
+      Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos mensajes se enviarán desde el número del salón mediante API.
     </p>
   </div>
 )}
@@ -3423,7 +3425,7 @@ const goToPayment = () => {
             <p className="mt-2 text-sm text-[#263238]">
               ${appointment.deposit_amount || 0}{" "}
               {appointment.deposit_payment_method
-                ? `Â· ${appointment.deposit_payment_method}`
+                ? `· ${appointment.deposit_payment_method}`
                 : ""}
             </p>
           </div>
@@ -3449,7 +3451,7 @@ const goToPayment = () => {
                         {service.services?.name || "Servicio"}
                       </p>
                       <p className="text-sm text-[#68777c]">
-                        {service.staff?.full_name || "TÃ©cnica"} Â·{" "}
+                        {service.staff?.full_name || "Técnica"} ·{" "}
                         {formatTime(service.start_time)} -{" "}
                         {formatTime(service.end_time)}
                       </p>
@@ -3490,5 +3492,3 @@ const goToPayment = () => {
     </div>
   );
 }
-
-

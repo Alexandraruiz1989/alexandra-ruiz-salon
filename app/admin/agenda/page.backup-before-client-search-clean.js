@@ -1927,62 +1927,6 @@ function NewAppointmentSection({
   applyAvailabilitySuggestion,
   getToastStyle,
 }) {
-  const [clientSearch, setClientSearch] = useState("");
-  const [showClientResults, setShowClientResults] = useState(false);
-
-  const selectedClient = clients.find((client) => client.id === form.client_id);
-
-  useEffect(() => {
-    if (selectedClient && !showClientResults) {
-      setClientSearch(
-        `${selectedClient.full_name || "Sin nombre"}${
-          selectedClient.phone ? ` - ${selectedClient.phone}` : ""
-        }`
-      );
-    }
-
-    if (!form.client_id) {
-      setClientSearch("");
-    }
-  }, [form.client_id, selectedClient, showClientResults]);
-
-  const filteredClients = useMemo(() => {
-    const term = clientSearch.trim().toLowerCase();
-
-    if (!term) {
-      return clients.slice(0, 8);
-    }
-
-    return clients
-      .filter((client) => {
-        return (
-          client.full_name?.toLowerCase().includes(term) ||
-          client.phone?.toLowerCase().includes(term) ||
-          client.email?.toLowerCase().includes(term)
-        );
-      })
-      .slice(0, 8);
-  }, [clients, clientSearch]);
-
-  const selectClient = (client) => {
-    handleFormChange({
-      target: {
-        name: "client_id",
-        value: client.id,
-        type: "text",
-        checked: false,
-      },
-    });
-
-    setClientSearch(
-      `${client.full_name || "Sin nombre"}${
-        client.phone ? ` - ${client.phone}` : ""
-      }`
-    );
-
-    setShowClientResults(false);
-  };
-
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_0.45fr]">
       <Card>
@@ -2507,6 +2451,59 @@ function QuickClientModal({
   onSave,
   onClose,
 }) {
+  const [clientSearch, setClientSearch] = useState("");
+const [showClientResults, setShowClientResults] = useState(false);
+
+const selectedClient = clients.find((client) => client.id === form.client_id);
+
+useEffect(() => {
+  if (selectedClient && !showClientResults) {
+    setClientSearch(
+      `${selectedClient.full_name || "Sin nombre"}${
+        selectedClient.phone ? ` - ${selectedClient.phone}` : ""
+      }`
+    );
+  }
+
+  if (!form.client_id) {
+    setClientSearch("");
+  }
+}, [form.client_id, selectedClient, showClientResults]);
+
+const filteredClients = useMemo(() => {
+  const term = clientSearch.trim().toLowerCase();
+
+  if (!term) {
+    return clients.slice(0, 8);
+  }
+
+  return clients
+    .filter((client) => {
+      return (
+        client.full_name?.toLowerCase().includes(term) ||
+        client.phone?.toLowerCase().includes(term) ||
+        client.email?.toLowerCase().includes(term)
+      );
+    })
+    .slice(0, 8);
+}, [clients, clientSearch]);
+const selectClient = (client) => {
+  handleFormChange({
+    target: {
+      name: "client_id",
+      value: client.id,
+      type: "text",
+      checked: false,
+    },
+  });
+
+  setClientSearch(
+    `${client.full_name || "Sin nombre"}${
+      client.phone ? ` - ${client.phone}` : ""
+    }`
+  );
+  setShowClientResults(false);
+};
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-[1.5rem] bg-white p-6 shadow-2xl">
@@ -3490,5 +3487,4 @@ const goToPayment = () => {
     </div>
   );
 }
-
 

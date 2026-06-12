@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -108,11 +108,14 @@ export default function BotPage() {
 
   const [appointmentRequests, setAppointmentRequests] = useState([]);
   const [conversations, setConversations] = useState([]);
-const [testClientName, setTestClientName] = useState("Ana López");
-const [testClientPhone, setTestClientPhone] = useState("9991112233");
-const [testMessage, setTestMessage] = useState("");
-const [testLoading, setTestLoading] = useState(false);
-const [testResult, setTestResult] = useState(null);
+
+  const [testClientName, setTestClientName] = useState("Ana López");
+  const [testClientPhone, setTestClientPhone] = useState("9991112233");
+  const [testMessage, setTestMessage] = useState("");
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testChatMessages, setTestChatMessages] = useState([]);
+  const testChatScrollRef = useRef(null);
 
   useEffect(() => {
     const start = async () => {
@@ -139,6 +142,15 @@ const [testResult, setTestResult] = useState(null);
 
     return () => clearTimeout(timer);
   }, [message]);
+
+ useEffect(() => {
+  if (!testChatScrollRef.current) return;
+
+  testChatScrollRef.current.scrollTo({
+    top: testChatScrollRef.current.scrollHeight,
+    behavior: "smooth",
+  });
+}, [testChatMessages, testLoading]);
 
   const loadData = async () => {
     setLoadingData(true);
@@ -521,46 +533,92 @@ const [testResult, setTestResult] = useState(null);
     setMessage(item.active ? "Pregunta desactivada." : "Pregunta activada ✨");
     await loadData();
   };
-const testBot = async () => {
-  setMessage("");
-  setTestResult(null);
 
-  if (!testMessage.trim()) {
-    setMessage("Escribe un mensaje para probar el bot.");
-    return;
-  }
+  const testBot = async () => {
+    setMessage("");
+    setTestResult(null);
 
-  setTestLoading(true);
+    const cleanMessage = testMessage.trim();
 
-  try {
-    const response = await fetch("/api/bot/test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: testMessage.trim(),
-        clientName: testClientName.trim(),
-        clientPhone: testClientPhone.trim() || "test",
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      setMessage(data.error || "No se pudo probar el bot.");
-      setTestLoading(false);
+    if (!cleanMessage) {
+      setMessage("Escribe un mensaje para probar el bot.");
       return;
     }
 
-    setTestResult(data);
-    setTestLoading(false);
-    await loadData();
-  } catch (error) {
-    setMessage(error.message || "Error al probar el bot.");
-    setTestLoading(false);
-  }
-};
+    const userBubble = {
+      id: `user-${Date.now()}`,
+      direction: "user",
+      body: cleanMessage,
+      created_at: new Date().toISOString(),
+    };
+
+    setTestChatMessages((current) => [...current, userBubble]);
+    setTestMessage("");
+    setTestLoading(true);
+
+    try {
+      const response = await fetch("/api/bot/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: cleanMessage,
+          clientName: testClientName.trim(),
+          clientPhone: testClientPhone.trim() || "test",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        const errorBubble = {
+          id: `bot-error-${Date.now()}`,
+          direction: "bot",
+          body: data.error || "No se pudo probar el bot.",
+          created_at: new Date().toISOString(),
+          isError: true,
+        };
+
+        setTestChatMessages((current) => [...current, errorBubble]);
+        setMessage(data.error || "No se pudo probar el bot.");
+        setTestLoading(false);
+        return;
+      }
+
+      const botBubble = {
+        id: `bot-${Date.now()}`,
+        direction: "bot",
+        body: data.reply,
+        created_at: new Date().toISOString(),
+        intent: data.intent,
+        matchedSource: data.matchedSource,
+      };
+
+      setTestResult(data);
+      setTestChatMessages((current) => [...current, botBubble]);
+      setTestLoading(false);
+      await loadData();
+    } catch (error) {
+      const errorBubble = {
+        id: `bot-error-${Date.now()}`,
+        direction: "bot",
+        body: error.message || "Error al probar el bot.",
+        created_at: new Date().toISOString(),
+        isError: true,
+      };
+
+      setTestChatMessages((current) => [...current, errorBubble]);
+      setMessage(error.message || "Error al probar el bot.");
+      setTestLoading(false);
+    }
+  };
+
+  const resetTestChat = () => {
+    setTestMessage("");
+    setTestResult(null);
+    setTestChatMessages([]);
+  };
 
   const updateRequestStatus = async (requestId, status) => {
     setMessage("");
@@ -1002,101 +1060,160 @@ const testBot = async () => {
         </div>
       )}
 
-{activeSection === "probar" && (
-  <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-    <Card>
-      <SectionHeader
-        eyebrow="Prueba interna"
-        title="Probar respuesta del bot"
-        description="Escribe un mensaje como si fueras una clienta. Esto no envía WhatsApp real."
-      />
+      {activeSection === "probar" && (
+        <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
+          <Card>
+            <SectionHeader
+              eyebrow="Prueba interna"
+              title="Datos de prueba"
+              description="Esto no envía WhatsApp real. Solo simula la conversación con el bot."
+            />
 
-      <div className="space-y-4">
-        <InputField
-          label="Nombre de prueba"
-          value={testClientName}
-          onChange={setTestClientName}
-          placeholder="Ana López"
-        />
+            <div className="space-y-4">
+              <InputField
+                label="Nombre de prueba"
+                value={testClientName}
+                onChange={setTestClientName}
+                placeholder="Ana López"
+              />
 
-        <InputField
-          label="WhatsApp de prueba"
-          value={testClientPhone}
-          onChange={setTestClientPhone}
-          placeholder="9991112233"
-        />
+              <InputField
+                label="WhatsApp de prueba"
+                value={testClientPhone}
+                onChange={setTestClientPhone}
+                placeholder="9991112233"
+              />
 
-        <TextAreaField
-          label="Mensaje recibido"
-          value={testMessage}
-          onChange={setTestMessage}
-          placeholder="Ej. Hola, quiero agendar una cita"
-        />
+              <button
+                type="button"
+                onClick={resetTestChat}
+                className="w-full rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+              >
+                Reiniciar conversación
+              </button>
 
-        <button
-          type="button"
-          disabled={testLoading}
-          onClick={testBot}
-          className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-        >
-          {testLoading ? "Probando..." : "Probar respuesta"}
-        </button>
-      </div>
-    </Card>
+              {testResult && (
+                <div className="rounded-2xl bg-[#f7f9fa] p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                    Última detección
+                  </p>
 
-    <Card>
-      <SectionHeader
-        eyebrow="Respuesta"
-        title="Resultado del bot"
-        description="Aquí verás qué contestaría el bot y de dónde tomó la respuesta."
-      />
+                  <div className="mt-3 grid gap-3">
+                    <div>
+                      <p className="text-xs text-[#8a969a]">Intención</p>
+                      <p className="text-sm text-[#263238]">
+                        {testResult.intent || "-"}
+                      </p>
+                    </div>
 
-      {!testResult ? (
-        <EmptyState text="Aún no has probado ningún mensaje." />
-      ) : (
-        <div className="space-y-4">
-          <div className="rounded-2xl bg-[#f7f9fa] p-5">
-            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-              Mensaje enviado
-            </p>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-[#263238]">
-              {testMessage}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-[#dde3e6] bg-white p-5">
-            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-              Respuesta del bot
-            </p>
-            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#263238]">
-              {testResult.reply}
-            </p>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-2xl bg-[#f7f9fa] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                Intención detectada
-              </p>
-              <p className="mt-2 text-sm text-[#263238]">
-                {testResult.intent || "-"}
-              </p>
+                    <div>
+                      <p className="text-xs text-[#8a969a]">Fuente</p>
+                      <p className="text-sm text-[#263238]">
+                        {testResult.matchedSource || "-"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+          </Card>
 
-            <div className="rounded-2xl bg-[#f7f9fa] p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                Fuente
-              </p>
-              <p className="mt-2 text-sm text-[#263238]">
-                {testResult.matchedSource || "-"}
-              </p>
+          <Card>
+            <SectionHeader
+              eyebrow="Simulador"
+              title="Conversación tipo WhatsApp"
+              description="Escribe mensajes seguidos para probar cómo contestaría el bot."
+            />
+
+            <div className="overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa]">
+              <div className="flex h-[520px] flex-col">
+               <div ref={testChatScrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+                  {testChatMessages.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-center">
+                      <div>
+                        <p className="text-sm text-[#68777c]">
+                          Aún no hay mensajes en esta prueba.
+                        </p>
+                        <p className="mt-1 text-xs text-[#8a969a]">
+                          Prueba con: “Hola”, “Quiero agendar” o “¿Dónde están ubicadas?”
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    testChatMessages.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`flex ${
+                          item.direction === "user"
+                            ? "justify-end"
+                            : "justify-start"
+                        }`}
+                      >
+                        <div
+                          className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                            item.direction === "user"
+                              ? "bg-[#bd7b83] text-white"
+                              : item.isError
+                              ? "bg-red-600 text-white"
+                              : "bg-white text-[#263238]"
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap leading-6">
+                            {item.body}
+                          </p>
+
+                          {item.direction === "bot" && !item.isError && (
+                            <p className="mt-2 text-[11px] opacity-70">
+                              {item.intent || "sin intención"} ·{" "}
+                              {item.matchedSource || "sin fuente"}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+                  {testLoading && (
+                    <div className="flex justify-start">
+                      <div className="rounded-2xl bg-white px-4 py-3 text-sm text-[#68777c] shadow-sm">
+                        Escribiendo...
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-[#dde3e6] bg-white p-3">
+                  <form
+                    className="flex gap-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!testLoading) {
+                        testBot();
+                      }
+                    }}
+                  >
+                    <input
+                      value={testMessage}
+                      onChange={(event) => setTestMessage(event.target.value)}
+                      className="flex-1 rounded-full border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-sm outline-none"
+                      placeholder="Escribe un mensaje..."
+                      disabled={testLoading}
+                    />
+
+                    <button
+                      type="submit"
+                      disabled={testLoading || !testMessage.trim()}
+                      className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+                    >
+                      Enviar
+                    </button>
+                  </form>
+                </div>
+              </div>
             </div>
-          </div>
+          </Card>
         </div>
       )}
-    </Card>
-  </div>
-)}
 
       {activeSection === "solicitudes" && (
         <Card>
