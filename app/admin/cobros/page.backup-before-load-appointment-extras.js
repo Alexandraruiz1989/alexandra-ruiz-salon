@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -434,33 +434,6 @@ function CobrosContent() {
       notes: "",
     });
     setExtraLines([]);
-
-    supabase
-      .from("appointment_extra_items")
-      .select("*")
-      .eq("appointment_id", appointment.id)
-      .order("created_at", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) {
-          setPaymentMessage(
-            `No se pudieron cargar los extras planeados de la cita: ${error.message}`
-          );
-          return;
-        }
-
-        const plannedExtras = (data || []).map((item) => ({
-          extra_id: item.extra_id || "",
-          name: item.name || "",
-          quantity: Number(item.quantity || 1),
-          unit_price: Number(item.unit_price || 0),
-          total_price: Number(item.total_price || 0),
-          staff_id: item.staff_id || "",
-        }));
-
-        if (plannedExtras.length > 0) {
-          setExtraLines(plannedExtras);
-        }
-      });
     setShowPaymentModal(true);
   };
 
@@ -801,7 +774,7 @@ function CobrosContent() {
     if (validExtras.length > 0) {
       const extraRows = validExtras.map((line) => ({
         payment_id: payment.id,
-        extra_id: line.extra_id || null,
+        extra_id: line.extra_id,
         name: line.name,
         quantity: Number(line.quantity || 0),
         unit_price: Number(line.unit_price || 0),
