@@ -424,45 +424,42 @@ function CobrosContent() {
       .reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0);
   }, [payments, selectedDate]);
 
-  const openPaymentModal = (appointment) => {
-    setSelectedAppointment(appointment);
-    setPaymentMessage("");
-    setPaymentForm({
-      discount_amount: 0,
-      tip_amount: 0,
-      payment_method: "Efectivo",
-      notes: "",
-    });
+  const openPaymentModal = async (appointment) => {
+  setSelectedAppointment(appointment);
+  setPaymentMessage("");
+  setPaymentForm({
+    discount_amount: 0,
+    tip_amount: 0,
+    payment_method: "Efectivo",
+    notes: "",
+  });
+
+  const { data, error } = await supabase
+    .from("appointment_extra_items")
+    .select("*")
+    .eq("appointment_id", appointment.id)
+    .order("created_at", { ascending: true });
+
+  if (error) {
     setExtraLines([]);
+    setPaymentMessage(
+      `No se pudieron cargar los extras planeados de la cita: ${error.message}`
+    );
+  } else {
+    const plannedExtras = (data || []).map((item) => ({
+      extra_id: item.extra_id || "",
+      name: item.name || "",
+      quantity: Number(item.quantity || 1),
+      unit_price: Number(item.unit_price || 0),
+      total_price: Number(item.total_price || 0),
+      staff_id: item.staff_id || "",
+    }));
 
-    supabase
-      .from("appointment_extra_items")
-      .select("*")
-      .eq("appointment_id", appointment.id)
-      .order("created_at", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) {
-          setPaymentMessage(
-            `No se pudieron cargar los extras planeados de la cita: ${error.message}`
-          );
-          return;
-        }
+    setExtraLines(plannedExtras);
+  }
 
-        const plannedExtras = (data || []).map((item) => ({
-          extra_id: item.extra_id || "",
-          name: item.name || "",
-          quantity: Number(item.quantity || 1),
-          unit_price: Number(item.unit_price || 0),
-          total_price: Number(item.total_price || 0),
-          staff_id: item.staff_id || "",
-        }));
-
-        if (plannedExtras.length > 0) {
-          setExtraLines(plannedExtras);
-        }
-      });
-    setShowPaymentModal(true);
-  };
+  setShowPaymentModal(true);
+};
 
   const closePaymentModal = () => {
     setSelectedAppointment(null);

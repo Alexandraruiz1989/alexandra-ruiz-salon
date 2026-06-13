@@ -389,10 +389,15 @@ const [quickClientForm, setQuickClientForm] = useState({
     deposit_payment_method: "",
     notes: "",
     force_created: false,
+    design_image_url: "",
+    design_image_path: "",
+    design_image_name: "",
   });
 
   const [serviceLines, setServiceLines] = useState([{ ...emptyServiceLine }]);
   const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
+  const [designImageFile, setDesignImageFile] = useState(null);
+  const [designImagePreview, setDesignImagePreview] = useState("");
 
   useEffect(() => {
     const loadAppointmentExtrasCatalog = async () => {
@@ -722,6 +727,28 @@ const saveQuickClient = async () => {
     }));
   };
 
+  const handleDesignImageChange = (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setMessage("Selecciona una imagen valida para el diseno.");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setMessage("La imagen del diseno no debe pesar mas de 10 MB.");
+      return;
+    }
+
+    setDesignImageFile(file);
+    setDesignImagePreview(URL.createObjectURL(file));
+    setForm((current) => ({
+      ...current,
+      design_image_name: file.name,
+    }));
+  };
   const getServiceMatches = (searchText) => {
     const term = searchText.toLowerCase().trim();
 
@@ -1012,10 +1039,15 @@ const saveQuickClient = async () => {
       deposit_payment_method: "",
       notes: "",
       force_created: false,
+    design_image_url: "",
+    design_image_path: "",
+    design_image_name: "",
     });
 
     setServiceLines([{ ...emptyServiceLine }]);
     setAppointmentExtraLines([]);
+    setDesignImageFile(null);
+    setDesignImagePreview("");
     setActiveSuggestion({});
     setClosedSuggestions({});
     setAvailabilitySuggestions([]);
@@ -1027,6 +1059,8 @@ const saveQuickClient = async () => {
 
     setEditingAppointmentId(null);
     setSelectedAppointment(null);
+    setDesignImageFile(null);
+    setDesignImagePreview("");
     setSelectedDate(targetDate);
     setForm({
       client_id: "",
@@ -1035,9 +1069,14 @@ const saveQuickClient = async () => {
       deposit_payment_method: "",
       notes: "",
       force_created: false,
+    design_image_url: "",
+    design_image_path: "",
+    design_image_name: "",
     });
 
     setAppointmentExtraLines([]);
+    setDesignImageFile(null);
+    setDesignImagePreview("");
 
     setServiceLines(() => {
       const firstLine = { ...emptyServiceLine };
@@ -1062,9 +1101,45 @@ const saveQuickClient = async () => {
     setActiveSection("nueva");
   };
 
-  const openAppointmentDetail = (appointment) => {
-    setSelectedAppointment(appointment);
-   
+  const openAppointmentDetail = async (appointment) => {
+    const currentAppointment = appointment?.appointment || appointment;
+    const appointmentId = currentAppointment?.id || appointment?.id;
+
+    if (!appointmentId) {
+      setSelectedAppointment(currentAppointment || appointment);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("id, design_image_url, design_image_path, design_image_name")
+      .eq("id", appointmentId)
+      .maybeSingle();
+
+    if (error) {
+      setSelectedAppointment(currentAppointment || appointment);
+      return;
+    }
+
+    let designImageUrl =
+      data?.design_image_url || currentAppointment?.design_image_url || "";
+
+    const designImagePath =
+      data?.design_image_path || currentAppointment?.design_image_path || "";
+
+    if (!designImageUrl && designImagePath) {
+      const { data: publicUrlData } = supabase.storage
+        .from("appointment-designs")
+        .getPublicUrl(designImagePath);
+
+      designImageUrl = publicUrlData?.publicUrl || "";
+    }
+
+    setSelectedAppointment({
+      ...(currentAppointment || {}),
+      ...(data || {}),
+      design_image_url: designImageUrl,
+    });
   };
 const getPaymentForAppointment = (appointmentId) => {
   if (!appointmentId) return null;
@@ -1075,7 +1150,11 @@ const getPaymentForAppointment = (appointmentId) => {
     if (!appointment) return;
 
     setSelectedAppointment(null);
+    setDesignImageFile(null);
+    setDesignImagePreview("");
     setEditingAppointmentId(appointment.id);
+    setDesignImageFile(null);
+    setDesignImagePreview(appointment.design_image_url || "");
     setSelectedDate(appointment.appointment_date);
 
     setForm({
@@ -1085,6 +1164,9 @@ const getPaymentForAppointment = (appointmentId) => {
       deposit_payment_method: appointment.deposit_payment_method || "",
       notes: appointment.notes || "",
       force_created: Boolean(appointment.force_created),
+      design_image_url: appointment.design_image_url || "",
+      design_image_path: appointment.design_image_path || "",
+      design_image_name: appointment.design_image_name || "",
     });
 
     const lines = (appointment.appointment_services || []).map((item) => ({
@@ -1672,6 +1754,42 @@ const handleSubmit = async () => {
       return;
     }
 
+    let designImageData = {
+      url: form.design_image_url || null,
+      path: form.design_image_path || null,
+      name: form.design_image_name || null,
+    };
+
+    if (designImageFile) {
+      const fileExt = designImageFile.name.split(".").pop() || "jpg";
+      const safeFileName = `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${fileExt}`;
+      const designPath = `${form.appointment_date}/${safeFileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("appointment-designs")
+        .upload(designPath, designImageFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        setMessage(`No se pudo subir la foto del diseno: ${uploadError.message}`);
+        setSaving(false);
+        return;
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from("appointment-designs")
+        .getPublicUrl(designPath);
+
+      designImageData = {
+        url: publicUrlData?.publicUrl || null,
+        path: designPath,
+        name: designImageFile.name,
+      };
+    }
     const firstStaffId = validServiceLines[0].staff_id;
 
     const appointmentData = {
@@ -1685,6 +1803,9 @@ const handleSubmit = async () => {
       deposit_amount: Number(form.deposit_amount || 0),
       deposit_payment_method: form.deposit_payment_method || null,
       force_created: form.force_created,
+      design_image_url: designImageData.url,
+      design_image_path: designImageData.path,
+      design_image_name: designImageData.name,
       notes: form.notes.trim() || null,
     };
 
@@ -1924,6 +2045,8 @@ await createAppointmentFollowups(appointment);
           services={services}
           extras={extras}
           form={form}
+          designImagePreview={designImagePreview}
+          handleDesignImageChange={handleDesignImageChange}
           serviceLines={serviceLines}
           appointmentExtraLines={appointmentExtraLines}
           message={message}
@@ -2004,6 +2127,8 @@ await createAppointmentFollowups(appointment);
       {activeSection === "disponibilidad" && (
         <AvailabilitySection
           form={form}
+          designImagePreview={designImagePreview}
+          handleDesignImageChange={handleDesignImageChange}
           setActiveSection={setActiveSection}
           handleFormChange={handleFormChange}
           findAvailableSpaces={findAvailableSpaces}
@@ -2039,6 +2164,8 @@ function NewAppointmentSection({
   services,
   extras,
   form,
+  designImagePreview,
+  handleDesignImageChange,
   serviceLines,
   appointmentExtraLines,
   message,
@@ -2251,7 +2378,59 @@ function NewAppointmentSection({
             </div>
           </div>
 
-          <div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
+                    <div className="rounded-[1.5rem] bg-[#fff6fb] p-4">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                  Foto del diseno
+                </p>
+                <p className="mt-1 text-sm text-[#68777c]">
+                  Sube la referencia que desea la clienta para que la tecnica pueda verla al abrir la cita.
+                </p>
+              </div>
+
+              <label className="inline-flex cursor-pointer items-center justify-center rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white">
+                Subir foto
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleDesignImageChange}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {designImagePreview && (
+              <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-[#ead2cf] bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-4">
+                  <img
+                    src={designImagePreview}
+                    alt="Diseno de referencia"
+                    className="h-24 w-24 rounded-2xl object-cover"
+                  />
+
+                  <div>
+                    <p className="text-sm font-medium text-[#263238]">
+                      Imagen de referencia cargada
+                    </p>
+                    <p className="mt-1 text-xs text-[#68777c]">
+                      Se guardara junto con la cita.
+                    </p>
+                  </div>
+                </div>
+
+                <a
+                  href={designImagePreview}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-full bg-[#bd7b83] px-5 py-3 text-center text-sm text-white transition hover:opacity-90"
+                >
+                  Ver diseno
+                </a>
+              </div>
+            )}
+          </div>
+<div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
               <div>
                 <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
@@ -3701,18 +3880,14 @@ const goToPayment = () => {
           onClick={onEdit}
           className="absolute right-14 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7eeee] text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
           title="Editar cita"
-        >
-          âœï¸
-        </button>
+        >Editar</button>
 
         <button
           type="button"
           onClick={onClose}
           className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
           title="Cerrar"
-        >
-          Ã—
-        </button>
+        >X</button>
 
         <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
           Detalle de cita
@@ -3780,6 +3955,35 @@ const goToPayment = () => {
   </div>
 )}
 
+        {appointment.design_image_url && (
+          <div className="mt-5 rounded-2xl border border-[#ead2cf] bg-[#fff6fb] p-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                  Diseno solicitado
+                </p>
+                <p className="mt-1 text-sm text-[#68777c]">
+                  La tecnica puede abrir la imagen de referencia antes de iniciar el servicio.
+                </p>
+              </div>
+
+              <a
+                href={appointment.design_image_url}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-full bg-[#bd7b83] px-5 py-3 text-center text-sm text-white transition hover:opacity-90"
+              >
+                Ver diseno
+              </a>
+            </div>
+
+            <img
+              src={appointment.design_image_url}
+              alt="Diseno solicitado"
+              className="mt-4 max-h-80 w-full rounded-2xl object-cover"
+            />
+          </div>
+        )}
 <div className="mt-6">
   <button
     type="button"
@@ -3882,6 +4086,11 @@ const goToPayment = () => {
     </div>
   );
 }
+
+
+
+
+
 
 
 
