@@ -26,8 +26,6 @@ const emptyServiceLine = {
 };
 
 const emptyAppointmentExtraLine = {
-  extra_id: "",
-  extra_search: "",
   name: "",
   quantity: 1,
   unit_price: "",
@@ -352,7 +350,6 @@ export default function AgendaPage() {
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
-  const [extras, setExtras] = useState([]);
 
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
 const [savingQuickClient, setSavingQuickClient] = useState(false);
@@ -394,25 +391,6 @@ const [quickClientForm, setQuickClientForm] = useState({
   const [serviceLines, setServiceLines] = useState([{ ...emptyServiceLine }]);
   const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
 
-  useEffect(() => {
-    const loadAppointmentExtrasCatalog = async () => {
-      const { data, error } = await supabase
-        .from("service_extras")
-        .select("*")
-        .eq("active", true)
-        .order("category", { ascending: true })
-        .order("name", { ascending: true });
-
-      if (error) {
-        console.error("No se pudieron cargar extras:", error.message);
-        return;
-      }
-
-      setExtras(data || []);
-    };
-
-    loadAppointmentExtrasCatalog();
-  }, []);
   useEffect(() => {
     const start = async () => {
       const { data } = await supabase.auth.getSession();
@@ -918,25 +896,6 @@ const saveQuickClient = async () => {
           ...line,
           [field]: value,
         };
-        if (field === "extra_search") {
-          updatedLine.extra_id = "";
-          updatedLine.name = value;
-        }
-        if (field === "extra_id") {
-          const selectedExtra = extras.find((extra) => extra.id === value);
-
-          if (selectedExtra) {
-            updatedLine.name = selectedExtra.name || "";
-            updatedLine.extra_search = `${selectedExtra.category || "Extra"} - ${
-              selectedExtra.name || ""
-            }`;
-            updatedLine.unit_price = Number(selectedExtra.price || 0);
-            updatedLine.quantity =
-              selectedExtra.pricing_type === "fixed"
-                ? 1
-                : Number(updatedLine.quantity || 1);
-          }
-        }
 
         const quantity = Number(
           field === "quantity" ? value : updatedLine.quantity || 0
@@ -1773,7 +1732,6 @@ const handleSubmit = async () => {
     if (validAppointmentExtras.length > 0) {
       const extrasToInsert = validAppointmentExtras.map((line) => ({
         appointment_id: appointment.id,
-        extra_id: line.extra_id || null,
         name: line.name.trim(),
         quantity: Number(line.quantity || 1),
         unit_price: Number(line.unit_price || 0),
@@ -1922,7 +1880,6 @@ await createAppointmentFollowups(appointment);
           clients={clients}
           staff={staff}
           services={services}
-          extras={extras}
           form={form}
           serviceLines={serviceLines}
           appointmentExtraLines={appointmentExtraLines}
@@ -2037,7 +1994,6 @@ function NewAppointmentSection({
   clients,
   staff,
   services,
-  extras,
   form,
   serviceLines,
   appointmentExtraLines,
@@ -2121,34 +2077,6 @@ function NewAppointmentSection({
     );
 
     setShowClientResults(false);
-  };
-  const getExtraMatches = (query) => {
-    const term = String(query || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim();
-
-    if (!term) {
-      return extras.slice(0, 8);
-    }
-
-    return extras
-      .filter((extra) => {
-        const text = `${extra.category || ""} ${extra.name || ""} ${
-          extra.price || ""
-        }`
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "");
-
-        return text.includes(term);
-      })
-      .slice(0, 8);
-  };
-
-  const selectAppointmentExtra = (index, extra) => {
-    handleAppointmentExtraLineChange(index, "extra_id", extra.id);
   };
 
   return (
@@ -2629,68 +2557,22 @@ function NewAppointmentSection({
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                      <div className="relative lg:col-span-2">
+                      <div className="lg:col-span-2">
                         <label className="mb-2 block text-sm text-[#68777c]">
-                          Extra / decoracion *
+                          Nombre del extra *
                         </label>
                         <input
-                          value={line.extra_search || line.name || ""}
+                          value={line.name}
                           onChange={(event) =>
                             handleAppointmentExtraLineChange(
                               index,
-                              "extra_search",
+                              "name",
                               event.target.value
                             )
                           }
                           className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                          placeholder="Escribe frances, retiro, largo extra, cristales..."
+                          placeholder="Ej. Frances, retiro, largo extra, cristales..."
                         />
-
-                        {(line.extra_search || "").trim() &&
-                          !line.extra_id &&
-                          getExtraMatches(line.extra_search).length > 0 && (
-                            <div className="absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[#dde3e6] bg-white p-2 shadow-xl">
-                              {getExtraMatches(line.extra_search).map((extra) => (
-                                <button
-                                  key={extra.id}
-                                  type="button"
-                                  onMouseDown={(event) => event.preventDefault()}
-                                  onClick={() =>
-                                    selectAppointmentExtra(index, extra)
-                                  }
-                                  className="block w-full rounded-xl px-4 py-3 text-left text-sm transition hover:bg-[#f7eeee]"
-                                >
-                                  <span className="block font-medium text-[#263238]">
-                                    {extra.category} - {extra.name}
-                                  </span>
-                                  <span className="text-xs text-[#68777c]">
-                                    ${Number(extra.price || 0).toFixed(2)}
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-
-                        {(line.extra_search || "").trim() &&
-                          !line.extra_id &&
-                          getExtraMatches(line.extra_search).length === 0 && (
-                            <p className="mt-2 text-xs text-[#bd7b83]">
-                              No encontre extras con esa busqueda.
-                            </p>
-                          )}
-
-                        {line.extra_id && (
-                          <p className="mt-2 text-xs text-[#68777c]">
-                            Seleccionado: {line.name} Â· $
-                            {Number(line.unit_price || 0).toFixed(2)}
-                          </p>
-                        )}
-
-                        {extras.length === 0 && (
-                          <p className="mt-2 text-xs text-[#bd7b83]">
-                            Aun no hay extras activos cargados.
-                          </p>
-                        )}
                       </div>
 
                       <div>
@@ -2766,16 +2648,6 @@ function NewAppointmentSection({
                     </div>
                   </div>
                 ))}
-              </div>
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={addAppointmentExtraLine}
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                >
-                  + Agregar otro extra
-                </button>
               </div>
             </div>
           )}
@@ -3882,9 +3754,6 @@ const goToPayment = () => {
     </div>
   );
 }
-
-
-
 
 
 

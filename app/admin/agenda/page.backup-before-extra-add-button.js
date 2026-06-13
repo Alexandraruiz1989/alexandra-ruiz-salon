@@ -2767,16 +2767,6 @@ function NewAppointmentSection({
                   </div>
                 ))}
               </div>
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={addAppointmentExtraLine}
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                >
-                  + Agregar otro extra
-                </button>
-              </div>
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-3">
@@ -3882,7 +3872,6 @@ const goToPayment = () => {
     </div>
   );
 }
-
 
 
 
