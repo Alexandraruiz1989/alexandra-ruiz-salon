@@ -1116,7 +1116,8 @@ export default function BotPage() {
               <button
                 type="button"
                 onClick={resetTestChat}
-                className="w-full rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                disabled={testLoading}
+                className="w-full rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Reiniciar conversación
               </button>

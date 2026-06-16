@@ -254,6 +254,146 @@ function asksBusinessHours(text) {
   return t.includes("horario") || t.includes("a que hora abren") || t.includes("a qué hora abren") || t.includes("a que hora cierran") || t.includes("a qué hora cierran");
 }
 
+function isNearestAvailabilityRequest(message, ai = {}) {
+  if (ai?.wants_nearest_availability === true) return true;
+
+  const text = normalizeText(message);
+
+  return (
+    text.includes("cita mas proxima") ||
+    text.includes("mas proxima") ||
+    text.includes("mas pronto") ||
+    text.includes("lo mas pronto") ||
+    text.includes("lo antes posible") ||
+    text.includes("primer espacio") ||
+    text.includes("primer horario") ||
+    text.includes("siguiente espacio") ||
+    text.includes("proximo espacio") ||
+    text.includes("cita mas cercana") ||
+    text.includes("mas cercana") ||
+    text.includes("algo hoy") ||
+    text.includes("hoy lo mas pronto")
+  );
+}
+
+function hasBookingServiceIntent(message, ai = {}) {
+  const text = normalizeText(message);
+
+  if (Array.isArray(ai.services_requested) && ai.services_requested.length > 0) {
+    return true;
+  }
+
+  return (
+    text.includes("pedi") ||
+    text.includes("pedicure") ||
+    text.includes("mani") ||
+    text.includes("manicure") ||
+    text.includes("unas") ||
+    text.includes("uñas") ||
+    text.includes("acril") ||
+    text.includes("relleno") ||
+    text.includes("mantenimiento") ||
+    text.includes("rubber") ||
+    text.includes("softgel") ||
+    text.includes("polygel") ||
+    text.includes("gel") ||
+    text.includes("ceja") ||
+    text.includes("pestana") ||
+    text.includes("pestanas") ||
+    text.includes("capilar") ||
+    text.includes("keratina") ||
+    text.includes("botox")
+  );
+}
+
+function isContinuationMessage(message, ai = {}) {
+  const text = normalizeText(message);
+
+  if (ai.keep_context === true || ai.add_to_existing_services === true) return true;
+  if (isNearestAvailabilityRequest(message, ai)) return true;
+
+  return (
+    text.includes("tambien") ||
+    text.includes("ademas") ||
+    text.includes("agrega") ||
+    text.includes("sumale") ||
+    text.includes("y el ") ||
+    text.includes("y la ") ||
+    text.includes("ese") ||
+    text.includes("esa") ||
+    /^\s*\d+(\s*,\s*\d+)*\s*$/.test(String(message || ""))
+  );
+}
+
+function shouldStartNewBookingContext(message, ai = {}, context = {}) {
+  if (ai.reset_context === true) return true;
+  if (isContinuationMessage(message, ai)) return false;
+
+  const text = normalizeText(message);
+  const hasPreviousServices = Array.isArray(context?.selected_services) && context.selected_services.length > 0;
+
+  if (!hasPreviousServices) return false;
+
+  const looksLikeNewBooking =
+    ai.action === "new_booking" ||
+    ai.intent === "book_appointment" ||
+    text.includes("hola") ||
+    text.includes("quiero") ||
+    text.includes("quisiera") ||
+    text.includes("me gustaria") ||
+    text.includes("tienen cita") ||
+    text.includes("tienes cita") ||
+    text.includes("tienen espacio") ||
+    text.includes("hay espacio") ||
+    text.includes("cita para") ||
+    text.includes("agendar");
+
+  if (looksLikeNewBooking) return true;
+  if (!hasBookingServiceIntent(message, ai)) return false;
+
+  return true;
+}
+
+function isAmbiguousAcrylicRequest(query) {
+  const text = normalizeText(query);
+  if (!text.includes("acril")) return false;
+
+  const isClearlyRefill = text.includes("relleno") || text.includes("mantenimiento");
+  const isClearlyNew =
+    text.includes("extension") ||
+    text.includes("extensión") ||
+    text.includes("nueva") ||
+    text.includes("aplicacion") ||
+    text.includes("aplicación") ||
+    text.includes("tip") ||
+    text.includes("escultural");
+
+  return !isClearlyRefill && !isClearlyNew;
+}
+
+function parseAcrylicNewOrRefillChoice(message) {
+  const text = normalizeText(message);
+
+  if (text === "1" || text.includes("nueva") || text.includes("aplicacion") || text.includes("aplicación") || text.includes("extension") || text.includes("extensión")) {
+    return "new";
+  }
+
+  if (text === "2" || text.includes("relleno") || text.includes("mantenimiento")) {
+    return "refill";
+  }
+
+  return null;
+}
+
+function getAcrylicNewOrRefillOptions(choice, services) {
+  const targetGroup = choice === "refill" ? "rellenos / mantenimientos" : "extensiones de uñas";
+
+  return (services || []).filter((service) => {
+    const text = normalizeServiceText(service);
+    return getServiceGroup(service) === targetGroup && text.includes("acril");
+  });
+}
+
 function asksPaymentProof(text) {
   const t = normalizeText(text);
   return t.includes("ya pague") || t.includes("ya pagué") || t.includes("ya transferi") || t.includes("ya transferí") || t.includes("comprobante") || t.includes("anticipo enviado") || t.includes("te mande el pago") || t.includes("te mandé el pago");
@@ -761,6 +901,58 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
   )}:\n\n${optionsText}\n\nResponde con el número de la opción que prefieras.`;
 }
 
+
+async function findNextAvailableSlots({
+  supabase,
+  selectedServices,
+  preferredStaffMode = "available_priority",
+  preferredStaffId = null,
+  minimumStartMinutes = null,
+  timeMode = "any",
+  maxDays = 21,
+}) {
+  const startDate = todayISO();
+
+  for (let dayOffset = 0; dayOffset <= maxDays; dayOffset += 1) {
+    const dateString = addDaysISO(startDate, dayOffset);
+
+    const slots = await getAvailableSlots({
+      supabase,
+      selectedServices,
+      dateString,
+      preferredStaffMode,
+      preferredStaffId,
+      minimumStartMinutes,
+      timeMode,
+    });
+
+    if (Array.isArray(slots) && slots.length > 0) {
+      return { dateString, slots };
+    }
+  }
+
+  return { dateString: null, slots: [] };
+}
+
+function buildNearestSlotsMessage(result, selectedServices, preferredStaffName = "") {
+  const servicesText = selectedServices.map((service) => service.name).join(" + ");
+  const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
+
+  if (!result?.slots || result.slots.length === 0) {
+    return `Por el momento no encontre espacios proximos para ${servicesText}${staffText}. Puedes decirme otro dia, otro horario o elegir otra colaboradora para revisar mas opciones.`;
+  }
+
+  const optionsText = result.slots
+    .slice(0, 8)
+    .map(
+      (slot, index) =>
+        `${index + 1}. ${formatDate(result.dateString)} a las ${formatTime12(slot.start_time)} con ${slot.staff_name}`
+    )
+    .join("\n");
+
+  return `El espacio mas proximo que encontre para ${servicesText}${staffText} es:\n\n${optionsText}\n\nResponde con el numero de la opcion que prefieras.`;
+}
+
 function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
   const servicesText = services.map((service) => `• ${service.name}`).join("\n");
   const notesText = notes ? `\n\nNota: ${notes}` : "";
@@ -814,6 +1006,7 @@ function buildMenuResponse(settings, menuOptions) {
 function normalizeAIParsed(parsed) {
   return {
     intent: parsed?.intent || "unknown",
+    action: parsed?.action || "",
     confidence: Number(parsed?.confidence || 0),
     services_requested: Array.isArray(parsed?.services_requested)
       ? parsed.services_requested
@@ -832,7 +1025,10 @@ function normalizeAIParsed(parsed) {
     wants_human: Boolean(parsed?.wants_human),
     wants_prices_or_menu: Boolean(parsed?.wants_prices_or_menu),
     wants_explanation: Boolean(parsed?.wants_explanation),
+    wants_nearest_availability: Boolean(parsed?.wants_nearest_availability),
     add_to_existing_services: Boolean(parsed?.add_to_existing_services),
+    reset_context: Boolean(parsed?.reset_context),
+    keep_context: Boolean(parsed?.keep_context),
     notes: parsed?.notes || "",
     missing_info: Array.isArray(parsed?.missing_info) ? parsed.missing_info : [],
   };
@@ -881,10 +1077,19 @@ function fallbackInterpret(message) {
       text.includes("menu") ||
       text.includes("menú"),
     wants_explanation: wantsExplanation(message),
+    wants_nearest_availability: isNearestAvailabilityRequest(message),
     add_to_existing_services:
       text.includes("tambien") ||
       text.includes("también") ||
-      text.includes("agrega"),
+      text.includes("agrega") ||
+      text.includes("ademas"),
+    reset_context:
+      (text.includes("hola") || text.includes("quiero") || text.includes("cita para")) &&
+      services.length > 0 &&
+      !text.includes("tambien") &&
+      !text.includes("también") &&
+      !text.includes("agrega"),
+    keep_context: isNearestAvailabilityRequest(message) || isPureNumberSelection(message),
     notes: extractBookingNotes(message),
   });
 }
@@ -922,8 +1127,6 @@ Contexto:
 - Si menciona largo #3, largo 3 o largo extra, guárdalo en notes, no lo trates como número de opción.
 - Si pregunta ubicación, marca wants_location.
 - Si pregunta horario de trabajo, marca wants_business_hours.
-- Si pregunta por la cita mas proxima, lo mas pronto, primer espacio o disponibilidad mas cercana, NO marques wants_business_hours; usa intent book_appointment y conserva los servicios previos si existen.
-- Si pide pedi y unas en el mismo mensaje, pon ambos en services_requested: ["pedicure", "unas"].
 - Si pide menú, precios o servicios, marca wants_prices_or_menu.
 - Si pregunta "qué es", "explícame", "diferencia", marca wants_explanation.
 
@@ -932,7 +1135,11 @@ Fecha actual en Mérida, México: ${today}
 Devuelve SOLO JSON válido con esta estructura:
 {
   "intent": "book_appointment | reschedule | cancel | ask_services | ask_location | ask_business_hours | payment_proof | human_help | greeting | unknown",
+  "action": "new_booking | continue_booking | add_service | clarify_service | search_availability | search_nearest_availability | select_option | ask_info | answer_question | reset_conversation | unknown",
   "confidence": 0.0,
+  "reset_context": false,
+  "keep_context": false,
+  "wants_nearest_availability": false,
   "services_requested": ["string"],
   "service_details": "string",
   "date_text": "string",
@@ -953,7 +1160,18 @@ Devuelve SOLO JSON válido con esta estructura:
   "missing_info": ["string"]
 }
 
-Reglas:
+Reglas de flujo:
+- Usa action para explicar que debe hacer el sistema.
+- Si el mensaje inicia una cita nueva con un servicio claro, usa action="new_booking" y reset_context=true.
+- Si el mensaje continua una cita ya iniciada, usa action="continue_booking" y keep_context=true.
+- Si pide sumar otro servicio, usa action="add_service", add_to_existing_services=true y keep_context=true.
+- Si pregunta por "la cita mas proxima", "lo mas pronto", "primer espacio", "el espacio mas cercano" o cualquier forma parecida, usa action="search_nearest_availability", wants_nearest_availability=true, keep_context=true y wants_business_hours=false.
+- Una pregunta por cita mas proxima NO es pregunta de horario del salon.
+- Si responde solo un numero, usa action="select_option" y keep_context=true.
+- Si responde solo un dia, una fecha o una tecnica dentro de una cita, usa action="continue_booking" y keep_context=true.
+- Si dice "pedi y uñas", conserva ambos servicios en services_requested: ["pedicure", "uñas"].
+
+Reglas de servicios:
 - Si pide dos servicios, pon los dos.
 - "relleno de rubber y pedi" => ["relleno de rubber", "pedicure"].
 - "pedicure clásico con gel y uñas softgel" => ["pedicure clásico con gel", "softgel"].
@@ -1052,106 +1270,6 @@ async function saveBotMessages(
       raw_payload: meta,
     },
   ]);
-}
-function asksNearestAvailabilityBot(message) {
-  const text = normalizeText(message);
-
-  return (
-    text.includes("cita mas proxima") ||
-    text.includes("mas proxima") ||
-    text.includes("mas pronto") ||
-    text.includes("lo mas pronto") ||
-    text.includes("lo antes posible") ||
-    text.includes("primer espacio") ||
-    text.includes("proximo espacio") ||
-    text.includes("siguiente espacio") ||
-    text.includes("cita mas cercana") ||
-    text.includes("mas cercana")
-  );
-}
-
-function addDaysFromTodayBot(daysToAdd) {
-  return addDaysISO(todayISO(), daysToAdd);
-}
-
-async function findNextAvailableSlotsBot({
-  supabase,
-  selectedServices,
-  preferredStaffMode = "available_priority",
-  preferredStaffId = null,
-  minimumStartMinutes = null,
-  timeMode = "any",
-  maxDays = 21,
-}) {
-  for (let dayOffset = 0; dayOffset <= maxDays; dayOffset += 1) {
-    const dateString = addDaysFromTodayBot(dayOffset);
-
-    const slots = await getAvailableSlots({
-      supabase,
-      selectedServices,
-      dateString,
-      preferredStaffMode,
-      preferredStaffId,
-      minimumStartMinutes,
-      timeMode,
-    });
-
-    if (Array.isArray(slots) && slots.length > 0) {
-      return { dateString, slots };
-    }
-  }
-
-  return { dateString: null, slots: [] };
-}
-
-function buildNearestSlotsMessageBot(result, selectedServices, preferredStaffName = "") {
-  const servicesText = selectedServices.map((service) => service.name).join(" + ");
-  const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
-
-  if (!result || !Array.isArray(result.slots) || result.slots.length === 0) {
-    return `Por el momento no encontre espacios proximos para ${servicesText}${staffText}. Puedes decirme otro dia u otro horario para revisar mas opciones.`;
-  }
-
-  const optionsText = result.slots
-    .slice(0, 8)
-    .map(
-      (slot, index) =>
-        `${index + 1}. ${formatDate(result.dateString)} a las ${formatTime12(slot.start_time)} con ${slot.staff_name}`
-    )
-    .join("\n");
-
-  return `El espacio mas proximo que encontre para ${servicesText}${staffText} es:\n\n${optionsText}\n\nResponde con el numero de la opcion que prefieras.`;
-}
-
-function isFreshServiceRequestBot(message, ai) {
-  const text = normalizeText(message);
-  const hasServices = Array.isArray(ai.services_requested) && ai.services_requested.length > 0;
-
-  if (!hasServices) return false;
-  if (ai.add_to_existing_services) return false;
-
-  const isContinuation =
-    text.includes("tambien") ||
-    text.includes("ademas") ||
-    text.includes("agrega") ||
-    text.includes("sumale") ||
-    text.includes("y el ") ||
-    text.includes("y la ");
-
-  if (isContinuation) return false;
-
-  return (
-    text.includes("hola") ||
-    text.includes("quiero") ||
-    text.includes("quisiera") ||
-    text.includes("me gustaria") ||
-    text.includes("tienen cita") ||
-    text.includes("tienes cita") ||
-    text.includes("tienen espacio") ||
-    text.includes("hay espacio") ||
-    text.includes("cita para") ||
-    text.includes("agendar")
-  );
 }
 async function getAvailableSlots({
   supabase,
@@ -1412,7 +1530,7 @@ export async function POST(request) {
     const incomingMessage = String(body.message || "").trim();
     const clientNameFromTest = String(body.clientName || "").trim();
     const clientPhoneFromTest = String(body.clientPhone || "test").trim();
-    // reset conversation final clean
+    // reset conversation stable final
     if (body.resetConversation === true || body.reset === true) {
       const supabase = createClient(supabaseUrl, serviceRoleKey);
       const rawPhone = String(clientPhoneFromTest || "test").trim();
@@ -1443,12 +1561,14 @@ export async function POST(request) {
           .delete()
           .in("client_phone", phoneVariants);
       } catch (messageResetError) {
-        // Ignore if bot_messages is not available in this project.
+        // Some projects do not use bot_messages. Ignore this safely.
       }
 
       if (conversationDeleteError) {
         return NextResponse.json(
-          { error: `No se pudo reiniciar la conversacion: ${conversationDeleteError.message}` },
+          {
+            error: `No se pudo reiniciar la conversacion: ${conversationDeleteError.message}`,
+          },
           { status: 500 }
         );
       }
@@ -1550,12 +1670,15 @@ export async function POST(request) {
       staff
     );
 
-    const selectedServicesFromContext = Array.isArray(context.selected_services)
-      ? context.selected_services
+    const startsNewBooking = shouldStartNewBookingContext(incomingMessage, ai, context);
+    const baseContext = startsNewBooking ? {} : context;
+
+    const selectedServicesFromContext = Array.isArray(baseContext.selected_services)
+      ? baseContext.selected_services
       : [];
 
     const bookingNotes = [
-      context.booking_notes,
+      baseContext.booking_notes,
       extractBookingNotes(incomingMessage, ai.notes),
     ]
       .filter(Boolean)
@@ -1566,15 +1689,15 @@ export async function POST(request) {
     let matchedSource = "fallback";
 
     let nextContext = {
-      ...context,
+      ...baseContext,
       booking_notes: bookingNotes,
-      requested_date: requestedDate || context.requested_date || null,
+      requested_date: requestedDate || baseContext.requested_date || null,
       minimum_start_minutes:
-        timePreference.minutes ?? context.minimum_start_minutes ?? null,
-      time_mode: timePreference.mode || context.time_mode || "any",
+        timePreference.minutes ?? baseContext.minimum_start_minutes ?? null,
+      time_mode: timePreference.mode || baseContext.time_mode || "any",
     };
 
-    let nextStep = conversation?.booking_step || null;
+    let nextStep = startsNewBooking ? null : conversation?.booking_step || null;
 
     if (!reply && ai.says_paid) {
       const anticipoAsset = getAssetByKey(mediaAssets, "datos_anticipo");
@@ -1596,7 +1719,7 @@ export async function POST(request) {
       matchedSource = "location";
     }
 
-    if (!reply && !asksNearestAvailabilityBot(incomingMessage) && (ai.wants_business_hours || asksBusinessHours(incomingMessage))) {
+    if (!reply && !isNearestAvailabilityRequest(incomingMessage, ai) && (ai.wants_business_hours || asksBusinessHours(incomingMessage))) {
       reply = BUSINESS_HOURS_MESSAGE;
       matchedSource = "business_hours";
     }
@@ -1699,6 +1822,40 @@ export async function POST(request) {
       ? nextContext.pending_service_options
       : [];
 
+    if (!reply && nextStep === "esperando_acrilico_tipo") {
+      const acrylicChoice = parseAcrylicNewOrRefillChoice(incomingMessage);
+
+      if (!acrylicChoice) {
+        reply = "Claro 💕 Para tus uñas acrilicas, dime que necesitas:
+
+1. Aplicacion nueva de acrilico
+2. Relleno o mantenimiento de acrilico
+
+Responde 1 o 2.";
+        matchedSource = "acrylic_new_or_refill_retry";
+      } else {
+        const acrylicOptions = getAcrylicNewOrRefillOptions(acrylicChoice, services);
+
+        if (acrylicOptions.length === 1) {
+          const merged = mergeServices(selectedServicesFromContext, acrylicOptions);
+          nextContext.selected_services = merged;
+          reply = buildSelectedServicesMessage(merged, bookingNotes);
+          matchedSource = "acrylic_new_or_refill_selected";
+          nextStep = "esperando_tecnica";
+        } else if (acrylicOptions.length > 1) {
+          nextContext.pending_service_options = acrylicOptions;
+          nextContext.adding_service_mode = selectedServicesFromContext.length > 0;
+          reply = buildServiceOptionsMessage(acrylicOptions, selectedServicesFromContext);
+          matchedSource = "acrylic_new_or_refill_options";
+          nextStep = "esperando_seleccion_servicios";
+        } else {
+          reply = "Por ahora no encontre ese servicio de acrilico en el catalogo del bot. Te comunicare con una persona del salon para revisarlo 💕";
+          matchedSource = "acrylic_service_not_found";
+          nextStep = null;
+        }
+      }
+    }
+
     if (
       !reply &&
       pendingOptions.length > 0 &&
@@ -1717,9 +1874,36 @@ export async function POST(request) {
         nextContext.pending_service_options = [];
         nextContext.adding_service_mode = false;
 
-        reply = buildSelectedServicesMessage(merged, bookingNotes);
-        matchedSource = "service_options_selected";
-        nextStep = "esperando_tecnica";
+        const pendingAfterNailQueries = Array.isArray(nextContext.pending_after_nail_queries)
+          ? nextContext.pending_after_nail_queries
+          : [];
+
+        if (pendingAfterNailQueries.length > 0) {
+          const pendingResolved = resolveRequestedServices(pendingAfterNailQueries, services);
+          nextContext.pending_after_nail_queries = [];
+
+          if (pendingResolved.ambiguous.length > 0) {
+            nextContext.pending_service_options = pendingResolved.ambiguous;
+            nextContext.adding_service_mode = true;
+            reply = buildServiceOptionsMessage(pendingResolved.ambiguous, merged);
+            matchedSource = "pending_services_after_nail_options";
+            nextStep = "esperando_seleccion_servicios";
+          } else if (pendingResolved.selected.length > 0) {
+            const mergedWithPending = mergeServices(merged, pendingResolved.selected);
+            nextContext.selected_services = mergedWithPending;
+            reply = buildSelectedServicesMessage(mergedWithPending, bookingNotes);
+            matchedSource = "service_options_selected_with_pending";
+            nextStep = "esperando_tecnica";
+          } else {
+            reply = buildSelectedServicesMessage(merged, bookingNotes);
+            matchedSource = "service_options_selected";
+            nextStep = "esperando_tecnica";
+          }
+        } else {
+          reply = buildSelectedServicesMessage(merged, bookingNotes);
+          matchedSource = "service_options_selected";
+          nextStep = "esperando_tecnica";
+        }
       }
     }
 
@@ -1771,7 +1955,53 @@ export async function POST(request) {
       ai.add_to_existing_services ||
       normalizeText(incomingMessage).includes("tambien") ||
       normalizeText(incomingMessage).includes("también") ||
+      normalizeText(incomingMessage).includes("ademas") ||
       normalizeText(incomingMessage).includes("agrega");
+
+    if (!reply && isNearestAvailabilityRequest(incomingMessage, ai)) {
+      const servicesForNearest = Array.isArray(nextContext.selected_services) && nextContext.selected_services.length > 0
+        ? nextContext.selected_services
+        : selectedServicesFromContext;
+
+      if (servicesForNearest.length > 0) {
+        const preferredStaffMode =
+          nextContext.preferred_staff_mode ||
+          baseContext.preferred_staff_mode ||
+          "available_priority";
+
+        const preferredStaffId =
+          nextContext.preferred_staff_id || baseContext.preferred_staff_id || null;
+
+        const preferredStaffName =
+          nextContext.preferred_staff_name || baseContext.preferred_staff_name || "";
+
+        const nearestResult = await findNextAvailableSlots({
+          supabase,
+          selectedServices: servicesForNearest,
+          preferredStaffMode,
+          preferredStaffId,
+          minimumStartMinutes: nextContext.minimum_start_minutes,
+          timeMode: nextContext.time_mode,
+        });
+
+        nextContext.selected_services = servicesForNearest;
+        nextContext.requested_date = nearestResult.dateString;
+        nextContext.available_options = nearestResult.slots;
+
+        reply = buildNearestSlotsMessage(
+          nearestResult,
+          servicesForNearest,
+          preferredStaffMode === "specific" ? preferredStaffName : ""
+        );
+
+        matchedSource = "nearest_availability";
+        nextStep = nearestResult.slots.length > 0 ? "esperando_opcion_horario" : "esperando_fecha";
+      } else {
+        reply = "Claro 💕 ¿Que servicio o servicios te gustaria agendar para buscarte la cita mas proxima?";
+        matchedSource = "nearest_request_missing_service";
+        nextStep = "esperando_servicios";
+      }
+    }
 
     if (
       !reply &&
@@ -1784,7 +2014,6 @@ export async function POST(request) {
     ) {
       if (
         serviceQueries.length === 0 &&
-        !asksNearestAvailabilityBot(incomingMessage) &&
         (ai.intent === "book_appointment" || nextStep === "esperando_servicios")
       ) {
         reply = "Perfecto 💕 ¿Qué servicio o servicios te gustaría agendar?";
@@ -1792,7 +2021,35 @@ export async function POST(request) {
         nextStep = "esperando_servicios";
       }
 
+      if (!reply && serviceQueries.some((query) => isAmbiguousAcrylicRequest(query))) {
+        const pendingAfterAcrylicQueries = serviceQueries.filter(
+          (query) => !isAmbiguousAcrylicRequest(query)
+        );
+
+        if (pendingAfterAcrylicQueries.length > 0) {
+          nextContext.pending_after_nail_queries = pendingAfterAcrylicQueries;
+        }
+
+        reply = "Claro 💕 Para tus uñas acrilicas, dime que necesitas:
+
+1. Aplicacion nueva de acrilico
+2. Relleno o mantenimiento de acrilico
+
+Responde 1 o 2.";
+        matchedSource = "ambiguous_acrylic_new_or_refill";
+        nextStep = "esperando_acrilico_tipo";
+        nextContext.pending_service_options = [];
+      }
+
       if (!reply && serviceQueries.some((query) => isGeneralNailOnly(query))) {
+        const pendingAfterNailQueries = serviceQueries.filter(
+          (query) => !isGeneralNailOnly(query)
+        );
+
+        if (pendingAfterNailQueries.length > 0) {
+          nextContext.pending_after_nail_queries = pendingAfterNailQueries;
+        }
+
         reply = buildNailClarifyingQuestion();
         matchedSource = "nail_clarifying_question";
         nextStep = "esperando_tipo_unas";

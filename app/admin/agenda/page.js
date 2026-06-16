@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -26,17 +26,72 @@ const emptyServiceLine = {
 };
 
 const emptyAppointmentExtraLine = {
-  extra_id: "",
-  extra_search: "",
   name: "",
   quantity: 1,
   unit_price: "",
-  total_price: 0,
+  total_price: "",
   notes: "",
 };
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysToISO(dateString, days) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function DateNavigation({ selectedDate, setSelectedDate, mode = "day" }) {
+  const stepDays = mode === "week" ? 7 : mode === "month" ? 30 : 1;
+
+  const goBack = () => {
+    setSelectedDate(addDaysToISO(selectedDate, -stepDays));
+  };
+
+  const goToday = () => {
+    setSelectedDate(todayISO());
+  };
+
+  const goForward = () => {
+    setSelectedDate(addDaysToISO(selectedDate, stepDays));
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={goBack}
+        className="rounded-full border border-[#bd7b83] px-4 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+      >
+        ←
+      </button>
+
+      <button
+        type="button"
+        onClick={goToday}
+        className="rounded-full border border-[#dde3e6] bg-white px-4 py-3 text-sm text-[#68777c] transition hover:bg-[#f7eeee] hover:text-[#bd7b83]"
+      >
+        Hoy
+      </button>
+
+      <input
+        type="date"
+        value={selectedDate}
+        onChange={(event) => setSelectedDate(event.target.value)}
+        className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+      />
+
+      <button
+        type="button"
+        onClick={goForward}
+        className="rounded-full border border-[#bd7b83] px-4 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+      >
+        →
+      </button>
+    </div>
+  );
 }
 
 function formatMoney(value) {
@@ -352,7 +407,6 @@ export default function AgendaPage() {
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
-  const [extras, setExtras] = useState([]);
 
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
 const [savingQuickClient, setSavingQuickClient] = useState(false);
@@ -389,35 +443,11 @@ const [quickClientForm, setQuickClientForm] = useState({
     deposit_payment_method: "",
     notes: "",
     force_created: false,
-    design_image_url: "",
-    design_image_path: "",
-    design_image_name: "",
   });
 
   const [serviceLines, setServiceLines] = useState([{ ...emptyServiceLine }]);
-  const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
-  const [designImageFile, setDesignImageFile] = useState(null);
-  const [designImagePreview, setDesignImagePreview] = useState("");
+const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
 
-  useEffect(() => {
-    const loadAppointmentExtrasCatalog = async () => {
-      const { data, error } = await supabase
-        .from("service_extras")
-        .select("*")
-        .eq("active", true)
-        .order("category", { ascending: true })
-        .order("name", { ascending: true });
-
-      if (error) {
-        console.error("No se pudieron cargar extras:", error.message);
-        return;
-      }
-
-      setExtras(data || []);
-    };
-
-    loadAppointmentExtrasCatalog();
-  }, []);
   useEffect(() => {
     const start = async () => {
       const { data } = await supabase.auth.getSession();
@@ -727,28 +757,6 @@ const saveQuickClient = async () => {
     }));
   };
 
-  const handleDesignImageChange = (event) => {
-    const file = event.target.files?.[0];
-
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      setMessage("Selecciona una imagen valida para el diseno.");
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setMessage("La imagen del diseno no debe pesar mas de 10 MB.");
-      return;
-    }
-
-    setDesignImageFile(file);
-    setDesignImagePreview(URL.createObjectURL(file));
-    setForm((current) => ({
-      ...current,
-      design_image_name: file.name,
-    }));
-  };
   const getServiceMatches = (searchText) => {
     const term = searchText.toLowerCase().trim();
 
@@ -916,6 +924,8 @@ const saveQuickClient = async () => {
   setServiceLines((current) => [...current, { ...emptyServiceLine }]);
 };
 
+
+
   const removeServiceLine = (index) => {
     setServiceLines((current) => {
       if (current.length === 1) return current;
@@ -924,66 +934,48 @@ const saveQuickClient = async () => {
   };
 
   const addAppointmentExtraLine = () => {
-    setAppointmentExtraLines((current) => [
-      ...current,
-      { ...emptyAppointmentExtraLine },
-    ]);
-  };
+  setAppointmentExtraLines((current) => [
+    ...current,
+    { ...emptyAppointmentExtraLine },
+  ]);
+};
 
-  const removeAppointmentExtraLine = (index) => {
-    setAppointmentExtraLines((current) =>
-      current.filter((_, itemIndex) => itemIndex !== index)
-    );
-  };
+const removeAppointmentExtraLine = (index) => {
+  setAppointmentExtraLines((current) =>
+    current.filter((_, itemIndex) => itemIndex !== index)
+  );
+};
 
-  const handleAppointmentExtraLineChange = (index, field, value) => {
-    setAppointmentExtraLines((current) =>
-      current.map((line, itemIndex) => {
-        if (itemIndex !== index) return line;
+const handleAppointmentExtraLineChange = (index, field, value) => {
+  setAppointmentExtraLines((current) =>
+    current.map((line, itemIndex) => {
+      if (itemIndex !== index) return line;
 
-        const updatedLine = {
-          ...line,
-          [field]: value,
-        };
-        if (field === "extra_search") {
-          updatedLine.extra_id = "";
-          updatedLine.name = value;
-        }
-        if (field === "extra_id") {
-          const selectedExtra = extras.find((extra) => extra.id === value);
+      const updatedLine = {
+        ...line,
+        [field]: value,
+      };
 
-          if (selectedExtra) {
-            updatedLine.name = selectedExtra.name || "";
-            updatedLine.extra_search = `${selectedExtra.category || "Extra"} - ${
-              selectedExtra.name || ""
-            }`;
-            updatedLine.unit_price = Number(selectedExtra.price || 0);
-            updatedLine.quantity =
-              selectedExtra.pricing_type === "fixed"
-                ? 1
-                : Number(updatedLine.quantity || 1);
-          }
-        }
+      const quantity = Number(
+        field === "quantity" ? value : updatedLine.quantity || 0
+      );
+      const unitPrice = Number(
+        field === "unit_price" ? value : updatedLine.unit_price || 0
+      );
 
-        const quantity = Number(
-          field === "quantity" ? value : updatedLine.quantity || 0
-        );
-        const unitPrice = Number(
-          field === "unit_price" ? value : updatedLine.unit_price || 0
-        );
+      updatedLine.total_price = quantity * unitPrice;
 
-        updatedLine.total_price = quantity * unitPrice;
+      return updatedLine;
+    })
+  );
+};
 
-        return updatedLine;
-      })
-    );
-  };
+const validAppointmentExtras = useMemo(() => {
+  return appointmentExtraLines.filter(
+    (line) => line.name.trim() && Number(line.total_price || 0) > 0
+  );
+}, [appointmentExtraLines]);
 
-  const validAppointmentExtras = useMemo(() => {
-    return appointmentExtraLines.filter(
-      (line) => line.name.trim() && Number(line.total_price || 0) > 0
-    );
-  }, [appointmentExtraLines]);
   const validServiceLines = useMemo(() => {
     return serviceLines.filter(
       (line) =>
@@ -991,17 +983,17 @@ const saveQuickClient = async () => {
     );
   }, [serviceLines]);
 
-  const estimatedTotal = useMemo(() => {
-    const servicesTotal = serviceLines.reduce((sum, line) => {
-      return sum + Number(line.price || 0) * Number(line.quantity || 1);
-    }, 0);
+ const estimatedTotal = useMemo(() => {
+  const servicesTotal = serviceLines.reduce((sum, line) => {
+    return sum + Number(line.price || 0) * Number(line.quantity || 1);
+  }, 0);
 
-    const extrasTotal = appointmentExtraLines.reduce((sum, line) => {
-      return sum + Number(line.total_price || 0);
-    }, 0);
+  const extrasTotal = appointmentExtraLines.reduce((sum, line) => {
+    return sum + Number(line.total_price || 0);
+  }, 0);
 
-    return servicesTotal + extrasTotal;
-  }, [serviceLines, appointmentExtraLines]);
+  return servicesTotal + extrasTotal;
+}, [serviceLines, appointmentExtraLines]);
 
   const earliestStartTime = useMemo(() => {
     const times = validServiceLines
@@ -1039,15 +1031,9 @@ const saveQuickClient = async () => {
       deposit_payment_method: "",
       notes: "",
       force_created: false,
-    design_image_url: "",
-    design_image_path: "",
-    design_image_name: "",
     });
 
     setServiceLines([{ ...emptyServiceLine }]);
-    setAppointmentExtraLines([]);
-    setDesignImageFile(null);
-    setDesignImagePreview("");
     setActiveSuggestion({});
     setClosedSuggestions({});
     setAvailabilitySuggestions([]);
@@ -1059,8 +1045,6 @@ const saveQuickClient = async () => {
 
     setEditingAppointmentId(null);
     setSelectedAppointment(null);
-    setDesignImageFile(null);
-    setDesignImagePreview("");
     setSelectedDate(targetDate);
     setForm({
       client_id: "",
@@ -1069,14 +1053,7 @@ const saveQuickClient = async () => {
       deposit_payment_method: "",
       notes: "",
       force_created: false,
-    design_image_url: "",
-    design_image_path: "",
-    design_image_name: "",
     });
-
-    setAppointmentExtraLines([]);
-    setDesignImageFile(null);
-    setDesignImagePreview("");
 
     setServiceLines(() => {
       const firstLine = { ...emptyServiceLine };
@@ -1101,45 +1078,9 @@ const saveQuickClient = async () => {
     setActiveSection("nueva");
   };
 
-  const openAppointmentDetail = async (appointment) => {
-    const currentAppointment = appointment?.appointment || appointment;
-    const appointmentId = currentAppointment?.id || appointment?.id;
-
-    if (!appointmentId) {
-      setSelectedAppointment(currentAppointment || appointment);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("appointments")
-      .select("id, design_image_url, design_image_path, design_image_name")
-      .eq("id", appointmentId)
-      .maybeSingle();
-
-    if (error) {
-      setSelectedAppointment(currentAppointment || appointment);
-      return;
-    }
-
-    let designImageUrl =
-      data?.design_image_url || currentAppointment?.design_image_url || "";
-
-    const designImagePath =
-      data?.design_image_path || currentAppointment?.design_image_path || "";
-
-    if (!designImageUrl && designImagePath) {
-      const { data: publicUrlData } = supabase.storage
-        .from("appointment-designs")
-        .getPublicUrl(designImagePath);
-
-      designImageUrl = publicUrlData?.publicUrl || "";
-    }
-
-    setSelectedAppointment({
-      ...(currentAppointment || {}),
-      ...(data || {}),
-      design_image_url: designImageUrl,
-    });
+  const openAppointmentDetail = (appointment) => {
+    setSelectedAppointment(appointment);
+   
   };
 const getPaymentForAppointment = (appointmentId) => {
   if (!appointmentId) return null;
@@ -1150,11 +1091,7 @@ const getPaymentForAppointment = (appointmentId) => {
     if (!appointment) return;
 
     setSelectedAppointment(null);
-    setDesignImageFile(null);
-    setDesignImagePreview("");
     setEditingAppointmentId(appointment.id);
-    setDesignImageFile(null);
-    setDesignImagePreview(appointment.design_image_url || "");
     setSelectedDate(appointment.appointment_date);
 
     setForm({
@@ -1164,9 +1101,6 @@ const getPaymentForAppointment = (appointmentId) => {
       deposit_payment_method: appointment.deposit_payment_method || "",
       notes: appointment.notes || "",
       force_created: Boolean(appointment.force_created),
-      design_image_url: appointment.design_image_url || "",
-      design_image_path: appointment.design_image_path || "",
-      design_image_name: appointment.design_image_name || "",
     });
 
     const lines = (appointment.appointment_services || []).map((item) => ({
@@ -1239,14 +1173,14 @@ const getPaymentForAppointment = (appointmentId) => {
       if (!schedule || !schedule.is_active) {
         return {
           hasConflict: true,
-          message: `${staffName} no tiene horario activo para ese día. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+          message: `${staffName} no tiene horario activo para ese día. Marca “Forzar cita” si deseas guardarla de todos modos.`,
         };
       }
 
       if (schedule.is_day_off) {
         return {
           hasConflict: true,
-          message: `${staffName} tiene marcado ese día como descanso. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+          message: `${staffName} tiene marcado ese día como descanso. Marca “Forzar cita” si deseas guardarla de todos modos.`,
         };
       }
 
@@ -1330,7 +1264,7 @@ const getPaymentForAppointment = (appointmentId) => {
               block.start_time
             )} a ${formatTime(
               block.end_time
-            )}. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+            )}. Marca “Forzar cita” si deseas guardarla de todos modos.`,
           };
         }
       }
@@ -1405,7 +1339,7 @@ const getPaymentForAppointment = (appointmentId) => {
               existing.appointments?.clients?.full_name || "una clienta"
             } de ${formatTime(existing.start_time)} a ${formatTime(
               existing.end_time
-            )}. Marca â€œForzar citaâ€ si deseas guardarla de todos modos.`,
+            )}. Marca “Forzar cita” si deseas guardarla de todos modos.`,
           };
         }
       }
@@ -1754,42 +1688,6 @@ const handleSubmit = async () => {
       return;
     }
 
-    let designImageData = {
-      url: form.design_image_url || null,
-      path: form.design_image_path || null,
-      name: form.design_image_name || null,
-    };
-
-    if (designImageFile) {
-      const fileExt = designImageFile.name.split(".").pop() || "jpg";
-      const safeFileName = `${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}.${fileExt}`;
-      const designPath = `${form.appointment_date}/${safeFileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("appointment-designs")
-        .upload(designPath, designImageFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        setMessage(`No se pudo subir la foto del diseno: ${uploadError.message}`);
-        setSaving(false);
-        return;
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from("appointment-designs")
-        .getPublicUrl(designPath);
-
-      designImageData = {
-        url: publicUrlData?.publicUrl || null,
-        path: designPath,
-        name: designImageFile.name,
-      };
-    }
     const firstStaffId = validServiceLines[0].staff_id;
 
     const appointmentData = {
@@ -1803,9 +1701,6 @@ const handleSubmit = async () => {
       deposit_amount: Number(form.deposit_amount || 0),
       deposit_payment_method: form.deposit_payment_method || null,
       force_created: form.force_created,
-      design_image_url: designImageData.url,
-      design_image_path: designImageData.path,
-      design_image_name: designImageData.name,
       notes: form.notes.trim() || null,
     };
 
@@ -1885,35 +1780,43 @@ const handleSubmit = async () => {
       setSaving(false);
       return;
     }
+   if (editingAppointmentId) {
+  const { error: deleteExtrasError } = await supabase
+    .from("appointment_extra_items")
+    .delete()
+    .eq("appointment_id", appointment.id);
 
-    await supabase
-      .from("appointment_extra_items")
-      .delete()
-      .eq("appointment_id", appointment.id);
+  if (deleteExtrasError) {
+    setMessage(
+      `La cita se guardó, pero no se pudieron actualizar los extras: ${deleteExtrasError.message}`
+    );
+    setSaving(false);
+    return;
+  }
+}
 
-    if (validAppointmentExtras.length > 0) {
-      const extrasToInsert = validAppointmentExtras.map((line) => ({
-        appointment_id: appointment.id,
-        extra_id: line.extra_id || null,
-        name: line.name.trim(),
-        quantity: Number(line.quantity || 1),
-        unit_price: Number(line.unit_price || 0),
-        total_price: Number(line.total_price || 0),
-        notes: line.notes?.trim() || null,
-      }));
+if (validAppointmentExtras.length > 0) {
+  const extrasToInsert = validAppointmentExtras.map((line) => ({
+    appointment_id: appointment.id,
+    name: line.name.trim(),
+    quantity: Number(line.quantity || 1),
+    unit_price: Number(line.unit_price || 0),
+    total_price: Number(line.total_price || 0),
+    notes: line.notes?.trim() || null,
+  }));
 
-      const { error: extrasError } = await supabase
-        .from("appointment_extra_items")
-        .insert(extrasToInsert);
+  const { error: extrasError } = await supabase
+    .from("appointment_extra_items")
+    .insert(extrasToInsert);
 
-      if (extrasError) {
-        setMessage(
-          `La cita se guardo, pero no se pudieron guardar los extras: ${extrasError.message}`
-        );
-        setSaving(false);
-        return;
-      }
-    }
+  if (extrasError) {
+    setMessage(
+      `La cita se guardó, pero no se pudieron guardar los extras: ${extrasError.message}`
+    );
+    setSaving(false);
+    return;
+  }
+} 
 await createAppointmentFollowups(appointment);
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
@@ -1927,6 +1830,7 @@ await createAppointmentFollowups(appointment);
     );
     setSaving(false);
     setActiveSection("diaria");
+    setAppointmentExtraLines([]);
   };
 
   const appointmentsByStaff = useMemo(() => {
@@ -2043,12 +1947,8 @@ await createAppointmentFollowups(appointment);
           clients={clients}
           staff={staff}
           services={services}
-          extras={extras}
           form={form}
-          designImagePreview={designImagePreview}
-          handleDesignImageChange={handleDesignImageChange}
           serviceLines={serviceLines}
-          appointmentExtraLines={appointmentExtraLines}
           message={message}
           editingAppointmentId={editingAppointmentId}
           activeSuggestion={activeSuggestion}
@@ -2064,9 +1964,6 @@ await createAppointmentFollowups(appointment);
           handleServiceSearchKeyDown={handleServiceSearchKeyDown}
           addServiceLine={addServiceLine}
           removeServiceLine={removeServiceLine}
-          addAppointmentExtraLine={addAppointmentExtraLine}
-          removeAppointmentExtraLine={removeAppointmentExtraLine}
-          handleAppointmentExtraLineChange={handleAppointmentExtraLineChange}
           setActiveSuggestion={setActiveSuggestion}
           handleSubmit={handleSubmit}
           findAvailableSpaces={findAvailableSpaces}
@@ -2087,27 +1984,30 @@ await createAppointmentFollowups(appointment);
           openNewAppointment={openNewAppointment}
           openAppointmentDetail={openAppointmentDetail}
           openEditAppointment={openEditAppointment}
+          appointmentExtraLines={appointmentExtraLines}
+addAppointmentExtraLine={addAppointmentExtraLine}
+removeAppointmentExtraLine={removeAppointmentExtraLine}
+handleAppointmentExtraLineChange={handleAppointmentExtraLineChange}
           getPaymentForAppointment={getPaymentForAppointment}
           activeSection={activeSection}
           setActiveSection={setActiveSection}
         />
       )}
 
-      {activeSection === "semanal" && (
-        <WeeklyViewSection
-          selectedDate={selectedDate}
-          setSelectedDate={setSelectedDate}
-          weekDays={getWeekDays(selectedDate)}
-          appointmentsByDate={appointmentsByDate}
-          openNewAppointment={openNewAppointment}
-          openAppointmentDetail={openAppointmentDetail}
-          openEditAppointment={openEditAppointment}
-          payment={getPaymentForAppointment(item.appointment?.id)}
-          getPaymentForAppointment={getPaymentForAppointment}
-          activeSection={activeSection}
-          setActiveSection={setActiveSection}
-        />
-      )}
+              {activeSection === "semanal" && (
+          <WeeklyViewSection
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            weekDays={getWeekDays(selectedDate)}
+            appointmentsByDate={appointmentsByDate}
+            openNewAppointment={openNewAppointment}
+            openAppointmentDetail={openAppointmentDetail}
+            openEditAppointment={openEditAppointment}
+            getPaymentForAppointment={getPaymentForAppointment}
+            activeSection={activeSection}
+            setActiveSection={setActiveSection}
+          />
+        )}
 
       {activeSection === "mensual" && (
         <MonthlyViewSection
@@ -2127,8 +2027,6 @@ await createAppointmentFollowups(appointment);
       {activeSection === "disponibilidad" && (
         <AvailabilitySection
           form={form}
-          designImagePreview={designImagePreview}
-          handleDesignImageChange={handleDesignImageChange}
           setActiveSection={setActiveSection}
           handleFormChange={handleFormChange}
           findAvailableSpaces={findAvailableSpaces}
@@ -2162,12 +2060,8 @@ function NewAppointmentSection({
   clients,
   staff,
   services,
-  extras,
   form,
-  designImagePreview,
-  handleDesignImageChange,
   serviceLines,
-  appointmentExtraLines,
   message,
   editingAppointmentId,
   activeSuggestion,
@@ -2183,53 +2077,49 @@ function NewAppointmentSection({
   handleServiceSearchKeyDown,
   addServiceLine,
   removeServiceLine,
-  addAppointmentExtraLine,
-  removeAppointmentExtraLine,
-  handleAppointmentExtraLineChange,
   setActiveSuggestion,
   handleSubmit,
+  appointmentExtraLines,
+addAppointmentExtraLine,
+removeAppointmentExtraLine,
+handleAppointmentExtraLineChange,
   findAvailableSpaces,
   availabilityMessage,
   availabilitySuggestions,
   applyAvailabilitySuggestion,
   getToastStyle,
 }) {
-  const [clientSearch, setClientSearch] = useState("");
-  const [showClientResults, setShowClientResults] = useState(false);
+    const selectedClient = clients.find((client) => client.id === form.client_id);
 
-  const selectedClient = clients.find((client) => client.id === form.client_id);
-
-  useEffect(() => {
-    if (selectedClient && !showClientResults) {
-      setClientSearch(
-        `${selectedClient.full_name || "Sin nombre"}${
+  const [clientSearch, setClientSearch] = useState(
+    selectedClient
+      ? `${selectedClient.full_name || "Sin nombre"}${
           selectedClient.phone ? ` - ${selectedClient.phone}` : ""
         }`
-      );
-    }
+      : ""
+  );
 
+  const [showClientResults, setShowClientResults] = useState(false);
+
+  useEffect(() => {
     if (!form.client_id) {
-      setClientSearch("");
+      return;
     }
+
+    if (!selectedClient) {
+      return;
+    }
+
+    if (showClientResults) {
+      return;
+    }
+
+    setClientSearch(
+      `${selectedClient.full_name || "Sin nombre"}${
+        selectedClient.phone ? ` - ${selectedClient.phone}` : ""
+      }`
+    );
   }, [form.client_id, selectedClient, showClientResults]);
-
-  const filteredClients = useMemo(() => {
-    const term = clientSearch.trim().toLowerCase();
-
-    if (!term) {
-      return clients.slice(0, 8);
-    }
-
-    return clients
-      .filter((client) => {
-        return (
-          client.full_name?.toLowerCase().includes(term) ||
-          client.phone?.toLowerCase().includes(term) ||
-          client.email?.toLowerCase().includes(term)
-        );
-      })
-      .slice(0, 8);
-  }, [clients, clientSearch]);
 
   const selectClient = (client) => {
     handleFormChange({
@@ -2249,35 +2139,28 @@ function NewAppointmentSection({
 
     setShowClientResults(false);
   };
-  const getExtraMatches = (query) => {
-    const term = String(query || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim();
+  const filteredClients = clients.filter((client) => {
+  const search = clientSearch.trim().toLowerCase();
 
-    if (!term) {
-      return extras.slice(0, 8);
-    }
+  if (!search) return false;
 
-    return extras
-      .filter((extra) => {
-        const text = `${extra.category || ""} ${extra.name || ""} ${
-          extra.price || ""
-        }`
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "");
+  const name = String(client.full_name || "").toLowerCase();
+  const phone = String(client.phone || "").toLowerCase();
+  const email = String(client.email || "").toLowerCase();
 
-        return text.includes(term);
-      })
-      .slice(0, 8);
-  };
+  return (
+    name.includes(search) ||
+    phone.includes(search) ||
+    email.includes(search)
+  );
+});
 
-  const selectAppointmentExtra = (index, extra) => {
-    handleAppointmentExtraLineChange(index, "extra_id", extra.id);
-  };
+const shouldShowClientResults =
+  showClientResults && clientSearch.trim() && filteredClients.length > 0;
 
+const shouldShowNoClientFound =
+  showClientResults && clientSearch.trim() && filteredClients.length === 0;
+  
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_0.45fr]">
       <Card>
@@ -2298,7 +2181,7 @@ function NewAppointmentSection({
                 Clienta *
               </label>
 
-              <div className="relative">
+<div className="relative">
   <input
     value={clientSearch}
     onChange={(event) => {
@@ -2319,32 +2202,32 @@ function NewAppointmentSection({
     className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
   />
 
-  {showClientResults && (
+  {shouldShowClientResults && (
     <div className="absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[#dde3e6] bg-white p-2 shadow-xl">
-      {filteredClients.length === 0 ? (
-        <div className="px-4 py-3 text-sm text-[#68777c]">
-          No encontré clientas con esa búsqueda.
-        </div>
-      ) : (
-        filteredClients.map((client) => (
-          <button
-            key={client.id}
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => selectClient(client)}
-            className="block w-full rounded-xl px-4 py-3 text-left text-sm transition hover:bg-[#f7eeee]"
-          >
-            <span className="block font-medium text-[#263238]">
-              {client.full_name || "Sin nombre"}
-            </span>
-            <span className="text-xs text-[#68777c]">
-              {client.phone || "Sin teléfono"}
-              {client.email ? ` · ${client.email}` : ""}
-            </span>
-          </button>
-        ))
-      )}
+      {filteredClients.map((client) => (
+        <button
+          key={client.id}
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => selectClient(client)}
+          className="block w-full rounded-xl px-4 py-3 text-left text-sm transition hover:bg-[#f7eeee]"
+        >
+          <span className="block font-medium text-[#263238]">
+            {client.full_name || "Sin nombre"}
+          </span>
+          <span className="text-xs text-[#68777c]">
+            {client.phone || "Sin teléfono"}
+            {client.email ? ` · ${client.email}` : ""}
+          </span>
+        </button>
+      ))}
     </div>
+  )}
+
+  {shouldShowNoClientFound && (
+    <p className="mt-2 rounded-2xl bg-[#fff6fb] px-4 py-3 text-xs text-[#bd7b83]">
+      No encontré clienta con esa búsqueda. Puedes registrarla como nueva.
+    </p>
   )}
 
   {form.client_id && selectedClient && (
@@ -2378,59 +2261,7 @@ function NewAppointmentSection({
             </div>
           </div>
 
-                    <div className="rounded-[1.5rem] bg-[#fff6fb] p-4">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-                  Foto del diseno
-                </p>
-                <p className="mt-1 text-sm text-[#68777c]">
-                  Sube la referencia que desea la clienta para que la tecnica pueda verla al abrir la cita.
-                </p>
-              </div>
-
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white">
-                Subir foto
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={handleDesignImageChange}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            {designImagePreview && (
-              <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-[#ead2cf] bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-4">
-                  <img
-                    src={designImagePreview}
-                    alt="Diseno de referencia"
-                    className="h-24 w-24 rounded-2xl object-cover"
-                  />
-
-                  <div>
-                    <p className="text-sm font-medium text-[#263238]">
-                      Imagen de referencia cargada
-                    </p>
-                    <p className="mt-1 text-xs text-[#68777c]">
-                      Se guardara junto con la cita.
-                    </p>
-                  </div>
-                </div>
-
-                <a
-                  href={designImagePreview}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-full bg-[#bd7b83] px-5 py-3 text-center text-sm text-white transition hover:opacity-90"
-                >
-                  Ver diseno
-                </a>
-              </div>
-            )}
-          </div>
-<div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
+          <div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
               <div>
                 <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
@@ -2441,55 +2272,23 @@ function NewAppointmentSection({
                 </p>
               </div>
 
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="flex gap-2">
+  <button
+    type="button"
+    onClick={addAppointmentExtraLine}
+    className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+  >
+    Extras
+  </button>
 
-
-                <button
-
-
-                  type="button"
-
-
-                  onClick={addAppointmentExtraLine}
-
-
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-
-
-                >
-
-
-                  Extras
-
-
-                </button>
-
-
-              
-
-
-                <button
-
-
-                  type="button"
-
-
-                  onClick={addServiceLine}
-
-
-                  className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
-
-
-                >
-
-
-                  Agregar servicio
-
-
-                </button>
-
-
-              </div>
+  <button
+    type="button"
+    onClick={addServiceLine}
+    className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
+  >
+    Agregar servicio
+  </button>
+</div>
             </div>
 
             <div className="mt-5 space-y-4">
@@ -2525,6 +2324,135 @@ function NewAppointmentSection({
                         </button>
                       )}
                     </div>
+
+                    {(appointmentExtraLines || []).length > 0 && (
+  <div className="mt-5 rounded-[1.5rem] bg-[#fff6fb] p-4">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+          Extras de la cita
+        </p>
+        <p className="mt-1 text-sm text-[#68777c]">
+          Agrega decoraciones, retiros, largo extra u otros cargos.
+        </p>
+      </div>
+    </div>
+
+    <div className="mt-4 space-y-4">
+      {(appointmentExtraLines || []).map((line, index) => (
+        <div
+          key={index}
+          className="rounded-2xl border border-[#dde3e6] bg-white p-4"
+        >
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="font-medium text-[#263238]">
+              Extra {index + 1}
+            </h3>
+
+            <button
+              type="button"
+              onClick={() => removeAppointmentExtraLine(index)}
+              className="text-sm text-[#bd7b83]"
+            >
+              Quitar
+            </button>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="lg:col-span-2">
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Nombre del extra *
+              </label>
+              <input
+                value={line.name}
+                onChange={(event) =>
+                  handleAppointmentExtraLineChange(
+                    index,
+                    "name",
+                    event.target.value
+                  )
+                }
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Ej. Francés, retiro, largo extra, cristales..."
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Cantidad
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={line.quantity}
+                onChange={(event) =>
+                  handleAppointmentExtraLineChange(
+                    index,
+                    "quantity",
+                    event.target.value
+                  )
+                }
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Precio unitario
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={line.unit_price}
+                onChange={(event) =>
+                  handleAppointmentExtraLineChange(
+                    index,
+                    "unit_price",
+                    event.target.value
+                  )
+                }
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Total
+              </label>
+              <input
+                value={line.total_price}
+                readOnly
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#edf0f2] px-4 py-3 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Notas
+              </label>
+              <input
+                value={line.notes}
+                onChange={(event) =>
+                  handleAppointmentExtraLineChange(
+                    index,
+                    "notes",
+                    event.target.value
+                  )
+                }
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Detalle opcional"
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div className="relative">
@@ -2776,188 +2704,6 @@ function NewAppointmentSection({
             </div>
           </div>
 
-          {appointmentExtraLines.length > 0 && (
-            <div className="rounded-[1.5rem] bg-[#fff6fb] p-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-                  Extras de la cita
-                </p>
-                <p className="mt-1 text-sm text-[#68777c]">
-                  Agrega decoraciones, retiros, largo extra u otros cargos.
-                </p>
-              </div>
-
-              <div className="mt-4 space-y-4">
-                {appointmentExtraLines.map((line, index) => (
-                  <div
-                    key={index}
-                    className="rounded-2xl border border-[#dde3e6] bg-white p-4"
-                  >
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <h3 className="font-medium text-[#263238]">
-                        Extra {index + 1}
-                      </h3>
-
-                      <button
-                        type="button"
-                        onClick={() => removeAppointmentExtraLine(index)}
-                        className="text-sm text-[#bd7b83]"
-                      >
-                        Quitar
-                      </button>
-                    </div>
-
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                      <div className="relative lg:col-span-2">
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Extra / decoracion *
-                        </label>
-                        <input
-                          value={line.extra_search || line.name || ""}
-                          onChange={(event) =>
-                            handleAppointmentExtraLineChange(
-                              index,
-                              "extra_search",
-                              event.target.value
-                            )
-                          }
-                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                          placeholder="Escribe frances, retiro, largo extra, cristales..."
-                        />
-
-                        {(line.extra_search || "").trim() &&
-                          !line.extra_id &&
-                          getExtraMatches(line.extra_search).length > 0 && (
-                            <div className="absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[#dde3e6] bg-white p-2 shadow-xl">
-                              {getExtraMatches(line.extra_search).map((extra) => (
-                                <button
-                                  key={extra.id}
-                                  type="button"
-                                  onMouseDown={(event) => event.preventDefault()}
-                                  onClick={() =>
-                                    selectAppointmentExtra(index, extra)
-                                  }
-                                  className="block w-full rounded-xl px-4 py-3 text-left text-sm transition hover:bg-[#f7eeee]"
-                                >
-                                  <span className="block font-medium text-[#263238]">
-                                    {extra.category} - {extra.name}
-                                  </span>
-                                  <span className="text-xs text-[#68777c]">
-                                    ${Number(extra.price || 0).toFixed(2)}
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-
-                        {(line.extra_search || "").trim() &&
-                          !line.extra_id &&
-                          getExtraMatches(line.extra_search).length === 0 && (
-                            <p className="mt-2 text-xs text-[#bd7b83]">
-                              No encontre extras con esa busqueda.
-                            </p>
-                          )}
-
-                        {line.extra_id && (
-                          <p className="mt-2 text-xs text-[#68777c]">
-                            Seleccionado: {line.name} Â· $
-                            {Number(line.unit_price || 0).toFixed(2)}
-                          </p>
-                        )}
-
-                        {extras.length === 0 && (
-                          <p className="mt-2 text-xs text-[#bd7b83]">
-                            Aun no hay extras activos cargados.
-                          </p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Cantidad
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={line.quantity}
-                          onChange={(event) =>
-                            handleAppointmentExtraLineChange(
-                              index,
-                              "quantity",
-                              event.target.value
-                            )
-                          }
-                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Precio unitario
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={line.unit_price}
-                          onChange={(event) =>
-                            handleAppointmentExtraLineChange(
-                              index,
-                              "unit_price",
-                              event.target.value
-                            )
-                          }
-                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Total
-                        </label>
-                        <input
-                          value={line.total_price}
-                          readOnly
-                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#edf0f2] px-4 py-3 outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm text-[#68777c]">
-                          Notas
-                        </label>
-                        <input
-                          value={line.notes}
-                          onChange={(event) =>
-                            handleAppointmentExtraLineChange(
-                              index,
-                              "notes",
-                              event.target.value
-                            )
-                          }
-                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                          placeholder="Detalle opcional"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={addAppointmentExtraLine}
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                >
-                  + Agregar otro extra
-                </button>
-              </div>
-            </div>
-          )}
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label className="mb-2 block text-sm text-[#68777c]">
@@ -3097,7 +2843,7 @@ function QuickClientModal({
             onClick={onClose}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
           >
-            Ã—
+            ×
           </button>
         </div>
 
@@ -3245,8 +2991,8 @@ function AvailabilityCard({
 
       {availabilitySuggestions.length === 0 ? (
         <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-          Aún no hay sugerencias. Selecciona servicios y presiona â€œBuscar
-          espacio disponibleâ€.
+          Aún no hay sugerencias. Selecciona servicios y presiona “Buscar
+          espacio disponible”.
         </div>
       ) : (
         <div className="space-y-3">
@@ -3320,7 +3066,7 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-[12px] text-[#bd7b83] shadow-sm"
         title="Editar cita"
       >
-        âœï¸
+        ✏️
       </button>
 
       {payment && (
@@ -3366,12 +3112,11 @@ function DailyViewSection({
         description="Filas por horario y columnas por técnica. Da clic en una celda libre para agendar."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-              className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-            />
+            <DateNavigation
+  selectedDate={selectedDate}
+  setSelectedDate={setSelectedDate}
+  mode="day"
+/>
 
             <ViewButtons
               activeSection={activeSection}
@@ -3512,12 +3257,11 @@ function WeeklyViewSection({
         description="Da clic en un día para crear una cita con esa fecha preseleccionada."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-              className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-            />
+            <DateNavigation
+  selectedDate={selectedDate}
+  setSelectedDate={setSelectedDate}
+  mode="week"
+/>
 
             <ViewButtons
               activeSection={activeSection}
@@ -3604,12 +3348,11 @@ function MonthlyViewSection({
         description="Da clic en cualquier día para crear una cita con esa fecha preseleccionada."
         action={
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-              className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-            />
+            <DateNavigation
+  selectedDate={selectedDate}
+  setSelectedDate={setSelectedDate}
+  mode="month"
+/>
 
             <ViewButtons
               activeSection={activeSection}
@@ -3850,25 +3593,92 @@ useEffect(() => {
 
 const canUseManualWhatsApp = currentRole !== "tecnica";
 
-  const reminderMessage = `Hola ${clientFirstName} ðŸ’• Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
+  const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
-  const onTheWayMessage = `Hola ${clientFirstName} ðŸ’• Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos ✨`;
+  const onTheWayMessage = `Hola ${clientFirstName} 💕 Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos ✨`;
 
-  const lateMessage = `Hola ${clientFirstName} ðŸ’• Notamos que tu cita era a las ${appointmentTime}. ¿Nos confirmas si vienes en camino o si tuviste algún retraso?`;
+  const lateMessage = `Hola ${clientFirstName} 💕 Notamos que tu cita era a las ${appointmentTime}. ¿Nos confirmas si vienes en camino o si tuviste algún retraso?`;
 
-  const thankYouMessage = `Hola ${clientFirstName} ðŸ’• Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
+  const thankYouMessage = `Hola ${clientFirstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
 
  const reviewBaseUrl = "https://alexandra-ruiz-salon.vercel.app";
 
 const reviewLink = `${reviewBaseUrl}/calificar/${appointment.id}`;
 
-const reviewMessage = `Hola ${clientFirstName} ðŸ’• Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
+const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
 
 Puedes calificarnos aquí:
 ${reviewLink}`;
 
 const goToPayment = () => {
   window.location.href = `/admin/cobros?appointmentId=${appointment.id}`;
+};
+
+const [deletingAppointment, setDeletingAppointment] = useState(false);
+const [deleteMessage, setDeleteMessage] = useState("");
+
+const canDeleteAppointment = ["admin", "encargada"].includes(currentRole);
+
+const deleteAppointment = async () => {
+  setDeleteMessage("");
+
+  const confirmDelete = window.confirm(
+    "¿Seguro que deseas borrar esta cita? Esta acción no se puede deshacer."
+  );
+
+  if (!confirmDelete) return;
+
+  setDeletingAppointment(true);
+
+  const { data: existingPayments, error: paymentCheckError } = await supabase
+    .from("payments")
+    .select("id")
+    .eq("appointment_id", appointment.id)
+    .limit(1);
+
+  if (paymentCheckError) {
+    setDeleteMessage(
+      `No se pudo validar si la cita ya tiene cobros: ${paymentCheckError.message}`
+    );
+    setDeletingAppointment(false);
+    return;
+  }
+
+  if (existingPayments && existingPayments.length > 0) {
+    setDeleteMessage(
+      "Esta cita ya tiene un cobro registrado. Por seguridad no se puede borrar desde agenda."
+    );
+    setDeletingAppointment(false);
+    return;
+  }
+
+  const { error: servicesError } = await supabase
+    .from("appointment_services")
+    .delete()
+    .eq("appointment_id", appointment.id);
+
+  if (servicesError) {
+    setDeleteMessage(
+      `No se pudieron borrar los servicios de la cita: ${servicesError.message}`
+    );
+    setDeletingAppointment(false);
+    return;
+  }
+
+  const { error: appointmentError } = await supabase
+    .from("appointments")
+    .delete()
+    .eq("id", appointment.id);
+
+  if (appointmentError) {
+    setDeleteMessage(`No se pudo borrar la cita: ${appointmentError.message}`);
+    setDeletingAppointment(false);
+    return;
+  }
+
+  setDeletingAppointment(false);
+  onClose();
+  window.location.reload();
 };
 
   return (
@@ -3880,14 +3690,18 @@ const goToPayment = () => {
           onClick={onEdit}
           className="absolute right-14 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7eeee] text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
           title="Editar cita"
-        >Editar</button>
+        >
+          ✏️
+        </button>
 
         <button
           type="button"
           onClick={onClose}
           className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c] transition hover:bg-[#edf0f2]"
           title="Cerrar"
-        >X</button>
+        >
+          ×
+        </button>
 
         <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
           Detalle de cita
@@ -3955,43 +3769,33 @@ const goToPayment = () => {
   </div>
 )}
 
-        {appointment.design_image_url && (
-          <div className="mt-5 rounded-2xl border border-[#ead2cf] bg-[#fff6fb] p-4">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                  Diseno solicitado
-                </p>
-                <p className="mt-1 text-sm text-[#68777c]">
-                  La tecnica puede abrir la imagen de referencia antes de iniciar el servicio.
-                </p>
-              </div>
-
-              <a
-                href={appointment.design_image_url}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-full bg-[#bd7b83] px-5 py-3 text-center text-sm text-white transition hover:opacity-90"
-              >
-                Ver diseno
-              </a>
-            </div>
-
-            <img
-              src={appointment.design_image_url}
-              alt="Diseno solicitado"
-              className="mt-4 max-h-80 w-full rounded-2xl object-cover"
-            />
-          </div>
-        )}
 <div className="mt-6">
-  <button
-    type="button"
-    onClick={goToPayment}
-    className="rounded-full bg-green-600 px-5 py-3 text-sm text-white transition hover:opacity-90"
-  >
-    Cobrar cita
-  </button>
+  {deleteMessage && (
+    <div className="mb-3 rounded-2xl bg-red-600 px-5 py-4 text-sm font-medium text-white">
+      {deleteMessage}
+    </div>
+  )}
+
+  <div className="flex flex-col gap-3 sm:flex-row">
+    <button
+      type="button"
+      onClick={goToPayment}
+      className="rounded-full bg-green-600 px-5 py-3 text-sm text-white transition hover:opacity-90"
+    >
+      Cobrar cita
+    </button>
+
+    {canDeleteAppointment && (
+      <button
+        type="button"
+        disabled={deletingAppointment}
+        onClick={deleteAppointment}
+        className="rounded-full border border-red-500 px-5 py-3 text-sm text-red-600 transition hover:bg-red-600 hover:text-white disabled:opacity-60"
+      >
+        {deletingAppointment ? "Borrando..." : "Borrar cita"}
+      </button>
+    )}
+  </div>
 </div>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl bg-[#f7f9fa] p-4">
@@ -4086,14 +3890,3 @@ const goToPayment = () => {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-

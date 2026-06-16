@@ -16,41 +16,8 @@ const emptyForm = {
   active: true,
 };
 
-function getMessageType(message) {
-  const text = message.toLowerCase();
-
-  const isError =
-    text.includes("no se pudo") ||
-    text.includes("error") ||
-    text.includes("obligatorio") ||
-    text.includes("obligatorios") ||
-    text.includes("faltan");
-
-  const isSuccess =
-    text.includes("correctamente") ||
-    text.includes("activado") ||
-    text.includes("desactivado");
-
-  if (isError) return "error";
-  if (isSuccess) return "success";
-  return "info";
-}
-
-function getToastStyle(message) {
-  const type = getMessageType(message);
-
-  if (type === "error") {
-    return "bg-red-600 text-white shadow-[0_18px_45px_rgba(220,38,38,0.28)]";
-  }
-
-  if (type === "success") {
-    return "bg-green-600 text-white shadow-[0_18px_45px_rgba(22,163,74,0.25)]";
-  }
-
-  return "bg-[#8a5f63] text-white shadow-[0_18px_45px_rgba(138,95,99,0.25)]";
-}
-
 export default function ServiciosPage() {
+  const [session, setSession] = useState(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingServices, setLoadingServices] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -58,6 +25,7 @@ export default function ServiciosPage() {
   const [services, setServices] = useState([]);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [showCategoryOptions, setShowCategoryOptions] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState(null);
   const [form, setForm] = useState(emptyForm);
 
@@ -70,6 +38,7 @@ export default function ServiciosPage() {
         return;
       }
 
+      setSession(data.session);
       setLoadingSession(false);
       await loadServices();
     };
@@ -79,6 +48,7 @@ export default function ServiciosPage() {
 
   const loadServices = async () => {
     setLoadingServices(true);
+    setMessage("");
 
     const { data, error } = await supabase
       .from("services")
@@ -96,9 +66,29 @@ export default function ServiciosPage() {
   };
 
   const categories = useMemo(() => {
-    const unique = new Set(services.map((service) => service.category));
-    return Array.from(unique).sort();
+    const unique = new Set(
+      services
+        .map((service) => String(service.category || "").trim())
+        .filter(Boolean)
+    );
+
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
   }, [services]);
+
+  const categoryMatches = useMemo(() => {
+    const term = form.category.toLowerCase().trim();
+
+    if (!term) return categories;
+
+    return categories.filter((category) =>
+      category.toLowerCase().includes(term)
+    );
+  }, [categories, form.category]);
+
+  const categoryExists = categories.some(
+    (category) =>
+      category.toLowerCase().trim() === form.category.toLowerCase().trim()
+  );
 
   const filteredServices = useMemo(() => {
     const term = search.toLowerCase().trim();
@@ -126,14 +116,48 @@ export default function ServiciosPage() {
     }));
   };
 
+  const handleCategoryChange = (event) => {
+    const value = event.target.value;
+
+    setForm((current) => ({
+      ...current,
+      category: value,
+    }));
+
+    setShowCategoryOptions(true);
+  };
+
+  const selectCategory = (category) => {
+    setForm((current) => ({
+      ...current,
+      category,
+    }));
+
+    setShowCategoryOptions(false);
+  };
+
+  const useNewCategory = () => {
+    if (!form.category.trim()) return;
+
+    setForm((current) => ({
+      ...current,
+      category: current.category.trim(),
+    }));
+
+    setShowCategoryOptions(false);
+  };
+
   const resetForm = () => {
     setForm(emptyForm);
     setEditingServiceId(null);
+    setShowCategoryOptions(false);
+    setMessage("");
   };
 
   const handleEdit = (service) => {
     setEditingServiceId(service.id);
     setMessage("");
+    setShowCategoryOptions(false);
 
     setForm({
       category: service.category || "",
@@ -145,7 +169,7 @@ export default function ServiciosPage() {
       service_type: service.service_type || "servicio",
       variable_pricing: Boolean(service.variable_pricing),
       pricing_notes: service.pricing_notes || "",
-      active: Boolean(service.active),
+      active: service.active !== false,
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -183,34 +207,27 @@ export default function ServiciosPage() {
 
       if (error) {
         setMessage(`No se pudo actualizar el servicio: ${error.message}`);
-        setSaving(false);
-        return;
+      } else {
+        setMessage("Servicio actualizado correctamente ✨");
+        resetForm();
+        await loadServices();
       }
+    } else {
+      const { error } = await supabase.from("services").insert([serviceData]);
 
-      await loadServices();
-      resetForm();
-      setMessage("Servicio actualizado correctamente ✨");
-      setSaving(false);
-      return;
+      if (error) {
+        setMessage(`No se pudo guardar el servicio: ${error.message}`);
+      } else {
+        setMessage("Servicio registrado correctamente ✨");
+        resetForm();
+        await loadServices();
+      }
     }
 
-    const { error } = await supabase.from("services").insert([serviceData]);
-
-    if (error) {
-      setMessage(`No se pudo crear el servicio: ${error.message}`);
-      setSaving(false);
-      return;
-    }
-
-    await loadServices();
-    resetForm();
-    setMessage("Servicio creado correctamente ✨");
     setSaving(false);
   };
 
   const toggleActive = async (service) => {
-    setMessage("Actualizando estado...");
-
     const { error } = await supabase
       .from("services")
       .update({
@@ -220,16 +237,11 @@ export default function ServiciosPage() {
       .eq("id", service.id);
 
     if (error) {
-      setMessage(`No se pudo cambiar el estado: ${error.message}`);
+      setMessage(`No se pudo actualizar el estado: ${error.message}`);
       return;
     }
 
     await loadServices();
-    setMessage(
-      service.active
-        ? "Servicio desactivado correctamente."
-        : "Servicio activado correctamente ✨"
-    );
   };
 
   const handleLogout = async () => {
@@ -255,7 +267,8 @@ export default function ServiciosPage() {
             </p>
             <h1 className="mt-3 text-4xl font-light">Servicios</h1>
             <p className="mt-2 text-sm text-[#6d5a58]">
-              Administra precios, duración, limpieza, descripciones y servicios activos.
+              Administra precios, duración, limpieza, descripciones y servicios
+              activos.
             </p>
           </div>
 
@@ -268,6 +281,7 @@ export default function ServiciosPage() {
             </a>
 
             <button
+              type="button"
               onClick={handleLogout}
               className="rounded-full bg-[#f2e4e1] px-6 py-3 text-[#8a5f63] transition hover:bg-[#edd8d4]"
             >
@@ -275,6 +289,12 @@ export default function ServiciosPage() {
             </button>
           </div>
         </div>
+
+        {message && (
+          <div className="mb-6 rounded-2xl bg-white px-5 py-4 text-sm text-[#8a5f63] shadow-sm">
+            {message}
+          </div>
+        )}
 
         <div className="grid gap-8 xl:grid-cols-[0.85fr_1.15fr]">
           <div className="h-fit rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
@@ -292,18 +312,65 @@ export default function ServiciosPage() {
               </div>
             )}
 
-            <div className="mt-6 space-y-4">
+            <div className="mt-6 space-y-5">
               <div>
                 <label className="mb-2 block text-sm text-[#6d5a58]">
                   Categoría *
                 </label>
-                <input
-                  name="category"
-                  value={form.category}
-                  onChange={handleChange}
-                  className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Ej. Extensiones de Uñas"
-                />
+
+                <div className="relative">
+                  <input
+                    name="category"
+                    value={form.category}
+                    onChange={handleCategoryChange}
+                    onFocus={() => setShowCategoryOptions(true)}
+                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                    placeholder="Ej. Extensiones de uñas"
+                  />
+
+                  {showCategoryOptions && form.category.trim() && (
+                    <div className="absolute z-30 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[#ead2cf] bg-white p-2 shadow-xl">
+                      {categoryMatches.length > 0 && (
+                        <div className="space-y-1">
+                          {categoryMatches.map((category) => (
+                            <button
+                              key={category}
+                              type="button"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => selectCategory(category)}
+                              className="block w-full rounded-xl px-4 py-3 text-left text-sm text-[#263238] transition hover:bg-[#f7eeee]"
+                            >
+                              {category}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {!categoryExists && form.category.trim() && (
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={useNewCategory}
+                          className="mt-2 block w-full rounded-xl bg-[#fff6fb] px-4 py-3 text-left text-sm text-[#bd7b83] transition hover:bg-[#f7eeee]"
+                        >
+                          + Usar &quot;{form.category.trim()}&quot; como nueva
+                          categoría
+                        </button>
+                      )}
+
+                      {categoryMatches.length === 0 && categoryExists && (
+                        <p className="px-4 py-3 text-sm text-[#6d5a58]">
+                          No hay más coincidencias.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <p className="mt-2 text-xs text-[#8a6f6c]">
+                  Puedes seleccionar una categoría existente o escribir una
+                  nueva.
+                </p>
               </div>
 
               <div>
@@ -319,23 +386,19 @@ export default function ServiciosPage() {
                 />
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div>
                   <label className="mb-2 block text-sm text-[#6d5a58]">
                     Precio base
                   </label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8a5f63]">
-                      $
-                    </span>
-                    <input
-                      type="number"
-                      name="base_price"
-                      value={form.base_price}
-                      onChange={handleChange}
-                      className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-8 py-3 outline-none"
-                    />
-                  </div>
+                  <input
+                    type="number"
+                    name="base_price"
+                    value={form.base_price}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                    placeholder="0"
+                  />
                 </div>
 
                 <div>
@@ -348,6 +411,7 @@ export default function ServiciosPage() {
                     value={form.duration_minutes}
                     onChange={handleChange}
                     className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                    placeholder="0"
                   />
                 </div>
 
@@ -361,6 +425,7 @@ export default function ServiciosPage() {
                     value={form.cleanup_minutes}
                     onChange={handleChange}
                     className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                    placeholder="0"
                   />
                 </div>
               </div>
@@ -390,7 +455,7 @@ export default function ServiciosPage() {
                   checked={form.variable_pricing}
                   onChange={handleChange}
                 />
-                Precio variable / requiere cotización
+                Precio variable
               </label>
 
               <label className="flex items-center gap-2 rounded-2xl bg-[#fcf7f6] p-4 text-sm text-[#6d5a58]">
@@ -407,12 +472,12 @@ export default function ServiciosPage() {
                 <label className="mb-2 block text-sm text-[#6d5a58]">
                   Notas de precio
                 </label>
-                <input
+                <textarea
                   name="pricing_notes"
                   value={form.pricing_notes}
                   onChange={handleChange}
-                  className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Ej. Precio desde $650 / requiere valoración"
+                  className="min-h-24 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                  placeholder="Ej. Precio puede variar según largo o diseño."
                 />
               </div>
 
@@ -424,44 +489,32 @@ export default function ServiciosPage() {
                   name="description"
                   value={form.description}
                   onChange={handleChange}
-                  className="min-h-32 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-                  placeholder="Descripción del servicio..."
+                  className="min-h-28 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                  placeholder="Descripción visible o interna del servicio."
                 />
               </div>
-            </div>
-
-            <div className="mt-6">
-              {message && (
-                <div
-                  className={`mb-3 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
-                    message
-                  )}`}
-                >
-                  {message}
-                </div>
-              )}
 
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={handleSave}
                   disabled={saving}
-                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                  onClick={handleSave}
+                  className="rounded-full bg-[#bd7b83] px-6 py-3 text-white transition hover:opacity-90 disabled:opacity-60"
                 >
                   {saving
                     ? "Guardando..."
                     : editingServiceId
-                    ? "Guardar cambios"
-                    : "Crear servicio"}
+                    ? "Actualizar servicio"
+                    : "Guardar servicio"}
                 </button>
 
                 {editingServiceId && (
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="rounded-full border border-[#bd7b83] px-6 py-4 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                    className="rounded-full border border-[#bd7b83] px-6 py-3 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
                   >
-                    Cancelar
+                    Cancelar edición
                   </button>
                 )}
               </div>
@@ -469,7 +522,7 @@ export default function ServiciosPage() {
           </div>
 
           <div className="rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.10)]">
-            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
                   Catálogo
@@ -483,6 +536,7 @@ export default function ServiciosPage() {
               </div>
 
               <button
+                type="button"
                 onClick={loadServices}
                 className="rounded-full border border-[#bd7b83] px-5 py-3 text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
               >
@@ -517,17 +571,13 @@ export default function ServiciosPage() {
                 <p className="text-sm text-[#6d5a58]">Cargando servicios...</p>
               ) : filteredServices.length === 0 ? (
                 <div className="rounded-2xl bg-[#fcf7f6] p-5 text-sm text-[#6d5a58]">
-                  No hay servicios con esos filtros.
+                  No hay servicios que coincidan con la búsqueda.
                 </div>
               ) : (
                 filteredServices.map((service) => (
                   <div
                     key={service.id}
-                    className={`rounded-2xl border p-5 ${
-                      service.active
-                        ? "border-[#ead2cf] bg-[#fdf8f6]"
-                        : "border-[#ead2cf] bg-[#f5eeee] opacity-70"
-                    }`}
+                    className="rounded-2xl border border-[#ead2cf] bg-[#fdf8f6] p-5"
                   >
                     <div className="flex flex-col justify-between gap-4 md:flex-row">
                       <div>
@@ -543,12 +593,15 @@ export default function ServiciosPage() {
                           <p>Precio: ${service.base_price || 0}</p>
                           <p>Duración: {service.duration_minutes || 0} min</p>
                           <p>Limpieza: {service.cleanup_minutes || 0} min</p>
-                          <p>Tipo: {service.service_type || "servicio"}</p>
+                          <p>
+                            Estado:{" "}
+                            {service.active ? "Activo" : "Inactivo"}
+                          </p>
                         </div>
 
                         {service.variable_pricing && (
-                          <p className="mt-3 rounded-full bg-[#fcf0ef] px-3 py-1 text-xs text-[#8a5f63]">
-                            Precio variable / requiere cotización
+                          <p className="mt-3 rounded-xl bg-[#fff6fb] p-3 text-sm text-[#8a5f63]">
+                            Precio variable
                           </p>
                         )}
 

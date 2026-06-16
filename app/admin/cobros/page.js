@@ -100,11 +100,7 @@ function getAppointmentStaffText(appointment) {
 }
 
 function getAppointmentTotal(appointment) {
-  const services = appointment.appointment_services || [];
-
-  if (appointment.estimated_total) {
-    return Number(appointment.estimated_total || 0);
-  }
+  const services = appointment?.appointment_services || [];
 
   return services.reduce((sum, item) => {
     return sum + Number(item.total_price || item.price || 0);
