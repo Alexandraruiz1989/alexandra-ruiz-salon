@@ -61,7 +61,7 @@ export async function POST(request) {
     const origin =
       request.headers.get("origin") ||
       process.env.NEXT_PUBLIC_SITE_URL ||
-      "http://localhost:3000";
+      "https://www.alexandraruizsalon.com/crear-password";
 
    const redirectTo = `${origin}/crear-password`;
 

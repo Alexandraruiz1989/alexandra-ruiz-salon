@@ -130,6 +130,7 @@ function CobrosContent() {
   const [selectedAppointment, setSelectedAppointment] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [savingPayment, setSavingPayment] = useState(false);
+  const [deletingPaymentId, setDeletingPaymentId] = useState(null);
 
   const [paymentForm, setPaymentForm] = useState({
     discount_amount: 0,
@@ -727,6 +728,60 @@ function CobrosContent() {
       return;
     }
 
+    const deletePayment = async (payment) => {
+  if (currentRole !== "admin") {
+    setMessage("Solo admin puede borrar cobros realizados.");
+    return;
+  }
+
+  const confirmDelete = window.confirm(
+    "¿Seguro que deseas borrar este cobro? Se eliminará el recibo, servicios cobrados, extras, comisiones y movimiento de caja relacionado. Esta acción no se puede deshacer."
+  );
+
+  if (!confirmDelete) return;
+
+  setDeletingPaymentId(payment.id);
+  setMessage("");
+
+  const relatedTables = [
+    "payment_extra_items",
+    "payment_service_items",
+    "payment_staff_totals",
+    "cash_movements",
+  ];
+
+  for (const tableName of relatedTables) {
+    const { error } = await supabase
+      .from(tableName)
+      .delete()
+      .eq("payment_id", payment.id);
+
+    if (error) {
+      setMessage(
+        `No se pudo borrar información relacionada en ${tableName}: ${error.message}`
+      );
+      setDeletingPaymentId(null);
+      return;
+    }
+  }
+
+  const { error: paymentError } = await supabase
+    .from("payments")
+    .delete()
+    .eq("id", payment.id);
+
+  if (paymentError) {
+    setMessage(`No se pudo borrar el cobro: ${paymentError.message}`);
+    setDeletingPaymentId(null);
+    return;
+  }
+
+  setMessage("Cobro borrado correctamente. La cita vuelve a quedar disponible para cobrar.");
+  setDeletingPaymentId(null);
+
+  window.location.reload();
+};
+
     const paymentPayload = {
       appointment_id: selectedAppointment.id,
       client_id: selectedAppointment.client_id,
@@ -1130,6 +1185,17 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
                         >
                           Ver recibo
                         </button>
+
+                        {currentRole === "admin" && (
+  <button
+    type="button"
+    disabled={deletingPaymentId === payment.id}
+    onClick={() => deletePayment(payment)}
+    className="rounded-full border border-red-500 px-5 py-2 text-sm text-red-600 transition hover:bg-red-600 hover:text-white disabled:opacity-60"
+  >
+    {deletingPaymentId === payment.id ? "Borrando..." : "Borrar cobro"}
+  </button>
+)}
 
                         {isAdmin && (
                           <button
