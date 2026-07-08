@@ -110,17 +110,17 @@ function normalizeServiceText(text) {
 }
 
 function serviceHasAcrylic(serviceName) {
-  return normalizeServiceText(serviceName).includes("acrilico");
+  return normalizeServiceText(serviceName).includes("acrilic");
 }
 
 function isAcrylicFill(serviceName) {
   const normalized = normalizeServiceText(serviceName);
-  return normalized.includes("relleno") && normalized.includes("acrilico");
+  return normalized.includes("relleno") && normalized.includes("acrilic");
 }
 
 function isAcrylicCycleReset(serviceName) {
   const normalized = normalizeServiceText(serviceName);
-  const hasAcrylic = normalized.includes("acrilico");
+  const hasAcrylic = normalized.includes("acrilic");
   const hasFill = normalized.includes("relleno");
   const hasRemoval = normalized.includes("retiro");
 
