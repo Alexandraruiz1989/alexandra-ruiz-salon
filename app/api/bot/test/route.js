@@ -622,6 +622,17 @@ function buildSelectedServicesMessage(services, notes = "") {
     )}${noteText}\n\n¿Tienes técnica de preferencia?\n\n1. Laura Canul\n2. Tania Mendez\n3. Alexandra Ruiz\n4. La colaboradora disponible`;
 }
 
+function buildSelectedServicePricesMessage(services) {
+  const lines = (services || [])
+    .map((service) => {
+      const price = Number(service.base_price || service.price || 0);
+      return `• ${service.name}${price > 0 ? `: $${price}` : ": te ayudamos a cotizarlo con más detalles"}`;
+    })
+    .join("\n");
+
+  return `Claro 💕 Sobre el servicio que estábamos revisando:\n\n${lines}\n\nEl precio puede variar si agregas diseño, largo, retiro o algún adicional.`;
+}
+
 function detectStaffPreference(text, staff) {
   const t = normalizeText(text);
 
@@ -906,6 +917,228 @@ function buildPromotionsResponse(settings, knowledgeItems, menuOptions, mediaAss
   return "Por ahora no tengo promociones activas configuradas 💕 Puedo ayudarte a revisar servicios, precios o disponibilidad para agendar.";
 }
 
+function getDefaultKnowledgeItems() {
+  return [
+    {
+      title: "Esmalte tradicional y gel",
+      category: "Servicios",
+      content:
+        "No usamos esmalte tradicional; trabajamos con gel para lograr mejor duración y acabado.",
+      keywords: "esmalte normal, esmalte tradicional, gel, gelish",
+      active: true,
+    },
+    {
+      title: "Pedicure en seco y uñeros",
+      category: "Pedicure",
+      content:
+        "Los servicios en seco no incluyen retiro de uñeros. Si hay uñeros profundos o molestia, se requiere valoración y puede orientarse a pedicure medicado según el caso.",
+      keywords: "pedicure en seco, uñeros, uneros, uñas encarnadas, encarnadas, pedicure medicado",
+      active: true,
+    },
+    {
+      title: "Uñas encarnadas",
+      category: "Pedicure",
+      content:
+        "Las uñas encarnadas requieren valoración. El equipo puede revisar el caso en cita y canalizar al servicio adecuado, como pedicure medicado si aplica.",
+      keywords: "uñas encarnadas, unas encarnadas, uñeros, uneros, valoración, pedicure medicado",
+      active: true,
+    },
+    {
+      title: "Rellenos de acrílico",
+      category: "Uñas",
+      content:
+        "El relleno de acrílico suele hacerse aproximadamente cada 3 semanas. Después de 2 rellenos posteriores a una aplicación, recomendamos retiro y nueva aplicación para cuidar la estructura.",
+      keywords: "relleno acrílico, relleno acrilico, cada cuanto, retiro, nueva aplicación",
+      active: true,
+    },
+    {
+      title: "Servicios de cejas",
+      category: "Cejas y pestañas",
+      content:
+        "Sí, puedes agregar servicios de cejas a tu cita si hay disponibilidad. Podemos revisar horarios junto con tus otros servicios.",
+      keywords: "cejas, diseño de cejas, depilación, agregar cejas",
+      active: true,
+    },
+    {
+      title: "Valoración profesional",
+      category: "General",
+      content:
+        "Cuando el caso requiere valoración, podemos revisarlo en cita o pasarlo con una persona del equipo para orientarte mejor.",
+      keywords: "valoración, valoracion, revisar, caso especial, duda",
+      active: true,
+    },
+  ];
+}
+
+function tokenizeText(value) {
+  return normalizeText(value)
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter(
+      (word) =>
+        word.length >= 4 &&
+        ![
+          "para",
+          "como",
+          "este",
+          "esta",
+          "esos",
+          "esas",
+          "tienen",
+          "quiero",
+          "puedo",
+          "puede",
+          "incluye",
+        ].includes(word)
+    );
+}
+
+function scoreKnowledgeText(searchText, itemText, keywords = "") {
+  const normalizedSearch = normalizeText(searchText);
+  const normalizedItem = normalizeText(itemText);
+  const normalizedKeywords = normalizeText(keywords);
+  const words = tokenizeText(normalizedSearch);
+
+  let score = 0;
+
+  for (const word of words) {
+    if (normalizedKeywords.includes(word)) score += 8;
+    if (normalizedItem.includes(word)) score += 5;
+  }
+
+  if (normalizedSearch.includes("unero") || normalizedSearch.includes("uneros")) {
+    if (normalizedItem.includes("unero") || normalizedItem.includes("uneros")) score += 30;
+  }
+
+  if (normalizedSearch.includes("encarnad")) {
+    if (normalizedItem.includes("encarnad") || normalizedItem.includes("medicado")) score += 30;
+  }
+
+  if (normalizedSearch.includes("esmalte")) {
+    if (normalizedItem.includes("esmalte") || normalizedItem.includes("gel")) score += 30;
+  }
+
+  if (normalizedSearch.includes("relleno") || normalizedSearch.includes("retiro")) {
+    if (normalizedItem.includes("relleno") || normalizedItem.includes("retiro")) score += 20;
+  }
+
+  if (normalizedSearch.includes("acril")) {
+    if (normalizedItem.includes("acril")) score += 25;
+  }
+
+  if (normalizedSearch.includes("pedicure") || normalizedSearch.includes("pedi")) {
+    if (normalizedItem.includes("pedicure") || normalizedItem.includes("pedi")) score += 20;
+  }
+
+  return score;
+}
+
+function formatRecentMessagesForSearch(messages) {
+  return (messages || [])
+    .slice(-6)
+    .map((message) => `${message.direction || ""}: ${message.body || ""}`)
+    .join("\n");
+}
+
+function isContextFollowUp(message) {
+  const text = normalizeText(message);
+  return (
+    text.includes("ese") ||
+    text.includes("esa") ||
+    text.includes("eso") ||
+    text.includes("este") ||
+    text.includes("esta") ||
+    text.includes("tambien") ||
+    text.includes("también") ||
+    text.startsWith("y ") ||
+    text.startsWith("¿y ") ||
+    text.includes("cuanto cuesta") ||
+    text.includes("cuánto cuesta")
+  );
+}
+
+function findBestKnowledgeAnswer({ incomingMessage, recentMessages, faqs, knowledgeItems }) {
+  const recentText = formatRecentMessagesForSearch(recentMessages);
+  const searchText = isContextFollowUp(incomingMessage)
+    ? `${recentText}\n${incomingMessage}`
+    : incomingMessage;
+
+  const faqCandidates = (faqs || [])
+    .filter((faq) => faq.active !== false)
+    .map((faq) => ({
+      type: "faq",
+      title: faq.question,
+      content: faq.answer,
+      score: scoreKnowledgeText(
+        searchText,
+        `${faq.question || ""} ${faq.answer || ""}`,
+        faq.keywords || ""
+      ),
+    }));
+
+  const knowledgeCandidates = (knowledgeItems || [])
+    .filter((item) => item.active !== false)
+    .map((item) => ({
+      type: "knowledge_base",
+      title: item.title,
+      content: item.content,
+      score: scoreKnowledgeText(
+        searchText,
+        `${item.title || ""} ${item.category || ""} ${item.content || ""}`,
+        item.keywords || ""
+      ),
+    }));
+
+  const best = [...faqCandidates, ...knowledgeCandidates].sort(
+    (a, b) => b.score - a.score
+  )[0];
+
+  return best && best.score >= 18 ? best : null;
+}
+
+async function generateKnowledgeReplyWithAI({
+  incomingMessage,
+  recentMessages,
+  matchedKnowledge,
+}) {
+  if (!aiEnabled || !openaiApiKey || !matchedKnowledge?.content) {
+    return matchedKnowledge?.content || "";
+  }
+
+  const openai = new OpenAI({
+    apiKey: openaiApiKey,
+  });
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: openaiModel,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Responde como el bot interno de Alexandra Ruiz Salón Spa. Tono profesional, cálido, claro y elegante. Sé breve. No uses 'hermosa' por defecto. Usa solo la información proporcionada; si no alcanza, ofrece pasar con una persona del equipo.",
+        },
+        {
+          role: "user",
+          content: `Últimos mensajes:\n${formatRecentMessagesForSearch(
+            recentMessages
+          )}\n\nInformación configurada:\nTítulo: ${
+            matchedKnowledge.title || "Información"
+          }\nContenido: ${
+            matchedKnowledge.content
+          }\n\nPregunta actual:\n${incomingMessage}`,
+        },
+      ],
+    });
+
+    return completion.choices?.[0]?.message?.content?.trim() || matchedKnowledge.content;
+  } catch (error) {
+    console.error("Knowledge AI reply error:", error);
+    return matchedKnowledge.content;
+  }
+}
+
 function getRequestedServicesText(context, ai) {
   const selectedServices = Array.isArray(context.selected_services)
     ? context.selected_services
@@ -1018,6 +1251,9 @@ function fallbackInterpret(message) {
   if (text.includes("softgel")) services.push("softgel");
   if (text.includes("acril")) services.push("uñas acrílicas");
   if (text.includes("polygel")) services.push("polygel");
+  if (text.includes("ceja")) services.push("cejas");
+  if (text.includes("pestana") || text.includes("pestaña")) services.push("pestañas");
+  if (text.includes("cabello") || text.includes("pelo")) services.push("cabello");
   if (
     (text.includes("unas") || text.includes("uñas")) &&
     !services.some((service) => normalizeText(service).includes("una"))
@@ -1179,6 +1415,30 @@ async function getConversation(supabase, clientPhone) {
 
   if (error) throw error;
   return data;
+}
+
+async function getRecentBotMessages(supabase, conversationId, clientPhone) {
+  try {
+    let query = supabase
+      .from("bot_messages")
+      .select("direction, body, created_at")
+      .order("created_at", { ascending: false })
+      .limit(12);
+
+    if (conversationId) {
+      query = query.eq("conversation_id", conversationId);
+    } else {
+      query = query.eq("client_phone", clientPhone);
+    }
+
+    const { data, error } = await query;
+
+    if (error) return [];
+
+    return [...(data || [])].reverse();
+  } catch (error) {
+    return [];
+  }
 }
 
 async function saveConversation(supabase, clientPhone, clientName, updates) {
@@ -1577,6 +1837,15 @@ async function createAppointmentWithPayment({
     estimatedTotal,
   };
 }
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    aiConfigured: Boolean(aiEnabled && openaiApiKey),
+    model: openaiApiKey ? openaiModel : null,
+  });
+}
+
 export async function POST(request) {
   try {
     if (!supabaseUrl || !serviceRoleKey) {
@@ -1649,7 +1918,15 @@ export async function POST(request) {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const conversation = await getConversation(supabase, clientPhoneFromTest);
-    const context = conversation?.conversation_context || {};
+    const recentMessages = await getRecentBotMessages(
+      supabase,
+      conversation?.id,
+      clientPhoneFromTest
+    );
+    const context = {
+      ...(conversation?.conversation_context || {}),
+      recent_messages: recentMessages,
+    };
 
     const [
       settingsResult,
@@ -1708,7 +1985,10 @@ export async function POST(request) {
     const settings = settingsResult.data;
     const menuOptions = menuResult.data || [];
     const faqs = faqResult.data || [];
-    const knowledgeItems = knowledgeResult.data || [];
+    const knowledgeItems = [
+      ...(knowledgeResult.data || []),
+      ...getDefaultKnowledgeItems(),
+    ];
     const services = (servicesResult.data || []).filter(isServiceBookable);
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
@@ -1813,6 +2093,16 @@ export async function POST(request) {
       );
 
       matchedSource = "promotions";
+    }
+
+    if (
+      !reply &&
+      ai.wants_prices_or_menu &&
+      isContextFollowUp(incomingMessage) &&
+      selectedServicesFromContext.length > 0
+    ) {
+      reply = buildSelectedServicePricesMessage(selectedServicesFromContext);
+      matchedSource = "context_service_price";
     }
 
     if (
@@ -2338,41 +2628,20 @@ export async function POST(request) {
     }
 
     if (!reply) {
-      const matchedFaq = faqs.find((faq) => {
-        if (faq.active === false) return false;
-        const text = normalizeText(incomingMessage);
-        const question = normalizeText(faq.question);
-
-        return (
-          (faq.keywords && includesAnyKeyword(incomingMessage, faq.keywords)) ||
-          text.includes(question) ||
-          question.includes(text)
-        );
-      });
-
-      if (matchedFaq) {
-        reply = matchedFaq.answer;
-        matchedSource = "faq";
-      }
-    }
-
-    if (!reply) {
-      const matchedKnowledge = knowledgeItems.find((item) => {
-        if (item.active === false) return false;
-        const text = normalizeText(incomingMessage);
-        const title = normalizeText(item.title);
-        const category = normalizeText(item.category);
-
-        return (
-          (item.keywords && includesAnyKeyword(incomingMessage, item.keywords)) ||
-          text.includes(title) ||
-          text.includes(category)
-        );
+      const matchedKnowledge = findBestKnowledgeAnswer({
+        incomingMessage,
+        recentMessages,
+        faqs,
+        knowledgeItems,
       });
 
       if (matchedKnowledge) {
-        reply = matchedKnowledge.content;
-        matchedSource = "knowledge_base";
+        reply = await generateKnowledgeReplyWithAI({
+          incomingMessage,
+          recentMessages,
+          matchedKnowledge,
+        });
+        matchedSource = matchedKnowledge.type;
       }
     }
 

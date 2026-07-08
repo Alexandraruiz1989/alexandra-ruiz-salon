@@ -85,6 +85,7 @@ export default function BotPage() {
   const [activeSection, setActiveSection] = useState("configuracion");
 
   const [settings, setSettings] = useState(null);
+  const [aiStatus, setAiStatus] = useState(null);
   const [settingsForm, setSettingsForm] = useState({
     bot_name: "",
     welcome_message: "",
@@ -128,6 +129,7 @@ export default function BotPage() {
 
       setLoadingSession(false);
       await loadData();
+      await loadAiStatus();
     };
 
     start();
@@ -240,6 +242,23 @@ export default function BotPage() {
     }
 
     setLoadingData(false);
+  };
+
+  const loadAiStatus = async () => {
+    try {
+      const response = await fetch("/api/bot/test", { method: "GET" });
+      const data = await response.json();
+
+      if (response.ok) {
+        setAiStatus(data);
+      }
+    } catch (error) {
+      setAiStatus({
+        aiConfigured: false,
+        message:
+          "No se pudo validar el estado de IA. El bot seguirá funcionando con reglas básicas.",
+      });
+    }
   };
 
   const handleSettingsChange = (field, value) => {
@@ -368,6 +387,34 @@ export default function BotPage() {
     }
 
     setMessage(item.active ? "Información desactivada." : "Información activada ✨");
+    await loadData();
+  };
+
+  const deleteKnowledge = async (item) => {
+    setMessage("");
+
+    const confirmed = window.confirm(
+      `¿Seguro que deseas eliminar "${item.title}" de la base de conocimiento del bot?`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("bot_knowledge_base")
+      .delete()
+      .eq("id", item.id);
+
+    if (error) {
+      setMessage(`No se pudo eliminar la información: ${error.message}`);
+      return;
+    }
+
+    setMessage("Información eliminada correctamente.");
+
+    if (editingKnowledgeId === item.id) {
+      resetKnowledgeForm();
+    }
+
     await loadData();
   };
 
@@ -714,6 +761,16 @@ export default function BotPage() {
           />
 
           <div className="space-y-5">
+            {aiStatus && (
+              <div className="rounded-2xl bg-[#f7f9fa] px-5 py-4 text-sm text-[#68777c]">
+                {aiStatus.aiConfigured
+                  ? `IA conectada en modo servidor${
+                      aiStatus.model ? ` con ${aiStatus.model}` : ""
+                    }.`
+                  : "IA no conectada. El bot está funcionando con respuestas configuradas y reglas básicas."}
+              </div>
+            )}
+
             <InputField
               label="Nombre del bot"
               value={settingsForm.bot_name}
@@ -868,6 +925,7 @@ export default function BotPage() {
                     keywords={item.keywords}
                     onEdit={() => editKnowledge(item)}
                     onToggle={() => toggleKnowledgeStatus(item)}
+                    onDelete={() => deleteKnowledge(item)}
                     active={item.active}
                   />
                 ))}
@@ -1441,6 +1499,7 @@ function InfoCard({
   keywords,
   onEdit,
   onToggle,
+  onDelete,
   active,
 }) {
   return (
@@ -1486,6 +1545,16 @@ function InfoCard({
           >
             {active ? "Desactivar" : "Activar"}
           </button>
+
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded-full border border-red-500 px-5 py-2 text-sm text-red-600 transition hover:bg-red-600 hover:text-white"
+            >
+              Eliminar
+            </button>
+          )}
         </div>
       </div>
     </div>
