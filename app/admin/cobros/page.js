@@ -107,6 +107,10 @@ function getAppointmentTotal(appointment) {
   }, 0);
 }
 
+function normalizeRole(role) {
+  return String(role || "tecnica").trim().toLowerCase();
+}
+
 function CobrosContent() {
   const searchParams = useSearchParams();
   const appointmentIdFromUrl = searchParams.get("appointmentId");
@@ -141,7 +145,7 @@ function CobrosContent() {
 
   const [extraLines, setExtraLines] = useState([]);
 
-  const currentRole = currentProfile?.role || "tecnica";
+  const currentRole = normalizeRole(currentProfile?.role);
   const isAdmin = currentRole === "admin";
 
   useEffect(() => {
@@ -226,7 +230,7 @@ function CobrosContent() {
     setLoadingData(true);
     setMessage("");
 
-    const role = profileParam?.role || "tecnica";
+    const role = normalizeRole(profileParam?.role);
 
     const appointmentsQuery = appointmentIdFromUrl
       ? supabase
@@ -712,57 +716,71 @@ function CobrosContent() {
   };
 
   const deletePayment = async (payment) => {
-  if (currentRole !== "admin") {
-    setMessage("Solo admin puede borrar cobros realizados.");
-    return;
-  }
-
-  const confirmDelete = window.confirm(
-    "¿Seguro que deseas borrar este cobro? Se eliminará el recibo, servicios cobrados, extras, comisiones y movimiento de caja relacionado. Esta acción no se puede deshacer."
-  );
-
-  if (!confirmDelete) return;
-
-  setDeletingPaymentId(payment.id);
-  setMessage("");
-
-  const relatedTables = [
-    "payment_extra_items",
-    "payment_service_items",
-    "payment_staff_totals",
-    "cash_movements",
-  ];
-
-  for (const tableName of relatedTables) {
-    const { error } = await supabase
-      .from(tableName)
-      .delete()
-      .eq("payment_id", payment.id);
-
-    if (error) {
-      setMessage(
-        `No se pudo borrar información relacionada en ${tableName}: ${error.message}`
-      );
-      setDeletingPaymentId(null);
+    if (!isAdmin) {
+      setMessage("Solo admin puede borrar cobros realizados.");
       return;
     }
-  }
 
-  const { error: paymentError } = await supabase
-    .from("payments")
-    .delete()
-    .eq("id", payment.id);
+    if (!payment?.id) {
+      setMessage("No se pudo identificar el cobro que deseas borrar.");
+      return;
+    }
 
-  if (paymentError) {
-    setMessage(`No se pudo borrar el cobro: ${paymentError.message}`);
-    setDeletingPaymentId(null);
-    return;
-  }
+    const confirmDelete = window.confirm(
+      "¿Seguro que deseas borrar este cobro? Se eliminará el recibo, servicios cobrados, extras, comisiones y movimiento de caja relacionado. Esta acción no se puede deshacer."
+    );
 
-  setDeletingPaymentId(null);
-  await loadData(currentUser, currentProfile);
-  setMessage("Cobro borrado correctamente. La cita vuelve a quedar disponible para cobrar.");
-};
+    if (!confirmDelete) return;
+
+    setDeletingPaymentId(payment.id);
+    setMessage("");
+
+    try {
+      const relatedTables = [
+        "payment_extra_items",
+        "payment_service_items",
+        "payment_staff_totals",
+        "cash_movements",
+      ];
+
+      for (const tableName of relatedTables) {
+        const { error } = await supabase
+          .from(tableName)
+          .delete()
+          .eq("payment_id", payment.id);
+
+        if (error) {
+          setMessage(
+            `No se pudo borrar información relacionada en ${tableName}: ${error.message}`
+          );
+          return;
+        }
+      }
+
+      const { error: paymentError } = await supabase
+        .from("payments")
+        .delete()
+        .eq("id", payment.id);
+
+      if (paymentError) {
+        setMessage(`No se pudo borrar el cobro: ${paymentError.message}`);
+        return;
+      }
+
+      await loadData(currentUser, currentProfile);
+      setMessage(
+        "Cobro borrado correctamente. La cita vuelve a quedar disponible para cobrar."
+      );
+    } catch (error) {
+      setMessage(
+        `No se pudo borrar el cobro por un error inesperado: ${
+          error?.message || "intenta nuevamente."
+        }`
+      );
+    } finally {
+      setDeletingPaymentId(null);
+    }
+  };
 
   const savePayment = async () => {
     if (!selectedAppointment) return;
@@ -1185,16 +1203,22 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
                           Ver recibo
                         </button>
 
-                        {currentRole === "admin" && (
-  <button
-    type="button"
-    disabled={deletingPaymentId === payment.id}
-    onClick={() => deletePayment(payment)}
-    className="rounded-full border border-red-500 px-5 py-2 text-sm text-red-600 transition hover:bg-red-600 hover:text-white disabled:opacity-60"
-  >
-    {deletingPaymentId === payment.id ? "Borrando..." : "Borrar cobro"}
-  </button>
-)}
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            disabled={deletingPaymentId === payment.id}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              deletePayment(payment);
+                            }}
+                            className="rounded-full border border-red-500 px-5 py-2 text-sm text-red-600 transition hover:bg-red-600 hover:text-white disabled:opacity-60"
+                          >
+                            {deletingPaymentId === payment.id
+                              ? "Borrando..."
+                              : "Borrar cobro"}
+                          </button>
+                        )}
 
                         {isAdmin && (
                           <button

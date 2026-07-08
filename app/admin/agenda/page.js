@@ -3549,6 +3549,11 @@ function getAppointmentServicesText(appointment) {
     .map((service) => service.services?.name || "servicio")
     .join(", ");
 }
+
+function normalizeRole(role) {
+  return String(role || "tecnica").trim().toLowerCase();
+}
+
 function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const services = appointment.appointment_services || [];
   const clientName = appointment.clients?.full_name || "";
@@ -3632,7 +3637,9 @@ useEffect(() => {
   loadPreviousAppointment();
 }, [appointment.id, appointment.client_id, appointment.appointment_date, appointment.start_time]);
 
-const canUseManualWhatsApp = currentRole !== "tecnica";
+const normalizedRole = normalizeRole(currentRole);
+const isAdmin = normalizedRole === "admin";
+const canUseManualWhatsApp = normalizedRole !== "tecnica";
 
   const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
@@ -3658,12 +3665,12 @@ const goToPayment = () => {
 const [deletingAppointment, setDeletingAppointment] = useState(false);
 const [deleteMessage, setDeleteMessage] = useState("");
 
-const canDeleteAppointment = currentRole === "admin";
+const canDeleteAppointment = isAdmin;
 
 const deleteAppointment = async () => {
   setDeleteMessage("");
 
-  if (currentRole !== "admin") {
+  if (!isAdmin) {
     setDeleteMessage("Solo admin puede borrar citas.");
     return;
   }
