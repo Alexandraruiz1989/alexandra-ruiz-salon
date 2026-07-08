@@ -711,24 +711,7 @@ function CobrosContent() {
     }));
   };
 
-  const savePayment = async () => {
-    if (!selectedAppointment) return;
-
-    setSavingPayment(true);
-    setPaymentMessage("");
-    setMessage("");
-
-    const totals = getPaymentTotals();
-
-    const existingPayment = allPaidAppointmentIds.includes(selectedAppointment.id);
-
-    if (existingPayment) {
-      setPaymentMessage("Esta cita ya tiene un pago registrado.");
-      setSavingPayment(false);
-      return;
-    }
-
-    const deletePayment = async (payment) => {
+  const deletePayment = async (payment) => {
   if (currentRole !== "admin") {
     setMessage("Solo admin puede borrar cobros realizados.");
     return;
@@ -776,11 +759,27 @@ function CobrosContent() {
     return;
   }
 
-  setMessage("Cobro borrado correctamente. La cita vuelve a quedar disponible para cobrar.");
   setDeletingPaymentId(null);
-
-  window.location.reload();
+  await loadData(currentUser, currentProfile);
+  setMessage("Cobro borrado correctamente. La cita vuelve a quedar disponible para cobrar.");
 };
+
+  const savePayment = async () => {
+    if (!selectedAppointment) return;
+
+    setSavingPayment(true);
+    setPaymentMessage("");
+    setMessage("");
+
+    const totals = getPaymentTotals();
+
+    const existingPayment = allPaidAppointmentIds.includes(selectedAppointment.id);
+
+    if (existingPayment) {
+      setPaymentMessage("Esta cita ya tiene un pago registrado.");
+      setSavingPayment(false);
+      return;
+    }
 
     const paymentPayload = {
       appointment_id: selectedAppointment.id,

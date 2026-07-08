@@ -3558,6 +3558,9 @@ function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const servicesText = getAppointmentServicesText(appointment);
  
   const [currentRole, setCurrentRole] = useState("tecnica");
+  const [previousAppointment, setPreviousAppointment] = useState(null);
+  const [loadingPreviousAppointment, setLoadingPreviousAppointment] =
+    useState(true);
 
 useEffect(() => {
   const loadRole = async () => {
@@ -3591,6 +3594,44 @@ useEffect(() => {
   loadRole();
 }, []);
 
+useEffect(() => {
+  const loadPreviousAppointment = async () => {
+    if (!appointment.client_id) {
+      setPreviousAppointment(null);
+      setLoadingPreviousAppointment(false);
+      return;
+    }
+
+    setLoadingPreviousAppointment(true);
+
+    const { data, error } = await supabase
+      .from("appointments")
+      .select(`
+        id,
+        appointment_date,
+        start_time,
+        appointment_services (
+          id,
+          services (name)
+        )
+      `)
+      .eq("client_id", appointment.client_id)
+      .neq("id", appointment.id)
+      .or(
+        `appointment_date.lt.${appointment.appointment_date},and(appointment_date.eq.${appointment.appointment_date},start_time.lt.${appointment.start_time})`
+      )
+      .order("appointment_date", { ascending: false })
+      .order("start_time", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setPreviousAppointment(error ? null : data);
+    setLoadingPreviousAppointment(false);
+  };
+
+  loadPreviousAppointment();
+}, [appointment.id, appointment.client_id, appointment.appointment_date, appointment.start_time]);
+
 const canUseManualWhatsApp = currentRole !== "tecnica";
 
   const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
@@ -3617,10 +3658,15 @@ const goToPayment = () => {
 const [deletingAppointment, setDeletingAppointment] = useState(false);
 const [deleteMessage, setDeleteMessage] = useState("");
 
-const canDeleteAppointment = ["admin", "encargada"].includes(currentRole);
+const canDeleteAppointment = currentRole === "admin";
 
 const deleteAppointment = async () => {
   setDeleteMessage("");
+
+  if (currentRole !== "admin") {
+    setDeleteMessage("Solo admin puede borrar citas.");
+    return;
+  }
 
   const confirmDelete = window.confirm(
     "¿Seguro que deseas borrar esta cita? Esta acción no se puede deshacer."
@@ -3633,8 +3679,7 @@ const deleteAppointment = async () => {
   const { data: existingPayments, error: paymentCheckError } = await supabase
     .from("payments")
     .select("id")
-    .eq("appointment_id", appointment.id)
-    .limit(1);
+    .eq("appointment_id", appointment.id);
 
   if (paymentCheckError) {
     setDeleteMessage(
@@ -3645,11 +3690,41 @@ const deleteAppointment = async () => {
   }
 
   if (existingPayments && existingPayments.length > 0) {
-    setDeleteMessage(
-      "Esta cita ya tiene un cobro registrado. Por seguridad no se puede borrar desde agenda."
-    );
-    setDeletingAppointment(false);
-    return;
+    const paymentIds = existingPayments.map((payment) => payment.id);
+    const relatedPaymentTables = [
+      "payment_extra_items",
+      "payment_service_items",
+      "payment_staff_totals",
+      "cash_movements",
+    ];
+
+    for (const tableName of relatedPaymentTables) {
+      const { error } = await supabase
+        .from(tableName)
+        .delete()
+        .in("payment_id", paymentIds);
+
+      if (error) {
+        setDeleteMessage(
+          `No se pudo borrar información relacionada en ${tableName}: ${error.message}`
+        );
+        setDeletingAppointment(false);
+        return;
+      }
+    }
+
+    const { error: paymentsError } = await supabase
+      .from("payments")
+      .delete()
+      .eq("appointment_id", appointment.id);
+
+    if (paymentsError) {
+      setDeleteMessage(
+        `No se pudieron borrar los cobros de la cita: ${paymentsError.message}`
+      );
+      setDeletingAppointment(false);
+      return;
+    }
   }
 
   const { error: servicesError } = await supabase
@@ -3715,6 +3790,36 @@ const deleteAppointment = async () => {
           {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
           {formatTime(appointment.end_time)}
         </p>
+
+        <div className="mt-6 rounded-2xl bg-[#fff6fb] p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Última cita anterior
+          </p>
+          {loadingPreviousAppointment ? (
+            <p className="mt-3 text-sm text-[#68777c]">Cargando información...</p>
+          ) : previousAppointment ? (
+            <div className="mt-3 space-y-1 text-sm text-[#263238]">
+              <p><span className="font-medium">Fecha:</span>{" "}
+                {previousAppointment.appointment_date}</p>
+              <p><span className="font-medium">Hora:</span>{" "}
+                {formatTime(previousAppointment.start_time)}</p>
+              <p><span className="font-medium">Servicios:</span>{" "}
+                {(previousAppointment.appointment_services || [])
+                  .map((item) => item.services?.name)
+                  .filter(Boolean)
+                  .join(", ") || "Sin servicios registrados"}</p>
+              <p className="pt-2 text-[#68777c]">
+                Revisa esta información para confirmar si corresponde cobrar retiro,
+                cambio de técnica o algún adicional.
+              </p>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-[#68777c]">
+              No hay una cita anterior registrada para esta clienta.
+            </p>
+          )}
+        </div>
+
      {canUseManualWhatsApp && (
   <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
     <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
