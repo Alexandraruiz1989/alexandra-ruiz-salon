@@ -259,6 +259,41 @@ function asksPaymentProof(text) {
   return t.includes("ya pague") || t.includes("ya pagué") || t.includes("ya transferi") || t.includes("ya transferí") || t.includes("comprobante") || t.includes("anticipo enviado") || t.includes("te mande el pago") || t.includes("te mandé el pago");
 }
 
+function asksGreetingOrInfo(text) {
+  const t = normalizeText(text);
+  return (
+    t === "hola" ||
+    t === "buenas" ||
+    t.includes("hola") ||
+    t.includes("buenas") ||
+    t.includes("informacion") ||
+    t.includes("información")
+  );
+}
+
+function asksPromotions(text) {
+  const t = normalizeText(text);
+  return (
+    t.includes("promo") ||
+    t.includes("promocion") ||
+    t.includes("promoción") ||
+    t.includes("descuento") ||
+    t.includes("oferta")
+  );
+}
+
+function asksHumanHelp(text) {
+  const t = normalizeText(text);
+  return (
+    t.includes("persona") ||
+    t.includes("humano") ||
+    t.includes("asesor") ||
+    t.includes("alguien") ||
+    t.includes("equipo") ||
+    t.includes("hablar con")
+  );
+}
+
 function wantsExplanation(text) {
   const t = normalizeText(text);
   return t.includes("que es") || t.includes("qué es") || t.includes("explica") || t.includes("explicame") || t.includes("explícame") || t.includes("diferencia") || t.includes("recomiendas");
@@ -802,13 +837,145 @@ function buildMenuResponse(settings, menuOptions) {
     .filter((item) => item.active !== false)
     .sort((a, b) => Number(a.option_order || 0) - Number(b.option_order || 0));
 
-  if (activeOptions.length === 0) return welcome;
+  if (activeOptions.length === 0) {
+    return `${welcome}\n\n1. Agendar cita\n2. Ver servicios / precios\n3. Promociones\n4. Ubicación\n5. Horarios\n6. Hablar con una persona`;
+  }
 
   const optionsText = activeOptions
     .map((item) => `${item.option_order}. ${item.option_label}`)
     .join("\n");
 
   return `${welcome}\n\n${optionsText}`;
+}
+
+function buildServicesCatalogResponse(services) {
+  const categories = [
+    { label: "Uñas", keys: ["uña", "una", "acril", "softgel", "rubber", "polygel", "gel", "relleno", "extension"] },
+    { label: "Manicure", keys: ["manicure", "mani"] },
+    { label: "Pedicure", keys: ["pedicure", "pedi"] },
+    { label: "Cejas y pestañas", keys: ["ceja", "pestana", "pestaña"] },
+    { label: "Cabello", keys: ["cabello", "pelo", "tratamiento capilar"] },
+  ];
+
+  const lines = categories.map((category) => {
+    const matches = (services || [])
+      .filter((service) => {
+        const text = normalizeServiceText(service);
+        return category.keys.some((key) => text.includes(normalizeText(key)));
+      })
+      .slice(0, 5);
+
+    if (matches.length === 0) {
+      return `• ${category.label}: podemos ayudarte a cotizar si nos das más detalles.`;
+    }
+
+    return `• ${category.label}:\n${matches.map((service) => `  - ${serviceLine(service)}`).join("\n")}`;
+  });
+
+  return `Claro 💕 Estas son las categorías principales:\n\n${lines.join(
+    "\n\n"
+  )}\n\nSi no ves el precio exacto, dime qué tienes en mente y te ayudo a cotizarlo.`;
+}
+
+function buildPromotionsResponse(settings, knowledgeItems, menuOptions, mediaAssets) {
+  const configured =
+    settings?.promotions_message ||
+    settings?.promotion_message ||
+    settings?.promociones_message ||
+    "";
+
+  if (configured) return configured;
+
+  const promoAsset = getAssetByKey(mediaAssets, "promociones");
+  if (promoAsset) return mediaText(promoAsset);
+
+  const promoKnowledge = (knowledgeItems || []).find((item) => {
+    const text = normalizeText(`${item.title || ""} ${item.category || ""} ${item.keywords || ""}`);
+    return item.active !== false && (text.includes("promo") || text.includes("descuento") || text.includes("oferta"));
+  });
+
+  if (promoKnowledge?.content) return promoKnowledge.content;
+
+  const promoMenu = (menuOptions || []).find((item) => {
+    const text = normalizeText(`${item.option_key || ""} ${item.option_label || ""}`);
+    return item.active !== false && (text.includes("promo") || text.includes("descuento") || text.includes("oferta"));
+  });
+
+  if (promoMenu?.response_message) return promoMenu.response_message;
+
+  return "Por ahora no tengo promociones activas configuradas 💕 Puedo ayudarte a revisar servicios, precios o disponibilidad para agendar.";
+}
+
+function getRequestedServicesText(context, ai) {
+  const selectedServices = Array.isArray(context.selected_services)
+    ? context.selected_services
+    : [];
+
+  if (selectedServices.length > 0) {
+    return selectedServices.map((service) => service.name).join(" + ");
+  }
+
+  if (Array.isArray(ai.services_requested) && ai.services_requested.length > 0) {
+    return ai.services_requested.join(" + ");
+  }
+
+  return "";
+}
+
+async function saveAppointmentRequest(supabase, { conversationId, clientPhone, clientName, context, ai, incomingMessage }) {
+  const requestedService = getRequestedServicesText(context, ai);
+  const hasClearBookingIntent =
+    ai.intent === "book_appointment" ||
+    requestedService ||
+    context.requested_date ||
+    context.selected_slot ||
+    context.preferred_staff_name;
+
+  if (!hasClearBookingIntent) return null;
+
+  const requestedTime =
+    context.selected_slot?.start_time ||
+    (context.minimum_start_minutes !== null && context.minimum_start_minutes !== undefined
+      ? minutesToTime(context.minimum_start_minutes)
+      : null);
+
+  const notes = [
+    `Resumen: ${incomingMessage}`,
+    context.preferred_staff_name ? `Técnica preferida: ${context.preferred_staff_name}.` : "",
+    context.booking_notes ? `Notas: ${context.booking_notes}` : "",
+    conversationId ? `Conversación: ${conversationId}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const payload = {
+    client_name: context.client_full_name || clientName || null,
+    client_phone: clientPhone,
+    requested_service: requestedService || null,
+    requested_date: context.requested_date || context.selected_slot?.date || null,
+    requested_time: requestedTime || null,
+    status: "pendiente",
+    notes,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing } = await supabase
+    .from("bot_appointment_requests")
+    .select("id")
+    .eq("client_phone", clientPhone)
+    .eq("status", "pendiente")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const query = existing?.id
+    ? supabase.from("bot_appointment_requests").update(payload).eq("id", existing.id)
+    : supabase.from("bot_appointment_requests").insert([payload]);
+
+  const { error } = await query;
+  if (error) throw error;
+
+  return true;
 }
 
 function normalizeAIParsed(parsed) {
@@ -851,18 +1018,28 @@ function fallbackInterpret(message) {
   if (text.includes("softgel")) services.push("softgel");
   if (text.includes("acril")) services.push("uñas acrílicas");
   if (text.includes("polygel")) services.push("polygel");
+  if (
+    (text.includes("unas") || text.includes("uñas")) &&
+    !services.some((service) => normalizeText(service).includes("una"))
+  ) {
+    services.push("unas");
+  }
 
   return normalizeAIParsed({
     intent:
       asksPaymentProof(message)
         ? "payment_proof"
+        : asksHumanHelp(message)
+        ? "human_help"
         : asksLocation(message)
         ? "ask_location"
         : asksBusinessHours(message)
         ? "ask_business_hours"
+        : asksPromotions(message)
+        ? "ask_services"
         : text.includes("cita") || text.includes("agendar") || services.length > 0
         ? "book_appointment"
-        : text === "hola"
+        : asksGreetingOrInfo(message)
         ? "greeting"
         : "unknown",
     confidence: 0.4,
@@ -874,12 +1051,13 @@ function fallbackInterpret(message) {
     wants_location: asksLocation(message),
     wants_business_hours: asksBusinessHours(message),
     says_paid: asksPaymentProof(message),
-    wants_human: text.includes("persona") || text.includes("humano"),
+    wants_human: asksHumanHelp(message),
     wants_prices_or_menu:
       text.includes("precio") ||
       text.includes("precios") ||
       text.includes("menu") ||
-      text.includes("menú"),
+      text.includes("menú") ||
+      text.includes("servicios"),
     wants_explanation: wantsExplanation(message),
     add_to_existing_services:
       text.includes("tambien") ||
@@ -1537,6 +1715,31 @@ export async function POST(request) {
 
     const ai = await interpretWithAI(incomingMessage, context);
 
+    ai.wants_location = ai.wants_location || asksLocation(incomingMessage);
+    ai.wants_business_hours =
+      ai.wants_business_hours || asksBusinessHours(incomingMessage);
+    ai.says_paid = ai.says_paid || asksPaymentProof(incomingMessage);
+    ai.wants_human = ai.wants_human || asksHumanHelp(incomingMessage);
+    ai.wants_prices_or_menu =
+      ai.wants_prices_or_menu ||
+      normalizeText(incomingMessage).includes("servicios") ||
+      normalizeText(incomingMessage).includes("precio") ||
+      normalizeText(incomingMessage).includes("precios") ||
+      normalizeText(incomingMessage).includes("menu") ||
+      normalizeText(incomingMessage).includes("menú");
+
+    if (asksGreetingOrInfo(incomingMessage) && ai.intent === "unknown") {
+      ai.intent = "greeting";
+    }
+
+    if (asksHumanHelp(incomingMessage)) {
+      ai.intent = "human_help";
+    }
+
+    if (asksPaymentProof(incomingMessage)) {
+      ai.intent = "payment_proof";
+    }
+
     const requestedDate = parseRequestedDate(
       `${incomingMessage} ${ai.date_text || ""}`
     );
@@ -1599,6 +1802,28 @@ export async function POST(request) {
     if (!reply && !asksNearestAvailabilityBot(incomingMessage) && (ai.wants_business_hours || asksBusinessHours(incomingMessage))) {
       reply = BUSINESS_HOURS_MESSAGE;
       matchedSource = "business_hours";
+    }
+
+    if (!reply && asksPromotions(incomingMessage)) {
+      reply = buildPromotionsResponse(
+        settings,
+        knowledgeItems,
+        menuOptions,
+        mediaAssets
+      );
+
+      matchedSource = "promotions";
+    }
+
+    if (
+      !reply &&
+      ai.wants_prices_or_menu &&
+      ai.intent !== "book_appointment" &&
+      !asksNearestAvailabilityBot(incomingMessage)
+    ) {
+      reply = buildServicesCatalogResponse(services);
+      matchedSource = "services_catalog";
+      nextStep = "esperando_servicios";
     }
 
     if (!reply && nextStep === "esperando_nombre") {
@@ -1876,6 +2101,20 @@ export async function POST(request) {
       ? nextContext.selected_services
       : selectedServicesFromContext;
 
+    if (!reply && staffPreference && selectedServicesNow.length === 0) {
+      nextContext.preferred_staff_mode = staffPreference.mode;
+      nextContext.preferred_staff_id = staffPreference.staffId;
+      nextContext.preferred_staff_name = staffPreference.staffName;
+
+      reply =
+        staffPreference.mode === "available_priority"
+          ? "Perfecto 💕 Lo tomaré como sin técnica preferida y buscaremos con la colaboradora disponible.\n\n¿Qué servicio o servicios te gustaría agendar?"
+          : `Perfecto 💕 Buscaré con ${staffPreference.staffName}.\n\n¿Qué servicio o servicios te gustaría agendar?`;
+
+      matchedSource = "staff_preference_before_service";
+      nextStep = "esperando_servicios";
+    }
+
     if (
       !reply &&
       staffPreference &&
@@ -2044,6 +2283,44 @@ export async function POST(request) {
           nextStep = "esperando_servicios";
         }
       }
+
+      if (!reply) {
+        if (text === "1") {
+          reply = "Perfecto 💕 ¿Qué servicio o servicios te gustaría agendar?";
+          matchedSource = "default_menu_appointment";
+          nextStep = "esperando_servicios";
+          nextContext.selected_services = [];
+          nextContext.pending_service_options = [];
+          nextContext.available_options = [];
+        } else if (text === "2") {
+          reply = buildServicesCatalogResponse(services);
+          matchedSource = "default_menu_services";
+          nextStep = "esperando_servicios";
+        } else if (text === "3") {
+          reply = buildPromotionsResponse(
+            settings,
+            knowledgeItems,
+            menuOptions,
+            mediaAssets
+          );
+          matchedSource = "default_menu_promotions";
+        } else if (text === "4") {
+          reply = mediaText(
+            getAssetByKey(mediaAssets, "ubicacion_maps"),
+            LOCATION_FALLBACK_MESSAGE
+          );
+          matchedSource = "default_menu_location";
+        } else if (text === "5") {
+          reply = BUSINESS_HOURS_MESSAGE;
+          matchedSource = "default_menu_hours";
+        } else if (text === "6") {
+          reply =
+            settings?.human_help_message ||
+            "Claro 💕 Una persona del equipo dará seguimiento a tu conversación.";
+          matchedSource = "default_menu_human_help";
+          nextStep = "humano";
+        }
+      }
     }
 
     if (!reply && ai.intent === "human_help") {
@@ -2111,6 +2388,7 @@ export async function POST(request) {
       clientPhoneFromTest,
       clientNameFromTest,
       {
+        status: nextStep === "humano" ? "pendiente" : "abierta",
         last_message: incomingMessage,
         intent: ai.intent,
         current_step: nextStep,
@@ -2128,6 +2406,15 @@ export async function POST(request) {
         conversation_context: nextContext,
       }
     );
+
+    const appointmentRequestSaved = await saveAppointmentRequest(supabase, {
+      conversationId: savedConversation.id,
+      clientPhone: clientPhoneFromTest,
+      clientName: clientNameFromTest,
+      context: nextContext,
+      ai,
+      incomingMessage,
+    });
 
     await saveBotMessages(
       supabase,
@@ -2150,6 +2437,7 @@ export async function POST(request) {
       matchedSource,
       ai,
       step: nextStep,
+      appointmentRequestSaved: Boolean(appointmentRequestSaved),
     });
   } catch (error) {
     return NextResponse.json(
