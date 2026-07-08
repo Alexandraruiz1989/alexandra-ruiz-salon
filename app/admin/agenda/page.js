@@ -102,6 +102,31 @@ function formatTime(time) {
   return time.slice(0, 5);
 }
 
+function normalizeServiceText(text) {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function serviceHasAcrylic(serviceName) {
+  return normalizeServiceText(serviceName).includes("acrilico");
+}
+
+function isAcrylicFill(serviceName) {
+  const normalized = normalizeServiceText(serviceName);
+  return normalized.includes("relleno") && normalized.includes("acrilico");
+}
+
+function isAcrylicCycleReset(serviceName) {
+  const normalized = normalizeServiceText(serviceName);
+  const hasAcrylic = normalized.includes("acrilico");
+  const hasFill = normalized.includes("relleno");
+  const hasRemoval = normalized.includes("retiro");
+
+  return hasAcrylic && (!hasFill || hasRemoval);
+}
+
 function addMinutesToTime(time, minutes) {
   if (!time) return "";
 
@@ -447,6 +472,8 @@ const [quickClientForm, setQuickClientForm] = useState({
 
   const [serviceLines, setServiceLines] = useState([{ ...emptyServiceLine }]);
 const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
+const [acrylicWarning, setAcrylicWarning] = useState(null);
+const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
 
   useEffect(() => {
     const start = async () => {
@@ -1012,6 +1039,105 @@ const validAppointmentExtras = useMemo(() => {
 
     return times[times.length - 1] || null;
   }, [validServiceLines]);
+
+  useEffect(() => {
+    const loadAcrylicWarning = async () => {
+      if (!form.client_id || !form.appointment_date) {
+        setAcrylicWarning(null);
+        setLoadingAcrylicWarning(false);
+        return;
+      }
+
+      setLoadingAcrylicWarning(true);
+
+      const { data, error } = await supabase
+        .from("appointments")
+        .select(
+          `
+          id,
+          appointment_date,
+          start_time,
+          appointment_services (
+            id,
+            services (
+              name
+            )
+          )
+        `
+        )
+        .eq("client_id", form.client_id)
+        .order("appointment_date", { ascending: true })
+        .order("start_time", { ascending: true });
+
+      if (error) {
+        setAcrylicWarning({
+          type: "error",
+          message: `No se pudo revisar el historial de acrílico: ${error.message}`,
+        });
+        setLoadingAcrylicWarning(false);
+        return;
+      }
+
+      const appointmentDate = form.appointment_date;
+      const appointmentStart = earliestStartTime;
+
+      const previousAppointments = (data || []).filter((appointment) => {
+        if (editingAppointmentId && appointment.id === editingAppointmentId) {
+          return false;
+        }
+
+        if (appointment.appointment_date < appointmentDate) return true;
+        if (appointment.appointment_date > appointmentDate) return false;
+
+        if (!appointmentStart || !appointment.start_time) return false;
+
+        return appointment.start_time < appointmentStart;
+      });
+
+      let fillsAfterLastApplication = 0;
+      let lastApplication = null;
+      let lastAcrylicService = null;
+
+      previousAppointments.forEach((appointment) => {
+        const acrylicServices = (appointment.appointment_services || []).filter(
+          (item) => serviceHasAcrylic(item.services?.name)
+        );
+
+        acrylicServices.forEach((item) => {
+          const serviceName = item.services?.name || "Servicio de acrílico";
+          const serviceInfo = {
+            name: serviceName,
+            date: appointment.appointment_date,
+            time: appointment.start_time,
+          };
+
+          if (isAcrylicCycleReset(serviceName)) {
+            fillsAfterLastApplication = 0;
+            lastApplication = serviceInfo;
+          } else if (isAcrylicFill(serviceName)) {
+            fillsAfterLastApplication += 1;
+          }
+
+          lastAcrylicService = serviceInfo;
+        });
+      });
+
+      if (fillsAfterLastApplication >= 2) {
+        setAcrylicWarning({
+          type: "warning",
+          fillsAfterLastApplication,
+          lastApplication,
+          lastAcrylicService,
+        });
+      } else {
+        setAcrylicWarning(null);
+      }
+
+      setLoadingAcrylicWarning(false);
+    };
+
+    loadAcrylicWarning();
+  }, [form.client_id, form.appointment_date, earliestStartTime, editingAppointmentId]);
 
   const getServiceName = (serviceId) => {
     const service = services.find((item) => item.id === serviceId);
@@ -1955,6 +2081,8 @@ await createAppointmentFollowups(appointment);
           closedSuggestions={closedSuggestions}
           estimatedTotal={estimatedTotal}
           saving={saving}
+          acrylicWarning={acrylicWarning}
+          loadingAcrylicWarning={loadingAcrylicWarning}
           timeOptions={timeOptions}
           handleFormChange={handleFormChange}
           openQuickClientModal={openQuickClientModal}
@@ -2068,6 +2196,8 @@ function NewAppointmentSection({
   closedSuggestions,
   estimatedTotal,
   saving,
+  acrylicWarning,
+  loadingAcrylicWarning,
   timeOptions,
   handleFormChange,
   openQuickClientModal,
@@ -2260,6 +2390,69 @@ const shouldShowNoClientFound =
               />
             </div>
           </div>
+
+          {form.client_id && loadingAcrylicWarning && (
+            <div className="rounded-[1.5rem] border border-[#efd8b5] bg-[#fff9ef] p-4 text-sm text-[#8a5f2d]">
+              Revisando historial de acrílico de la clienta...
+            </div>
+          )}
+
+          {form.client_id && acrylicWarning?.type === "error" && (
+            <div className="rounded-[1.5rem] border border-[#f0c6c6] bg-[#fff6f6] p-4 text-sm text-[#9f3a3a]">
+              {acrylicWarning.message}
+            </div>
+          )}
+
+          {form.client_id && acrylicWarning?.type === "warning" && (
+            <div className="rounded-[1.5rem] border border-[#e8c48f] bg-[#fff8eb] p-5 text-[#5f4630]">
+              <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                Aviso de acrílico
+              </p>
+              <p className="mt-2 text-sm leading-6">
+                Esta clienta ya cuenta con 2 rellenos posteriores a su
+                aplicación de acrílico. Para cuidar la estructura y evitar
+                desprendimientos, corresponde agendar retiro de acrílico y
+                nueva aplicación.
+              </p>
+
+              <div className="mt-4 grid gap-3 text-xs text-[#68777c] md:grid-cols-3">
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <p className="uppercase tracking-[0.18em] text-[#bd7b83]">
+                    Última aplicación
+                  </p>
+                  <p className="mt-1 text-[#263238]">
+                    {acrylicWarning.lastApplication
+                      ? `${acrylicWarning.lastApplication.name} · ${
+                          acrylicWarning.lastApplication.date
+                        } ${formatTime(acrylicWarning.lastApplication.time)}`
+                      : "No detectada"}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <p className="uppercase tracking-[0.18em] text-[#bd7b83]">
+                    Rellenos detectados
+                  </p>
+                  <p className="mt-1 text-[#263238]">
+                    {acrylicWarning.fillsAfterLastApplication}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <p className="uppercase tracking-[0.18em] text-[#bd7b83]">
+                    Último acrílico
+                  </p>
+                  <p className="mt-1 text-[#263238]">
+                    {acrylicWarning.lastAcrylicService
+                      ? `${acrylicWarning.lastAcrylicService.name} · ${
+                          acrylicWarning.lastAcrylicService.date
+                        } ${formatTime(acrylicWarning.lastAcrylicService.time)}`
+                      : "No detectado"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
