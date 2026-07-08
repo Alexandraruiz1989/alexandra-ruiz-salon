@@ -296,7 +296,89 @@ function asksHumanHelp(text) {
 
 function wantsExplanation(text) {
   const t = normalizeText(text);
-  return t.includes("que es") || t.includes("qué es") || t.includes("explica") || t.includes("explicame") || t.includes("explícame") || t.includes("diferencia") || t.includes("recomiendas");
+  return (
+    t.includes("incluye") ||
+    t.includes("que trae") ||
+    t.includes("trae") ||
+    t.includes("es lo mismo") ||
+    t.includes("diferencia") ||
+    t.includes("cual es") ||
+    t.includes("cual me conviene") ||
+    t.includes("que es") ||
+    t.includes("explica") ||
+    t.includes("explicame") ||
+    t.includes("recomiendas") ||
+    t.includes("quita") ||
+    t.includes("cuanto cuesta ese") ||
+    /^ese\b/.test(t) ||
+    t.includes("ese servicio")
+  );
+}
+
+function findMentionedServiceForExplanation(message, options, services) {
+  const text = normalizeText(message);
+  const candidates = [...(options || []), ...(services || [])];
+  const unique = Array.from(
+    new Map(candidates.filter((service) => service?.id).map((service) => [service.id, service])).values()
+  );
+
+  const aliases = [
+    { keys: ["acripie"], match: (service) => normalizeServiceText(service).includes("acripie") },
+    { keys: ["medicado"], match: (service) => normalizeServiceText(service).includes("medicado") },
+    { keys: ["en seco", "seco"], match: (service) => normalizeServiceText(service).includes("seco") },
+    { keys: ["spa"], match: (service) => normalizeServiceText(service).includes("spa") },
+    { keys: ["clasico", "clásico"], match: (service) => normalizeServiceText(service).includes("clasico") },
+  ];
+
+  for (const alias of aliases) {
+    if (alias.keys.some((key) => text.includes(normalizeText(key)))) {
+      const matches = unique.filter(alias.match);
+      if (matches.length > 0) return matches[0];
+    }
+  }
+
+  return unique.find((service) => {
+    const name = normalizeText(service.name);
+    return name && text.includes(name);
+  });
+}
+
+function buildServiceExplanationReply(message, service) {
+  const text = normalizeText(message);
+  const serviceText = normalizeServiceText(service);
+  const price = Number(service?.base_price || 0);
+
+  if (serviceText.includes("acripie") || text.includes("acripie")) {
+    return "El Acripie no incluye pedicure completo. Es un servicio enfocado en la aplicación o reconstrucción estética en uñas de los pies. Si deseas limpieza, retiro de cutícula, hidratación o gel en pies, debes agendar un pedicure aparte o elegir un servicio de pedicure que lo incluya.\n\n¿Quieres que te ayude a elegir entre Acripie y un pedicure completo?";
+  }
+
+  if (serviceText.includes("medicado") || text.includes("medicado")) {
+    return "El pedicure medicado requiere valoración. Es el servicio indicado cuando hay molestias, uñeros, uñas encarnadas leves o reconstrucción estética, según el caso.\n\n¿Quieres que te ayude a revisar si este servicio es el más adecuado?";
+  }
+
+  if (serviceText.includes("seco") || text.includes("en seco")) {
+    return "El Pedicure en Seco es un servicio más express. No incluye retiro de uñeros profundos ni atención de uñas encarnadas. Si hay molestias, uñeros o uñas encarnadas, recomendamos valoración o pedicure medicado.\n\n¿Quieres que te ayude a elegir entre Pedicure en Seco y Pedicure Medicado?";
+  }
+
+  if (serviceText.includes("spa") || text.includes("spa")) {
+    const includesGel = serviceText.includes("gel");
+    return `El Pedicure Spa está enfocado en una experiencia más completa de cuidado e hidratación.${
+      includesGel
+        ? " Esta opción sí incluye gel."
+        : " Si deseas gel, debes elegir la opción Pedicure Spa con Gel."
+    }\n\n¿Quieres que te ayude a elegir la opción correcta?`;
+  }
+
+  if (service) {
+    const description =
+      service.bot_description ||
+      service.description ||
+      "Es un servicio disponible en el salón. Podemos ayudarte a confirmar qué incluye según lo que necesitas.";
+
+    return `${description}${price > 0 ? `\n\nPrecio desde: $${price}.` : ""}\n\n¿Quieres que te ayude a elegir o agendar este servicio?`;
+  }
+
+  return "Claro. Para responderte con precisión, dime el nombre o el número del servicio sobre el que tienes duda. No lo seleccionaré hasta que me confirmes cuál deseas agendar.";
 }
 
 function isDecorationService(service) {
@@ -931,8 +1013,24 @@ function getDefaultKnowledgeItems() {
       title: "Pedicure en seco y uñeros",
       category: "Pedicure",
       content:
-        "Los servicios en seco no incluyen retiro de uñeros. Si hay uñeros profundos o molestia, se requiere valoración y puede orientarse a pedicure medicado según el caso.",
+        "Los servicios en seco son más express y no incluyen retiro de uñeros profundos ni atención de uñas encarnadas. Para molestias, uñeros o uñas encarnadas se recomienda valoración o pedicure medicado.",
       keywords: "pedicure en seco, uñeros, uneros, uñas encarnadas, encarnadas, pedicure medicado",
+      active: true,
+    },
+    {
+      title: "Acripie",
+      category: "Pedicure",
+      content:
+        "Acripie no incluye pedicure completo. Es un servicio enfocado en la aplicación o reconstrucción estética en uñas de los pies. Si la clienta desea limpieza, retiro de cutícula, hidratación o gel en pies, debe agendar pedicure aparte o elegir un servicio de pedicure que lo incluya.",
+      keywords: "acripie, incluye pedi, reconstrucción estética, uñas de los pies",
+      active: true,
+    },
+    {
+      title: "Pedicure medicado",
+      category: "Pedicure",
+      content:
+        "El pedicure medicado requiere valoración. Es el servicio indicado cuando hay molestias, uñeros, uñas encarnadas leves o reconstrucción estética, según el caso.",
+      keywords: "pedicure medicado, medicado, uñeros, uñas encarnadas, reconstrucción estética",
       active: true,
     },
     {
@@ -1339,7 +1437,8 @@ Contexto:
 - Si pregunta por la cita mas proxima, lo mas pronto, primer espacio o disponibilidad mas cercana, NO marques wants_business_hours; usa intent book_appointment y conserva los servicios previos si existen.
 - Si pide pedi y unas en el mismo mensaje, pon ambos en services_requested: ["pedicure", "unas"].
 - Si pide menú, precios o servicios, marca wants_prices_or_menu.
-- Si pregunta "qué es", "explícame", "diferencia", marca wants_explanation.
+- Si pregunta "incluye", "qué trae", "qué es", "explícame", "diferencia", "cuál me conviene" o "cuánto cuesta ese", marca wants_explanation.
+- Una pregunta explicativa sobre un servicio NO es una selección. Conserva el contexto y no agregues servicios hasta recibir una confirmación clara o números de opción.
 
 Fecha actual en Mérida, México: ${today}
 
@@ -2000,6 +2099,8 @@ export async function POST(request) {
       ai.wants_business_hours || asksBusinessHours(incomingMessage);
     ai.says_paid = ai.says_paid || asksPaymentProof(incomingMessage);
     ai.wants_human = ai.wants_human || asksHumanHelp(incomingMessage);
+    ai.wants_explanation =
+      ai.wants_explanation || wantsExplanation(incomingMessage);
     ai.wants_prices_or_menu =
       ai.wants_prices_or_menu ||
       normalizeText(incomingMessage).includes("servicios") ||
@@ -2058,6 +2159,9 @@ export async function POST(request) {
     };
 
     let nextStep = conversation?.booking_step || null;
+    const pendingOptions = Array.isArray(nextContext.pending_service_options)
+      ? nextContext.pending_service_options
+      : [];
 
     if (!reply && ai.says_paid) {
       const anticipoAsset = getAssetByKey(mediaAssets, "datos_anticipo");
@@ -2093,6 +2197,20 @@ export async function POST(request) {
       );
 
       matchedSource = "promotions";
+    }
+
+    if (!reply && ai.wants_explanation) {
+      const mentionedService = findMentionedServiceForExplanation(
+        incomingMessage,
+        pendingOptions,
+        services
+      );
+
+      reply = buildServiceExplanationReply(
+        incomingMessage,
+        mentionedService
+      );
+      matchedSource = "service_explanation";
     }
 
     if (
@@ -2210,12 +2328,9 @@ export async function POST(request) {
       }
     }
 
-    const pendingOptions = Array.isArray(nextContext.pending_service_options)
-      ? nextContext.pending_service_options
-      : [];
-
     if (
       !reply &&
+      !ai.wants_explanation &&
       pendingOptions.length > 0 &&
       (nextStep === "esperando_seleccion_servicios" ||
         nextStep === "esperando_servicios")
@@ -2507,26 +2622,6 @@ export async function POST(request) {
       reply = buildSelectedServicesMessage(selectedServicesNow, bookingNotes);
       matchedSource = "request_staff_preference";
       nextStep = "esperando_tecnica";
-    }
-
-    if (!reply && ai.wants_explanation) {
-      const query = ai.services_requested?.[0] || incomingMessage;
-      const match = findMatches(query, services, 150)[0]?.service;
-
-      if (match) {
-        const price = Number(match.base_price || 0);
-        const duration = Number(match.duration_minutes || 0);
-
-        reply = `Claro 💕 Te cuento sobre ${match.name}:\n\n${
-          match.bot_description ||
-          match.description ||
-          "Es un servicio del salón. Podemos revisar disponibilidad para agendarlo."
-        }${price > 0 ? `\nPrecio desde: $${price}.` : ""}${
-          duration > 0 ? `\nDuración aproximada: ${duration} minutos.` : ""
-        }\n\n¿Te gustaría que revise disponibilidad para este servicio?`;
-
-        matchedSource = "service_explanation";
-      }
     }
 
     if (!reply && ai.wants_prices_or_menu) {

@@ -114,7 +114,6 @@ export default function BotPage() {
   const [testClientPhone, setTestClientPhone] = useState("9991112233");
   const [testMessage, setTestMessage] = useState("");
   const [testLoading, setTestLoading] = useState(false);
-  const [testResult, setTestResult] = useState(null);
   const [testChatMessages, setTestChatMessages] = useState([]);
   const testChatScrollRef = useRef(null);
 
@@ -583,7 +582,6 @@ export default function BotPage() {
 
   const testBot = async () => {
     setMessage("");
-    setTestResult(null);
 
     const cleanMessage = testMessage.trim();
 
@@ -642,7 +640,6 @@ export default function BotPage() {
         matchedSource: data.matchedSource,
       };
 
-      setTestResult(data);
       setTestChatMessages((current) => [...current, botBubble]);
       setTestLoading(false);
       await loadData();
@@ -663,7 +660,6 @@ export default function BotPage() {
 
   const resetTestChat = async () => {
     setTestMessage("");
-    setTestResult(null);
     setTestChatMessages([]);
     setTestLoading(true);
 
@@ -1179,29 +1175,6 @@ export default function BotPage() {
                 Reiniciar conversación
               </button>
 
-              {testResult && (
-                <div className="rounded-2xl bg-[#f7f9fa] p-4">
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                    Última detección
-                  </p>
-
-                  <div className="mt-3 grid gap-3">
-                    <div>
-                      <p className="text-xs text-[#8a969a]">Intención</p>
-                      <p className="text-sm text-[#263238]">
-                        {testResult.intent || "-"}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-[#8a969a]">Fuente</p>
-                      <p className="text-sm text-[#263238]">
-                        {testResult.matchedSource || "-"}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           </Card>
 
@@ -1248,13 +1221,6 @@ export default function BotPage() {
                           <p className="whitespace-pre-wrap leading-6">
                             {item.body}
                           </p>
-
-                          {item.direction === "bot" && !item.isError && (
-                            <p className="mt-2 text-[11px] opacity-70">
-                              {item.intent || "sin intención"} ·{" "}
-                              {item.matchedSource || "sin fuente"}
-                            </p>
-                          )}
                         </div>
                       </div>
                     ))
