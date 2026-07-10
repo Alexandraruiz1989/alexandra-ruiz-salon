@@ -7,6 +7,10 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function normalizeEmail(value) {
+  return cleanText(value).toLowerCase();
+}
+
 function normalizeRole(value) {
   return cleanText(value)
     .toLowerCase()
@@ -38,7 +42,65 @@ function createAdminClient() {
   });
 }
 
-async function getAuthorizedProfile(request, adminSupabase) {
+function logAccessDiagnostic({ user, profile, source }) {
+  console.info("[store-products-access]", {
+    source,
+    email: normalizeEmail(user?.email),
+    user_id: user?.id || null,
+    profile_found: Boolean(profile),
+    profile_email: normalizeEmail(profile?.email),
+    profile_id: profile?.id || null,
+    role: profile?.role || null,
+    active: profile?.active ?? null,
+  });
+}
+
+async function findAccessProfile(adminSupabase, user) {
+  const userEmail = normalizeEmail(user?.email);
+
+  const { data: profilesById, error: profileByIdError } = await adminSupabase
+    .from("user_profiles")
+    .select("id, email, role, active")
+    .eq("auth_user_id", user.id)
+    .limit(1);
+
+  if (profileByIdError) {
+    console.warn("[store-products-access] profile_by_id_error", {
+      email: userEmail,
+      user_id: user.id,
+      error: profileByIdError.message,
+    });
+  }
+
+  let profile = profilesById?.[0] || null;
+  let source = profile ? "auth_user_id" : "not_found_by_id";
+
+  if (!profile && userEmail) {
+    const { data: profilesByEmail, error: profileByEmailError } =
+      await adminSupabase
+        .from("user_profiles")
+        .select("id, email, role, active")
+        .ilike("email", userEmail)
+        .limit(1);
+
+    if (profileByEmailError) {
+      console.warn("[store-products-access] profile_by_email_error", {
+        email: userEmail,
+        user_id: user.id,
+        error: profileByEmailError.message,
+      });
+    }
+
+    profile = profilesByEmail?.[0] || null;
+    source = profile ? "email" : "not_found";
+  }
+
+  logAccessDiagnostic({ user, profile, source });
+
+  return profile;
+}
+
+async function getSessionProfile(request, adminSupabase) {
   const token = getBearerToken(request);
 
   if (!token) {
@@ -59,35 +121,36 @@ async function getAuthorizedProfile(request, adminSupabase) {
   }
 
   const user = userData.user;
+  const profile = await findAccessProfile(adminSupabase, user);
 
-  const { data: profileById } = await adminSupabase
-    .from("user_profiles")
-    .select("id, email, role, active")
-    .eq("auth_user_id", user.id)
-    .maybeSingle();
-
-  let profile = profileById || null;
-
-  if (!profile && user.email) {
-    const { data: profileByEmail } = await adminSupabase
-      .from("user_profiles")
-      .select("id, email, role, active")
-      .ilike("email", user.email)
-      .maybeSingle();
-
-    profile = profileByEmail || null;
-  }
-
-  const role = normalizeRole(profile?.role);
-
-  if (!profile || profile.active === false || !productManagerRoles.includes(role)) {
+  if (!profile) {
     return {
-      error: "No tienes permiso para administrar productos.",
+      error: "No encontré tu perfil de acceso. Revisa /admin/accesos.",
       status: 403,
     };
   }
 
+  if (profile.active === false) {
+    return {
+      error: "Tu perfil de acceso está desactivado. Revisa /admin/accesos.",
+      status: 403,
+    };
+  }
+
+  const role = normalizeRole(profile?.role);
+
   return { profile, user, role };
+}
+
+function requireProductManager(session) {
+  if (!productManagerRoles.includes(session.role)) {
+    return {
+      error: `Tu rol actual es ${session.profile?.role || "sin rol"}. Solo admin o encargada pueden administrar productos.`,
+      status: 403,
+    };
+  }
+
+  return null;
 }
 
 function buildProductPayload(product, { partial = false } = {}) {
@@ -142,12 +205,39 @@ function errorResponse(error, status = 400) {
   );
 }
 
+export async function GET(request) {
+  try {
+    const adminSupabase = createAdminClient();
+    const session = await getSessionProfile(request, adminSupabase);
+
+    if (session.error) return errorResponse(session.error, session.status);
+
+    return NextResponse.json({
+      success: true,
+      profile: {
+        id: session.profile.id,
+        email: normalizeEmail(session.profile.email),
+        role: session.profile.role,
+        active: session.profile.active !== false,
+      },
+      can_manage_products: productManagerRoles.includes(session.role),
+    });
+  } catch (error) {
+    return errorResponse(error, 500);
+  }
+}
+
 export async function POST(request) {
   try {
     const adminSupabase = createAdminClient();
-    const auth = await getAuthorizedProfile(request, adminSupabase);
+    const session = await getSessionProfile(request, adminSupabase);
 
-    if (auth.error) return errorResponse(auth.error, auth.status);
+    if (session.error) return errorResponse(session.error, session.status);
+
+    const authorizationError = requireProductManager(session);
+    if (authorizationError) {
+      return errorResponse(authorizationError.error, authorizationError.status);
+    }
 
     const body = await request.json();
     const product = body.product || body;
@@ -202,9 +292,14 @@ export async function POST(request) {
 export async function PATCH(request) {
   try {
     const adminSupabase = createAdminClient();
-    const auth = await getAuthorizedProfile(request, adminSupabase);
+    const session = await getSessionProfile(request, adminSupabase);
 
-    if (auth.error) return errorResponse(auth.error, auth.status);
+    if (session.error) return errorResponse(session.error, session.status);
+
+    const authorizationError = requireProductManager(session);
+    if (authorizationError) {
+      return errorResponse(authorizationError.error, authorizationError.status);
+    }
 
     const body = await request.json();
     const id = cleanText(body.id);

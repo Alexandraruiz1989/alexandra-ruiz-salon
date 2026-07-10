@@ -125,7 +125,14 @@ function getToastStyle(message) {
     text.includes("error") ||
     text.includes("obligatorio") ||
     text.includes("revisa") ||
-    text.includes("stock insuficiente")
+    text.includes("stock insuficiente") ||
+    text.includes("permiso") ||
+    text.includes("sesion") ||
+    text.includes("expir") ||
+    text.includes("no encontre") ||
+    text.includes("solo admin") ||
+    text.includes("rol actual") ||
+    text.includes("desactivado")
   ) {
     return "bg-red-600 text-white";
   }
@@ -367,23 +374,50 @@ export default function StorePage() {
   }, [activeSection, isProductOwner]);
 
   const loadRole = async (user) => {
-    const { data: profileById } = await supabase
-      .from("user_profiles")
-      .select("role")
-      .eq("auth_user_id", user.id)
-      .maybeSingle();
+    try {
+      const token = await getStoreAccessToken();
+      const response = await fetch("/api/admin/store/products", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-    if (profileById?.role) {
+      const result = await response
+        .json()
+        .catch(() => ({ success: false, error: "Respuesta inválida del servidor." }));
+
+      if (response.ok && result.success && result.profile?.role) {
+        setCurrentRole(result.profile.role);
+        return;
+      }
+
+      if (result.error) {
+        setMessage(result.error);
+      }
+    } catch (error) {
+      console.warn("No se pudo validar rol de Tienda por API.", error);
+    }
+
+    const { data: profilesById } = await supabase
+      .from("user_profiles")
+      .select("role, active")
+      .eq("auth_user_id", user.id)
+      .limit(1);
+
+    const profileById = profilesById?.[0] || null;
+    if (profileById?.role && profileById.active !== false) {
       setCurrentRole(profileById.role);
       return;
     }
 
-    const { data: profileByEmail } = await supabase
+    const { data: profilesByEmail } = await supabase
       .from("user_profiles")
-      .select("role")
-      .eq("email", user.email)
-      .maybeSingle();
+      .select("role, active")
+      .ilike("email", user.email)
+      .limit(1);
 
+    const profileByEmail = profilesByEmail?.[0] || null;
     setCurrentRole(profileByEmail?.role || "tecnica");
   };
 
@@ -640,6 +674,15 @@ export default function StorePage() {
 
     if (normalized.includes("permiso") || normalized.includes("permission denied")) {
       return "No tienes permiso para administrar productos.";
+    }
+
+    if (
+      normalized.includes("no encontre") ||
+      normalized.includes("rol actual") ||
+      normalized.includes("solo admin") ||
+      normalized.includes("desactivado")
+    ) {
+      return text;
     }
 
     return `${fallback}: ${text || "Error técnico desconocido."}`;
