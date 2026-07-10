@@ -11,6 +11,7 @@ const roleModulePermissions = {
     "agenda",
     "cobros",
     "caja",
+    "tienda",
     "extras",
     "reportes",
     "tecnicas",
@@ -29,6 +30,7 @@ const roleModulePermissions = {
     "agenda",
     "cobros",
     "caja",
+    "tienda",
     "extras",
     "reportes",
     "tareas",
@@ -51,8 +53,10 @@ const roleModulePermissions = {
     "agenda",
     "cobros",
     "caja",
+    "tienda",
     "notificaciones",
   ],
+  product_owner: ["tienda"],
 };
 
 const roleLabels = {
@@ -60,6 +64,7 @@ const roleLabels = {
   encargada: "Encargada",
   tecnica: "Técnica",
   caja: "Caja / Recepción",
+  product_owner: "Dueña productos",
 };
 
 export default function AdminShell({
@@ -163,6 +168,7 @@ export default function AdminShell({
     { label: "Agenda", href: "/admin/agenda", key: "agenda" },
     { label: "Cobros", href: "/admin/cobros", key: "cobros" },
     { label: "Caja chica", href: "/admin/caja", key: "caja" },
+    { label: "Tienda", href: "/admin/tienda", key: "tienda" },
     { label: "Extras / Decoraciones", href: "/admin/extras", key: "extras" },
     { label: "Reportes", href: "/admin/reportes", key: "reportes" },
     { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
@@ -192,8 +198,10 @@ export default function AdminShell({
     return mainModules.filter((item) => allowedModules.includes(item.key));
   }, [allowedModules, unreadNotifications]);
 
+  const fallbackHref = visibleMainModules[0]?.href || "/admin/agenda";
+  const fallbackLabel = visibleMainModules[0]?.label || "Agenda";
+
   const futureModules = [
-    "Tienda / Productos próximamente",
     "Membresías próximamente",
     "Tarjetas de regalo próximamente",
   ];
@@ -204,12 +212,12 @@ export default function AdminShell({
   useEffect(() => {
     if (!loadingProfile && currentProfile?.active !== false && !isModuleAllowed) {
       const timer = setTimeout(() => {
-        window.location.href = "/admin/agenda";
+        window.location.href = fallbackHref;
       }, 2500);
 
       return () => clearTimeout(timer);
     }
-  }, [loadingProfile, currentProfile, isModuleAllowed]);
+  }, [loadingProfile, currentProfile, isModuleAllowed, fallbackHref]);
 
   if (loadingProfile) {
     return (
@@ -264,15 +272,15 @@ export default function AdminShell({
           </p>
 
           <p className="mt-3 text-sm leading-6 text-[#68777c]">
-            Te redirigiremos a Agenda en unos segundos.
+            Te redirigiremos a {fallbackLabel} en unos segundos.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-3">
             <a
-              href="/admin/agenda"
+              href={fallbackHref}
               className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
             >
-              Ir a Agenda
+              Ir a {fallbackLabel}
             </a>
 
             <button
@@ -404,12 +412,14 @@ export default function AdminShell({
                   ☰ Menú
                 </button>
 
-                <a
-                  href="/admin/agenda"
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-                >
-                  Agenda
-                </a>
+                {allowedModules.includes("agenda") && (
+                  <a
+                    href="/admin/agenda"
+                    className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  >
+                    Agenda
+                  </a>
+                )}
 
                 {allowedModules.includes("notificaciones") && (
                   <a

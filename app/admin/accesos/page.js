@@ -31,6 +31,11 @@ const roleOptions = [
     label: "Caja / Recepción",
     description: "Agenda, clientas, cobros, recibos y caja.",
   },
+  {
+    value: "product_owner",
+    label: "Dueña productos",
+    description: "Acceso limitado a Tienda, stock, ventas y reportes de productos.",
+  },
 ];
 
 const rolePermissions = {
@@ -39,6 +44,7 @@ const rolePermissions = {
     "Clientas",
     "Servicios",
     "Cobros",
+    "Tienda",
     "Reportes",
     "Técnicas / Personal",
     "Seguimientos",
@@ -51,12 +57,21 @@ const rolePermissions = {
     "Clientas",
     "Servicios",
     "Cobros",
+    "Tienda",
     "Seguimientos",
     "Calificaciones",
     "Reportes básicos",
   ],
   tecnica: ["Agenda", "Sus citas", "Clientas básicas", "Seguimientos básicos"],
-  caja: ["Agenda", "Clientas", "Cobros", "Recibos", "Caja"],
+  caja: ["Agenda", "Clientas", "Cobros", "Recibos", "Caja", "Tienda"],
+  product_owner: [
+    "Tienda",
+    "Stock actual",
+    "Ventas de productos",
+    "Movimientos de inventario",
+    "Reportes de productos",
+    "Neto proveedor",
+  ],
 };
 
 function Card({ children, className = "" }) {

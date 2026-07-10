@@ -238,6 +238,39 @@ export default function CajaPage() {
       )
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
+    const productIncomeMovements = movements.filter(
+      (item) =>
+        item.movement_type === "ingreso" && item.category === "venta_producto"
+    );
+
+    const serviceIncome = movements
+      .filter(
+        (item) =>
+          item.movement_type === "ingreso" && item.category !== "venta_producto"
+      )
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const productIncome = productIncomeMovements.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+
+    const productCashIncome = productIncomeMovements
+      .filter((item) => item.payment_method === "Efectivo")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const productCardIncome = productIncomeMovements
+      .filter((item) => item.payment_method === "Tarjeta")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const productTransferIncome = productIncomeMovements
+      .filter((item) => item.payment_method === "Transferencia")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const productMixedIncome = productIncomeMovements
+      .filter((item) => item.payment_method === "Mixto")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
     const cashOut = cashMovements
       .filter(
         (item) =>
@@ -266,6 +299,12 @@ export default function CajaPage() {
       countedCash: counted,
       difference,
       totalIncome: cashIncome + cardIncome + transferIncome + mixedIncome,
+      serviceIncome,
+      productIncome,
+      productCashIncome,
+      productCardIncome,
+      productTransferIncome,
+      productMixedIncome,
     };
   }, [movements, countedCash]);
 
@@ -508,10 +547,31 @@ export default function CajaPage() {
                   label="Ajustes"
                   value={summary.positiveAdjustments}
                 />
+                <SummaryBox label="Servicios" value={summary.serviceIncome} />
+                <SummaryBox label="Productos" value={summary.productIncome} />
                 <SummaryBox label="Total cobrado" value={summary.totalIncome} />
                 <SummaryBox
                   label="Efectivo esperado"
                   value={summary.expectedCash}
+                />
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryBox
+                  label="Productos efectivo"
+                  value={summary.productCashIncome}
+                />
+                <SummaryBox
+                  label="Productos tarjeta"
+                  value={summary.productCardIncome}
+                />
+                <SummaryBox
+                  label="Productos transferencia"
+                  value={summary.productTransferIncome}
+                />
+                <SummaryBox
+                  label="Productos mixto"
+                  value={summary.productMixedIncome}
                 />
               </div>
 
