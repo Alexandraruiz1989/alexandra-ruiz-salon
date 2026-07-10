@@ -9,6 +9,7 @@ const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const aiEnabled = process.env.BOT_AI_ENABLED !== "false";
 
 const SALON_TIME_ZONE = "America/Mexico_City";
+const SALON_NAME = "Alexandra Ruiz Salón";
 const STAFF_PRIORITY = ["laura canul", "tania mendez", "alexandra ruiz"];
 const EXCLUDED_STAFF_FOR_BOT = ["junuen ruiz"];
 const STAFF_LEAD_TIME_MINUTES = {
@@ -16,6 +17,10 @@ const STAFF_LEAD_TIME_MINUTES = {
   "tania mendez": 20,
   "alexandra ruiz": 60,
 };
+const LOCATION_ADDRESS_TEXT =
+  "calle 44 #491, Los Pinos, cerca de Macroplaza";
+const LOCATION_FALLBACK_URL =
+  "https://www.google.com/maps/search/?api=1&query=Alexandra%20Ruiz%20Salon%20Calle%2044%20491%20Los%20Pinos%20Merida";
 
 const BUSINESS_HOURS_MESSAGE = `Nuestro horario de atención es:
 
@@ -24,16 +29,19 @@ Sábado: 9:00 am a 6:00 pm
 Domingo: 9:00 am a 2:00 pm
 Lunes: cerrado`;
 
-const LOCATION_FALLBACK_MESSAGE = `Estamos en Calle 44 no. 491 x 25 y 27, Residencial Los Pinos, Mérida, Yucatán 💕
-
-Te comparto la ubicación:
-https://www.google.com/maps/search/?api=1&query=Alexandra%20Ruiz%20Salon%20Merida`;
-
 function normalizeText(text) {
   return String(text || "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function sanitizeBotReply(reply) {
+  return String(reply || "")
+    .replace(/Alexandra Ruiz Sal[oó]n Spa/gi, SALON_NAME)
+    .replace(/Alexandra Ruiz Salon Spa/gi, "Alexandra Ruiz Salon")
+    .replace(/Alexandra Ruiz Sal[oó]n\s+&\s+Spa/gi, SALON_NAME)
     .trim();
 }
 
@@ -246,7 +254,16 @@ function parseTimePreference(rawText) {
 
 function asksLocation(text) {
   const t = normalizeText(text);
-  return t.includes("ubicacion") || t.includes("ubicación") || t.includes("direccion") || t.includes("dirección") || t.includes("maps") || t.includes("donde estan") || t.includes("dónde están") || t.includes("donde se ubican") || t.includes("dónde se ubican");
+  return (
+    t.includes("ubicacion") ||
+    t.includes("direccion") ||
+    t.includes("maps") ||
+    t.includes("donde estan") ||
+    t.includes("donde se ubican") ||
+    t.includes("me pasas la ubicacion") ||
+    t.includes("como llego") ||
+    t.includes("llegar")
+  );
 }
 
 function asksBusinessHours(text) {
@@ -990,10 +1007,109 @@ function getAssetByKey(mediaAssets, key) {
   );
 }
 
+function extractFirstUrl(value) {
+  const match = String(value || "").match(/https?:\/\/[^\s<>"')]+/i);
+  return match ? match[0].replace(/[.,;!?]+$/, "") : "";
+}
+
+function hasLocationKeywords(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("ubicacion") ||
+    text.includes("direccion") ||
+    text.includes("maps") ||
+    text.includes("google") ||
+    text.includes("calle 44") ||
+    text.includes("los pinos") ||
+    text.includes("macroplaza") ||
+    text.includes("como llegar")
+  );
+}
+
+function getConfiguredLocationUrl({ settings, faqs, knowledgeItems, mediaAssets }) {
+  const settingKeys = [
+    "location_url",
+    "location_link",
+    "google_maps_url",
+    "google_maps_link",
+    "maps_url",
+    "maps_link",
+    "ubicacion_url",
+    "ubicacion_link",
+    "direccion_url",
+    "address_url",
+  ];
+
+  for (const key of settingKeys) {
+    const url = extractFirstUrl(settings?.[key]);
+    if (url) return url;
+  }
+
+  const configuredKnowledge = [
+    ...(faqs || []).map((item) => ({
+      active: item.active,
+      text: `${item.question || ""} ${item.answer || ""} ${item.keywords || ""}`,
+    })),
+    ...(knowledgeItems || []).map((item) => ({
+      active: item.active,
+      text: `${item.title || ""} ${item.category || ""} ${item.content || ""} ${item.keywords || ""}`,
+    })),
+  ];
+
+  for (const item of configuredKnowledge) {
+    if (item.active === false || !hasLocationKeywords(item.text)) continue;
+
+    const url = extractFirstUrl(item.text);
+    if (url) return url;
+  }
+
+  const locationAsset = getAssetByKey(mediaAssets, "ubicacion_maps");
+  const assetUrl =
+    extractFirstUrl(locationAsset?.media_url) ||
+    extractFirstUrl(locationAsset?.message) ||
+    extractFirstUrl(locationAsset?.title);
+
+  return assetUrl || LOCATION_FALLBACK_URL;
+}
+
+function buildLocationResponse({
+  settings,
+  faqs,
+  knowledgeItems,
+  mediaAssets,
+  isFirstMessage,
+}) {
+  const locationUrl = getConfiguredLocationUrl({
+    settings,
+    faqs,
+    knowledgeItems,
+    mediaAssets,
+  });
+
+  if (isFirstMessage) {
+    return `¡Hola! Claro 💕 Nos encontramos en ${SALON_NAME}, en ${LOCATION_ADDRESS_TEXT}.
+
+Te comparto también nuestra ubicación para que puedas orientarte mejor:
+${locationUrl}
+
+¿Te gustaría que también te comparta horarios o disponibilidad para agendar?`;
+  }
+
+  return `Claro 💕 Nos encontramos en ${LOCATION_ADDRESS_TEXT}.
+
+Te comparto nuestra ubicación para que puedas orientarte mejor:
+${locationUrl}`;
+}
+
+function isFirstConversationMessage(conversation, recentMessages) {
+  return !conversation?.id || ((recentMessages || []).length === 0 && !conversation?.last_message_at);
+}
+
 function buildMenuResponse(settings, menuOptions) {
   const welcome =
     settings?.welcome_message ||
-    "Hola 💕 Bienvenida/o a Alexandra Ruiz Salón Spa. Soy el asistente virtual del salón, ¿en qué puedo ayudarte?";
+    `Hola 💕 Bienvenida/o a ${SALON_NAME}. Soy el asistente virtual del salón, ¿en qué puedo ayudarte?`;
 
   const welcomeAlreadyHasMenu =
     welcome.includes("1.") && welcome.includes("2.") && welcome.includes("3.");
@@ -1147,7 +1263,7 @@ function getDefaultKnowledgeItems() {
       keywords: "valoración, valoracion, revisar, caso especial, duda",
       active: true,
     },
-  ];
+  ].map((item) => ({ ...item, _default_bot_knowledge: true }));
 }
 
 function tokenizeText(value) {
@@ -1210,6 +1326,43 @@ function scoreKnowledgeText(searchText, itemText, keywords = "") {
     if (normalizedItem.includes("pedicure") || normalizedItem.includes("pedi")) score += 20;
   }
 
+  if (asksLocation(normalizedSearch)) {
+    if (hasLocationKeywords(`${normalizedItem} ${normalizedKeywords}`)) score += 45;
+  }
+
+  if (asksBusinessHours(normalizedSearch)) {
+    if (
+      normalizedItem.includes("horario") ||
+      normalizedKeywords.includes("horario") ||
+      normalizedItem.includes("abren") ||
+      normalizedItem.includes("cierran")
+    ) {
+      score += 40;
+    }
+  }
+
+  if (asksPromotions(normalizedSearch)) {
+    if (
+      normalizedItem.includes("promo") ||
+      normalizedKeywords.includes("promo") ||
+      normalizedItem.includes("descuento") ||
+      normalizedItem.includes("oferta")
+    ) {
+      score += 40;
+    }
+  }
+
+  if (normalizedSearch.includes("servicio") || normalizedSearch.includes("precio")) {
+    if (
+      normalizedItem.includes("servicio") ||
+      normalizedKeywords.includes("servicio") ||
+      normalizedItem.includes("precio") ||
+      normalizedKeywords.includes("precio")
+    ) {
+      score += 20;
+    }
+  }
+
   return score;
 }
 
@@ -1249,6 +1402,7 @@ function findBestKnowledgeAnswer({ incomingMessage, recentMessages, faqs, knowle
       type: "faq",
       title: faq.question,
       content: faq.answer,
+      isConfigured: true,
       score: scoreKnowledgeText(
         searchText,
         `${faq.question || ""} ${faq.answer || ""}`,
@@ -1262,6 +1416,7 @@ function findBestKnowledgeAnswer({ incomingMessage, recentMessages, faqs, knowle
       type: "knowledge_base",
       title: item.title,
       content: item.content,
+      isConfigured: !item._default_bot_knowledge,
       score: scoreKnowledgeText(
         searchText,
         `${item.title || ""} ${item.category || ""} ${item.content || ""}`,
@@ -1270,10 +1425,53 @@ function findBestKnowledgeAnswer({ incomingMessage, recentMessages, faqs, knowle
     }));
 
   const best = [...faqCandidates, ...knowledgeCandidates].sort(
-    (a, b) => b.score - a.score
+    (a, b) =>
+      b.score - a.score ||
+      Number(Boolean(b.isConfigured)) - Number(Boolean(a.isConfigured))
   )[0];
 
   return best && best.score >= 18 ? best : null;
+}
+
+function shouldUseKnowledgeBeforeFixed({ incomingMessage, ai }) {
+  const text = normalizeText(incomingMessage);
+
+  if (!text || isPureNumberSelection(text)) return false;
+  if (asksPaymentProof(text) || ai.says_paid) return false;
+  if (asksNearestAvailabilityBot(text)) return false;
+
+  const isInformational =
+    ai.wants_location ||
+    asksLocation(text) ||
+    ai.wants_business_hours ||
+    asksBusinessHours(text) ||
+    asksPromotions(text) ||
+    ai.wants_prices_or_menu ||
+    ai.wants_explanation ||
+    wantsExplanation(text) ||
+    ai.intent === "ask_services" ||
+    ai.intent === "ask_location" ||
+    ai.intent === "ask_business_hours" ||
+    text.includes("?") ||
+    text.includes("politica") ||
+    text.includes("politicas") ||
+    text.includes("esmalte") ||
+    text.includes("gelish");
+
+  if (!isInformational) return false;
+
+  const isClearBookingOnly =
+    ai.intent === "book_appointment" &&
+    !ai.wants_location &&
+    !ai.wants_business_hours &&
+    !ai.wants_prices_or_menu &&
+    !ai.wants_explanation &&
+    !asksLocation(text) &&
+    !asksBusinessHours(text) &&
+    !asksPromotions(text) &&
+    !wantsExplanation(text);
+
+  return !isClearBookingOnly;
 }
 
 async function generateKnowledgeReplyWithAI({
@@ -1297,7 +1495,7 @@ async function generateKnowledgeReplyWithAI({
         {
           role: "system",
           content:
-            "Responde como el bot interno de Alexandra Ruiz Salón Spa. Tono profesional, cálido, claro y elegante. Sé breve. No uses 'hermosa' por defecto. Usa solo la información proporcionada; si no alcanza, ofrece pasar con una persona del equipo.",
+            `Responde como el bot interno de ${SALON_NAME}. Tono profesional, cálido, claro y elegante. Sé breve. No uses 'hermosa' por defecto. Usa solo la información proporcionada; si no alcanza, ofrece pasar con una persona del equipo. No uses el nombre anterior del salón con la palabra Spa.`,
         },
         {
           role: "user",
@@ -1494,8 +1692,8 @@ async function interpretWithAI(message, context) {
 
   const today = todayISO();
 
-  const systemPrompt = `
-Eres el intérprete de mensajes para el bot de WhatsApp de Alexandra Ruiz Salón Spa.
+const systemPrompt = `
+Eres el intérprete de mensajes para el bot de WhatsApp de ${SALON_NAME}.
 
 Tu única tarea es convertir el mensaje de la clienta a JSON estructurado.
 No respondas como bot final.
@@ -2254,6 +2452,16 @@ export async function POST(request) {
     const pendingOptions = Array.isArray(nextContext.pending_service_options)
       ? nextContext.pending_service_options
       : [];
+    const isFirstMessage = isFirstConversationMessage(
+      conversation,
+      recentMessages
+    );
+    const matchedKnowledge = findBestKnowledgeAnswer({
+      incomingMessage,
+      recentMessages,
+      faqs,
+      knowledgeItems,
+    });
 
     if (!reply && ai.says_paid) {
       const anticipoAsset = getAssetByKey(mediaAssets, "datos_anticipo");
@@ -2266,11 +2474,38 @@ export async function POST(request) {
       nextStep = "esperando_comprobante";
     }
 
+    if (
+      !reply &&
+      matchedKnowledge &&
+      shouldUseKnowledgeBeforeFixed({ incomingMessage, ai })
+    ) {
+      reply = matchedKnowledge.content || "";
+      matchedSource = matchedKnowledge.type;
+
+      if (
+        asksLocation(incomingMessage) &&
+        reply &&
+        !extractFirstUrl(reply)
+      ) {
+        const locationUrl = getConfiguredLocationUrl({
+          settings,
+          faqs,
+          knowledgeItems,
+          mediaAssets,
+        });
+
+        reply = `${reply}\n\nTe comparto nuestra ubicación para que puedas orientarte mejor:\n${locationUrl}`;
+      }
+    }
+
     if (!reply && (ai.wants_location || asksLocation(incomingMessage))) {
-      reply = mediaText(
-        getAssetByKey(mediaAssets, "ubicacion_maps"),
-        LOCATION_FALLBACK_MESSAGE
-      );
+      reply = buildLocationResponse({
+        settings,
+        faqs,
+        knowledgeItems,
+        mediaAssets,
+        isFirstMessage,
+      });
 
       matchedSource = "location";
     }
@@ -2412,7 +2647,13 @@ export async function POST(request) {
           getAssetByKey(mediaAssets, "politicas_salon")
         )}\n\n${mediaText(
           getAssetByKey(mediaAssets, "ubicacion_maps"),
-          LOCATION_FALLBACK_MESSAGE
+          buildLocationResponse({
+            settings,
+            faqs,
+            knowledgeItems,
+            mediaAssets,
+            isFirstMessage: false,
+          })
         )}`;
 
         matchedSource = "appointment_created_with_payment";
@@ -2783,10 +3024,13 @@ export async function POST(request) {
           );
           matchedSource = "default_menu_promotions";
         } else if (text === "4") {
-          reply = mediaText(
-            getAssetByKey(mediaAssets, "ubicacion_maps"),
-            LOCATION_FALLBACK_MESSAGE
-          );
+          reply = buildLocationResponse({
+            settings,
+            faqs,
+            knowledgeItems,
+            mediaAssets,
+            isFirstMessage: false,
+          });
           matchedSource = "default_menu_location";
         } else if (text === "5") {
           reply = BUSINESS_HOURS_MESSAGE;
@@ -2816,19 +3060,8 @@ export async function POST(request) {
     }
 
     if (!reply) {
-      const matchedKnowledge = findBestKnowledgeAnswer({
-        incomingMessage,
-        recentMessages,
-        faqs,
-        knowledgeItems,
-      });
-
       if (matchedKnowledge) {
-        reply = await generateKnowledgeReplyWithAI({
-          incomingMessage,
-          recentMessages,
-          matchedKnowledge,
-        });
+        reply = matchedKnowledge.content || "";
         matchedSource = matchedKnowledge.type;
       }
     }
@@ -2839,6 +3072,8 @@ export async function POST(request) {
         "Disculpa, no logré entenderte bien. Puedes escribir “menú” para ver las opciones disponibles.";
       matchedSource = "fallback";
     }
+
+    reply = sanitizeBotReply(reply);
 
     const savedConversation = await saveConversation(
       supabase,
