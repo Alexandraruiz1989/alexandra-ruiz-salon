@@ -37,6 +37,57 @@ const emptyFaqForm = {
   active: true,
 };
 
+const quickReplies = [
+  {
+    label: "Ubicación",
+    text: "Claro 💕 Nos encontramos en calle 44 #491, Los Pinos, cerca de Macroplaza.\n\nTe comparto nuestra ubicación para que puedas orientarte mejor:\nhttps://www.google.com/maps/search/?api=1&query=Alexandra%20Ruiz%20Salon%20Calle%2044%20491%20Los%20Pinos%20Merida",
+  },
+  {
+    label: "Horarios",
+    text: "Nuestro horario de atención es:\n\nMartes a viernes: 9:00 am a 9:00 pm\nSábado: 9:00 am a 6:00 pm\nDomingo: 9:00 am a 2:00 pm\nLunes: cerrado",
+  },
+  {
+    label: "Solicitar anticipo",
+    text: "Para confirmar tu cita solicitamos anticipo de $100 por servicio. Ese anticipo se descuenta del total a pagar el día de tu cita 💕",
+  },
+  {
+    label: "Confirmar disponibilidad",
+    text: "Claro 💕 Permíteme revisar disponibilidad para ese servicio y horario. Enseguida te confirmo las opciones disponibles.",
+  },
+  {
+    label: "Hablar con asesora",
+    text: "Claro 💕 Una persona del equipo de Alexandra Ruiz Salón dará seguimiento a tu conversación.",
+  },
+  {
+    label: "Gracias",
+    text: "Gracias por escribirnos 💕 Quedamos atentas para ayudarte con tu cita.",
+  },
+];
+
+function formatDateTime(value) {
+  if (!value) return "Sin fecha";
+
+  try {
+    return new Intl.DateTimeFormat("es-MX", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
+  } catch (error) {
+    return "Sin fecha";
+  }
+}
+
+function isConversationAiEnabled(conversation) {
+  return conversation?.bot_enabled !== false && conversation?.handoff_to_human !== true;
+}
+
+function getConversationStatusLabel(conversation) {
+  if (!isConversationAiEnabled(conversation)) return "humano";
+  if (conversation?.status === "pendiente") return "pendiente";
+  if (conversation?.status === "solicitud_cita") return "solicitud de cita";
+  return conversation?.status || "bot activo";
+}
+
 function Card({ children }) {
   return (
     <div className="rounded-[1.5rem] bg-white p-6 shadow-sm">
@@ -109,6 +160,13 @@ export default function BotPage() {
 
   const [appointmentRequests, setAppointmentRequests] = useState([]);
   const [conversations, setConversations] = useState([]);
+  const [selectedConversationId, setSelectedConversationId] = useState(null);
+  const [conversationMessages, setConversationMessages] = useState([]);
+  const [loadingConversationMessages, setLoadingConversationMessages] =
+    useState(false);
+  const [manualReply, setManualReply] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const conversationScrollRef = useRef(null);
 
   const [testClientName, setTestClientName] = useState("Ana López");
   const [testClientPhone, setTestClientPhone] = useState("9991112233");
@@ -144,7 +202,7 @@ export default function BotPage() {
     return () => clearTimeout(timer);
   }, [message]);
 
- useEffect(() => {
+useEffect(() => {
   if (!testChatScrollRef.current) return;
 
   testChatScrollRef.current.scrollTo({
@@ -152,6 +210,46 @@ export default function BotPage() {
     behavior: "smooth",
   });
 }, [testChatMessages, testLoading]);
+
+  useEffect(() => {
+    if (activeSection !== "conversaciones") return;
+
+    if (!selectedConversationId && conversations.length > 0) {
+      setSelectedConversationId(conversations[0].id);
+      return;
+    }
+
+    if (
+      selectedConversationId &&
+      conversations.length > 0 &&
+      !conversations.some((conversation) => conversation.id === selectedConversationId)
+    ) {
+      setSelectedConversationId(conversations[0].id);
+    }
+  }, [activeSection, conversations, selectedConversationId]);
+
+  useEffect(() => {
+    if (activeSection !== "conversaciones" || !selectedConversationId) return;
+
+    loadConversationMessages(selectedConversationId);
+  }, [activeSection, selectedConversationId]);
+
+  useEffect(() => {
+    const selected = conversations.find(
+      (conversation) => conversation.id === selectedConversationId
+    );
+
+    setAssignedTo(selected?.assigned_to || "");
+  }, [conversations, selectedConversationId]);
+
+  useEffect(() => {
+    if (!conversationScrollRef.current) return;
+
+    conversationScrollRef.current.scrollTo({
+      top: conversationScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [conversationMessages, selectedConversationId]);
 
   const loadData = async () => {
     setLoadingData(true);
@@ -258,6 +356,151 @@ export default function BotPage() {
           "No se pudo validar el estado de IA. El bot seguirá funcionando con reglas básicas.",
       });
     }
+  };
+
+  const loadConversationMessages = async (conversationId) => {
+    if (!conversationId) return;
+
+    setLoadingConversationMessages(true);
+
+    const { data, error } = await supabase
+      .from("bot_messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      setMessage(`No se pudieron cargar mensajes: ${error.message}`);
+      setConversationMessages([]);
+    } else {
+      setConversationMessages(data || []);
+    }
+
+    setLoadingConversationMessages(false);
+  };
+
+  const updateConversationControl = async (conversation, enabled) => {
+    if (!conversation?.id) return;
+
+    const payload = {
+      bot_enabled: enabled,
+      handoff_to_human: !enabled,
+      status: enabled ? "bot" : "humano",
+      unread_count: enabled ? 0 : Number(conversation.unread_count || 0),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from("bot_conversations")
+      .update(payload)
+      .eq("id", conversation.id);
+
+    if (error) {
+      setMessage(
+        `No se pudo actualizar IA. Si faltan columnas, aplica el SQL agregado en el repo. Detalle: ${error.message}`
+      );
+      return;
+    }
+
+    setMessage(
+      enabled
+        ? "IA activada para esta conversación."
+        : "IA apagada para esta conversación."
+    );
+    await loadData();
+    await loadConversationMessages(conversation.id);
+  };
+
+  const saveAssignedTo = async (conversation) => {
+    if (!conversation?.id) return;
+
+    const { error } = await supabase
+      .from("bot_conversations")
+      .update({
+        assigned_to: assignedTo.trim() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", conversation.id);
+
+    if (error) {
+      setMessage(
+        `No se pudo guardar responsable. Si falta la columna assigned_to, aplica el SQL agregado en el repo. Detalle: ${error.message}`
+      );
+      return;
+    }
+
+    setMessage("Responsable actualizado correctamente.");
+    await loadData();
+  };
+
+  const sendManualReply = async (conversation) => {
+    const cleanReply = manualReply.trim();
+
+    if (!conversation?.id) {
+      setMessage("Selecciona una conversación.");
+      return;
+    }
+
+    if (!cleanReply) {
+      setMessage("Escribe una respuesta manual.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+
+    const now = new Date().toISOString();
+
+    const { error: messageError } = await supabase.from("bot_messages").insert([
+      {
+        conversation_id: conversation.id,
+        client_phone: conversation.client_phone,
+        direction: "outgoing",
+        message_type: "text",
+        body: cleanReply,
+        raw_payload: {
+          source: "admin_manual",
+          assigned_to: assignedTo.trim() || null,
+        },
+      },
+    ]);
+
+    if (messageError) {
+      setMessage(`No se pudo enviar respuesta manual: ${messageError.message}`);
+      setSaving(false);
+      return;
+    }
+
+    const { error: conversationError } = await supabase
+      .from("bot_conversations")
+      .update({
+        bot_enabled: false,
+        handoff_to_human: true,
+        assigned_to: assignedTo.trim() || null,
+        unread_count: 0,
+        status: "humano",
+        last_message: cleanReply,
+        last_message_at: now,
+        updated_at: now,
+      })
+      .eq("id", conversation.id);
+
+    if (conversationError) {
+      setMessage(
+        `Se guardó el mensaje, pero no se pudo apagar IA. Aplica el SQL agregado en el repo si faltan columnas. Detalle: ${conversationError.message}`
+      );
+      setSaving(false);
+      await loadConversationMessages(conversation.id);
+      return;
+    }
+
+    setManualReply("");
+    setMessage(
+      "Respuesta manual guardada. La IA quedó apagada para esta conversación."
+    );
+    setSaving(false);
+    await loadData();
+    await loadConversationMessages(conversation.id);
   };
 
   const handleSettingsChange = (field, value) => {
@@ -631,6 +874,15 @@ export default function BotPage() {
         return;
       }
 
+      if (data.botMuted) {
+        setMessage(
+          "La IA está apagada para esta conversación. El mensaje quedó en la bandeja para seguimiento manual."
+        );
+        setTestLoading(false);
+        await loadData();
+        return;
+      }
+
       const botBubble = {
         id: `bot-${Date.now()}`,
         direction: "bot",
@@ -711,6 +963,10 @@ export default function BotPage() {
     setMessage("Solicitud actualizada correctamente ✨");
     await loadData();
   };
+
+  const selectedConversation = conversations.find(
+    (conversation) => conversation.id === selectedConversationId
+  );
 
   if (loadingSession) {
     return (
@@ -1362,8 +1618,8 @@ export default function BotPage() {
         <Card>
           <SectionHeader
             eyebrow="Conversaciones"
-            title="Conversaciones del bot"
-            description="Historial general de contactos recibidos por WhatsApp."
+            title="Gestor de conversaciones"
+            description="Bandeja interna para revisar chats, responder manualmente y prender o apagar la IA por conversación."
             action={
               <button
                 type="button"
@@ -1378,28 +1634,228 @@ export default function BotPage() {
           {conversations.length === 0 ? (
             <EmptyState text="Aún no hay conversaciones del bot." />
           ) : (
-            <div className="space-y-4">
-              {conversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
-                >
-                  <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                    {conversation.status} · {conversation.current_step}
-                  </p>
-                  <h4 className="mt-2 text-xl font-light">
-                    {conversation.client_name || conversation.client_phone}
-                  </h4>
-                  <p className="mt-2 text-sm text-[#68777c]">
-                    WhatsApp: {conversation.client_phone}
-                  </p>
-                  {conversation.last_message && (
-                    <p className="mt-3 whitespace-pre-wrap rounded-xl bg-[#f7f9fa] p-3 text-sm text-[#68777c]">
-                      {conversation.last_message}
-                    </p>
-                  )}
-                </div>
-              ))}
+            <div className="grid overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa] xl:grid-cols-[0.85fr_1.6fr]">
+              <aside className="max-h-[720px] overflow-y-auto border-b border-[#dde3e6] bg-white xl:border-b-0 xl:border-r">
+                {conversations.map((conversation) => {
+                  const isSelected = conversation.id === selectedConversationId;
+                  const aiEnabled = isConversationAiEnabled(conversation);
+                  const unreadCount = Number(conversation.unread_count || 0);
+
+                  return (
+                    <button
+                      type="button"
+                      key={conversation.id}
+                      onClick={() => setSelectedConversationId(conversation.id)}
+                      className={`w-full border-b border-[#edf0f1] px-4 py-4 text-left transition hover:bg-[#f7f9fa] ${
+                        isSelected ? "bg-[#f9eef0]" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-[#263238]">
+                            {conversation.client_name ||
+                              conversation.client_phone ||
+                              "Contacto sin nombre"}
+                          </p>
+                          <p className="mt-1 text-xs text-[#8a969a]">
+                            {conversation.client_phone || "Sin teléfono"}
+                          </p>
+                        </div>
+
+                        <div className="shrink-0 text-right">
+                          <p className="text-[11px] text-[#8a969a]">
+                            {formatDateTime(
+                              conversation.last_message_at ||
+                                conversation.updated_at ||
+                                conversation.created_at
+                            )}
+                          </p>
+                          {unreadCount > 0 && (
+                            <span className="mt-2 inline-flex rounded-full bg-[#bd7b83] px-2 py-0.5 text-[11px] text-white">
+                              {unreadCount}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <p className="mt-3 line-clamp-2 text-sm text-[#68777c]">
+                        {conversation.last_message || "Sin mensajes recientes"}
+                      </p>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span
+                          className={`rounded-full px-3 py-1 text-[11px] ${
+                            aiEnabled
+                              ? "bg-green-50 text-green-700"
+                              : "bg-amber-50 text-amber-700"
+                          }`}
+                        >
+                          {aiEnabled ? "IA ON" : "IA OFF"}
+                        </span>
+                        <span className="rounded-full bg-[#eef1f3] px-3 py-1 text-[11px] text-[#68777c]">
+                          {getConversationStatusLabel(conversation)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </aside>
+
+              <section className="flex min-h-[720px] flex-col bg-[#f7f9fa]">
+                {!selectedConversation ? (
+                  <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-[#68777c]">
+                    Selecciona una conversación para ver el historial.
+                  </div>
+                ) : (
+                  <>
+                    <div className="border-b border-[#dde3e6] bg-white p-5">
+                      <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                            {getConversationStatusLabel(selectedConversation)}
+                          </p>
+                          <h4 className="mt-2 text-2xl font-light">
+                            {selectedConversation.client_name ||
+                              selectedConversation.client_phone}
+                          </h4>
+                          <p className="mt-1 text-sm text-[#68777c]">
+                            WhatsApp: {selectedConversation.client_phone || "-"}
+                          </p>
+                          <p className="text-xs text-[#8a969a]">
+                            Última actividad:{" "}
+                            {formatDateTime(
+                              selectedConversation.last_message_at ||
+                                selectedConversation.updated_at
+                            )}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateConversationControl(
+                              selectedConversation,
+                              !isConversationAiEnabled(selectedConversation)
+                            )
+                          }
+                          className={`rounded-full px-5 py-2 text-sm text-white transition hover:opacity-90 ${
+                            isConversationAiEnabled(selectedConversation)
+                              ? "bg-amber-600"
+                              : "bg-green-600"
+                          }`}
+                        >
+                          {isConversationAiEnabled(selectedConversation)
+                            ? "IA ON · Apagar"
+                            : "IA OFF · Activar IA"}
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                        <InputField
+                          label="Responsable"
+                          value={assignedTo}
+                          onChange={setAssignedTo}
+                          placeholder="Nombre de asesora o responsable"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => saveAssignedTo(selectedConversation)}
+                          className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                        >
+                          Guardar responsable
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      ref={conversationScrollRef}
+                      className="flex-1 space-y-3 overflow-y-auto p-5"
+                    >
+                      {loadingConversationMessages ? (
+                        <p className="text-sm text-[#68777c]">
+                          Cargando mensajes...
+                        </p>
+                      ) : conversationMessages.length === 0 ? (
+                        <EmptyState text="Aún no hay mensajes para esta conversación." />
+                      ) : (
+                        conversationMessages.map((item) => {
+                          const isIncoming = item.direction === "incoming";
+
+                          return (
+                            <div
+                              key={item.id}
+                              className={`flex ${
+                                isIncoming ? "justify-start" : "justify-end"
+                              }`}
+                            >
+                              <div
+                                className={`max-w-[78%] rounded-[1.25rem] px-4 py-3 text-sm leading-6 shadow-sm ${
+                                  isIncoming
+                                    ? "bg-white text-[#263238]"
+                                    : "bg-[#bd7b83] text-white"
+                                }`}
+                              >
+                                <p className="whitespace-pre-wrap">{item.body}</p>
+                                <p
+                                  className={`mt-2 text-[11px] ${
+                                    isIncoming
+                                      ? "text-[#8a969a]"
+                                      : "text-white/75"
+                                  }`}
+                                >
+                                  {isIncoming ? "Cliente" : "Bot / admin"} ·{" "}
+                                  {formatDateTime(item.created_at)}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="border-t border-[#dde3e6] bg-white p-5">
+                      <div className="mb-4">
+                        <p className="mb-2 text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                          Respuestas rápidas
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {quickReplies.map((reply) => (
+                            <button
+                              type="button"
+                              key={reply.label}
+                              onClick={() => setManualReply(reply.text)}
+                              className="rounded-full border border-[#dde3e6] px-4 py-2 text-xs text-[#68777c] transition hover:border-[#bd7b83] hover:text-[#bd7b83]"
+                            >
+                              {reply.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                        <TextAreaField
+                          label="Respuesta manual"
+                          value={manualReply}
+                          onChange={setManualReply}
+                          placeholder="Escribe una respuesta para la clienta..."
+                        />
+                        <button
+                          type="button"
+                          onClick={() => sendManualReply(selectedConversation)}
+                          disabled={saving || !manualReply.trim()}
+                          className="rounded-full bg-[#bd7b83] px-6 py-4 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+                        >
+                          Enviar respuesta manual
+                        </button>
+                      </div>
+
+                      <p className="mt-3 text-xs text-[#8a969a]">
+                        Al enviar una respuesta manual, la IA se apaga para esta conversación y queda en seguimiento humano. Puedes reactivarla con “Activar IA”.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </section>
             </div>
           )}
         </Card>

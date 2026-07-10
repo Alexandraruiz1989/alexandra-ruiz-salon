@@ -398,6 +398,176 @@ function buildServiceExplanationReply(message, service) {
   return "Claro. Para responderte con precisión, dime el nombre o el número del servicio sobre el que tienes duda. No lo seleccionaré hasta que me confirmes cuál deseas agendar.";
 }
 
+function isServiceQuestionMessage(message) {
+  const text = normalizeText(message);
+
+  if (!text) return false;
+
+  return (
+    text.includes("?") ||
+    text.startsWith("hacen") ||
+    text.includes(" hacen ") ||
+    text.startsWith("manejan") ||
+    text.includes(" manejan ") ||
+    text.startsWith("tienen") ||
+    text.includes(" tienen ") ||
+    text.includes("tambien hacen") ||
+    text.includes("también hacen") ||
+    text.includes("cuanto cuesta") ||
+    text.includes("cuánto cuesta") ||
+    text.includes("precio") ||
+    text.startsWith("y con ") ||
+    text.includes(" con gel") ||
+    wantsExplanation(text)
+  );
+}
+
+function detectConversationTopicFromText(value) {
+  const text = normalizeText(value);
+
+  if (!text) return "";
+  if (asksLocation(text)) return "ubicación";
+  if (asksBusinessHours(text)) return "horarios";
+  if (text.includes("pedicure") || text.includes("pedi") || text.includes("acripie")) return "pedicure";
+  if (text.includes("escultural") || text.includes("extension") || text.includes("extensión") || text.includes("softgel")) return "extensiones";
+  if (text.includes("acril")) return "acrílico";
+  if (text.includes("manicure") || text.includes("mani")) return "manicure";
+  if (text.includes("ceja") || text.includes("pestana") || text.includes("pestaña")) return "cejas/pestañas";
+  if (text.includes("cabello") || text.includes("pelo")) return "cabello";
+  if (text.includes("una") || text.includes("uña")) return "uñas";
+  if (text.includes("cita") || text.includes("agendar") || text.includes("agenda")) return "agendar";
+
+  return "";
+}
+
+function detectActiveConversationTopic(message, context, recentMessages) {
+  const directTopic = detectConversationTopicFromText(message);
+  if (directTopic) return directTopic;
+
+  if (context?.active_topic) return context.active_topic;
+
+  const recentTopic = [...(recentMessages || [])]
+    .reverse()
+    .map((item) => detectConversationTopicFromText(item.body))
+    .find(Boolean);
+
+  return recentTopic || "";
+}
+
+function getServicePriceText(service, fallbackPrice = null) {
+  const price = Number(service?.base_price || 0) || fallbackPrice;
+  return price ? `$${price}` : "te lo podemos cotizar con más detalle";
+}
+
+function findServiceByKeywords(services, requiredKeywords = [], optionalKeywords = []) {
+  const required = requiredKeywords.map(normalizeText).filter(Boolean);
+  const optional = optionalKeywords.map(normalizeText).filter(Boolean);
+
+  return (services || []).find((service) => {
+    const text = normalizeServiceText(service);
+    const hasRequired = required.every((keyword) => text.includes(keyword));
+    const hasOptional =
+      optional.length === 0 || optional.some((keyword) => text.includes(keyword));
+
+    return hasRequired && hasOptional;
+  });
+}
+
+function buildContextualServiceInquiryReply({
+  incomingMessage,
+  context,
+  recentMessages,
+  services,
+}) {
+  if (!isServiceQuestionMessage(incomingMessage)) return null;
+
+  const text = normalizeText(incomingMessage);
+  const recentText = normalizeText(
+    `${(recentMessages || []).map((item) => item.body || "").join(" ")} ${
+      context?.active_service_focus || ""
+    }`
+  );
+  const activeTopic = detectActiveConversationTopic(
+    incomingMessage,
+    context,
+    recentMessages
+  );
+
+  if (text.includes("escultural") || recentText.includes("escultural")) {
+    const esculturalService =
+      findServiceByKeywords(services, ["escultural"], ["acril", "extension"]) ||
+      findServiceByKeywords(services, ["extension"], ["acril"]);
+    const priceText = getServicePriceText(esculturalService, 410);
+
+    if (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) {
+      return {
+        reply: `Las extensiones esculturales en acrílico tienen costo de ${priceText} en largo base #2. Si deseas un largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendar esculturales o prefieres que te comparta otras opciones de extensiones?`,
+        topic: "extensiones",
+        serviceFocus: "esculturales",
+      };
+    }
+
+    return {
+      reply: `Sí, manejamos uñas esculturales. Las extensiones esculturales en acrílico tienen costo de ${priceText} en largo base #2. Si deseas un largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendar esculturales o prefieres que te comparta otras opciones de extensiones?`,
+      topic: "extensiones",
+      serviceFocus: "esculturales",
+    };
+  }
+
+  if (
+    (text.includes("con gel") || text === "y con gel" || text.includes(" gel")) &&
+    activeTopic === "pedicure"
+  ) {
+    const pedicureConGel =
+      findServiceByKeywords(services, ["pedicure", "gel"], ["clasico"]) ||
+      findServiceByKeywords(services, ["pedicure", "gel"]);
+    const priceText = getServicePriceText(pedicureConGel);
+    const priceLine =
+      pedicureConGel && Number(pedicureConGel.base_price || 0) > 0
+        ? ` Su precio es ${priceText}.`
+        : "";
+
+    return {
+      reply: `Sí, también tenemos opciones de pedicure con gel.${priceLine} Si venías viendo Pedicure Clásico, puedes elegir la versión con gel para agregar color semipermanente.\n\n¿Quieres que te muestre las opciones de pedicure con gel o prefieres agendar una?`,
+      topic: "pedicure",
+      serviceFocus: "pedicure con gel",
+    };
+  }
+
+  if (
+    text.includes("tambien hacen unas") ||
+    text.includes("también hacen uñas") ||
+    text.includes("hacen unas") ||
+    text.includes("hacen uñas") ||
+    (text.includes("unas") && (text.includes("hacen") || text.includes("manejan")))
+  ) {
+    return {
+      reply:
+        "Sí, también manejamos servicios de uñas 💕 Tenemos extensiones, acrílico, softgel, polygel, rellenos, mantenimiento, rubber, gel de construcción, gel semipermanente y manicure.\n\nSi quieres, te puedo ayudar a elegir según si buscas extensión nueva, relleno o algo sobre tu uña natural.",
+      topic: "uñas",
+      serviceFocus: "uñas",
+    };
+  }
+
+  if (
+    (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) &&
+    context?.active_service_focus
+  ) {
+    const matches = findMatches(context.active_service_focus, services, 170);
+    const service = matches[0]?.service;
+
+    if (service) {
+      return {
+        reply: `${service.name} tiene precio desde ${getServicePriceText(service)}. Puede variar si agregas diseño, largo, retiro o algún adicional.\n\n¿Te gustaría agendarlo o prefieres que te comparta opciones similares?`,
+        topic: activeTopic || getServiceGroup(service),
+        serviceFocus: context.active_service_focus,
+      };
+    }
+  }
+
+  return null;
+}
+
 function isDecorationService(service) {
   const text = normalizeServiceText(service);
   return text.includes("decor") || text.includes("diseno") || text.includes("diseño") || text.includes("frances") || text.includes("francés") || text.includes("ojo de gato") || text.includes("cristal") || text.includes("charm") || text.includes("sticker") || text.includes("mano alzada");
@@ -1871,6 +2041,27 @@ async function saveBotMessages(
     },
   ]);
 }
+
+async function saveIncomingBotMessage(
+  supabase,
+  conversationId,
+  clientPhone,
+  incomingMessage,
+  rawPayload
+) {
+  if (!conversationId) return;
+
+  await supabase.from("bot_messages").insert([
+    {
+      conversation_id: conversationId,
+      client_phone: clientPhone,
+      direction: "incoming",
+      message_type: "text",
+      body: incomingMessage,
+      raw_payload: rawPayload,
+    },
+  ]);
+}
 function asksNearestAvailabilityBot(message) {
   const text = normalizeText(message);
 
@@ -2372,6 +2563,38 @@ export async function POST(request) {
     const services = (servicesResult.data || []).filter(isServiceBookable);
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
+    const isServiceQuestion = isServiceQuestionMessage(incomingMessage);
+
+    if (
+      conversation &&
+      (conversation.bot_enabled === false || conversation.handoff_to_human === true)
+    ) {
+      const savedConversation = await saveConversation(
+        supabase,
+        clientPhoneFromTest,
+        clientNameFromTest,
+        {
+          status: "humano",
+          last_message: incomingMessage,
+          intent: "human_handoff",
+          current_step: "humano",
+          booking_step: "humano",
+          conversation_context: context,
+          unread_count: Number(conversation.unread_count || 0) + 1,
+        }
+      );
+
+      await saveIncomingBotMessage(supabase, savedConversation.id, clientPhoneFromTest, incomingMessage, body);
+
+      return NextResponse.json({
+        ok: true,
+        reply: "",
+        botMuted: true,
+        intent: "human_handoff",
+        matchedSource: "bot_disabled",
+        step: "humano",
+      });
+    }
 
     const ai = await interpretWithAI(incomingMessage, context);
 
@@ -2419,10 +2642,12 @@ export async function POST(request) {
       `${incomingMessage} ${ai.time_text || ""} ${ai.time_preference || ""}`
     );
 
-    const staffPreference = detectStaffPreference(
-      `${incomingMessage} ${ai.staff_preference || ""}`,
-      staff
-    );
+    const staffPreference = isServiceQuestion
+      ? null
+      : detectStaffPreference(
+          `${incomingMessage} ${ai.staff_preference || ""}`,
+          staff
+        );
 
     const selectedServicesFromContext = Array.isArray(context.selected_services)
       ? context.selected_services
@@ -2441,6 +2666,10 @@ export async function POST(request) {
 
     let nextContext = {
       ...context,
+      active_topic:
+        detectActiveConversationTopic(incomingMessage, context, recentMessages) ||
+        context.active_topic ||
+        null,
       booking_notes: bookingNotes,
       requested_date: requestedDate || context.requested_date || null,
       minimum_start_minutes:
@@ -2508,6 +2737,26 @@ export async function POST(request) {
               : "Te comparto nuestra ubicación para que puedas orientarte mejor:"
           }\n${locationUrl}`;
         }
+      }
+    }
+
+    if (!reply && isServiceQuestion) {
+      const contextualServiceReply = buildContextualServiceInquiryReply({
+        incomingMessage,
+        context: nextContext,
+        recentMessages,
+        services,
+      });
+
+      if (contextualServiceReply?.reply) {
+        reply = contextualServiceReply.reply;
+        matchedSource = "contextual_service_inquiry";
+        nextContext.active_topic =
+          contextualServiceReply.topic || nextContext.active_topic;
+        nextContext.active_service_focus =
+          contextualServiceReply.serviceFocus ||
+          nextContext.active_service_focus ||
+          null;
       }
     }
 
@@ -2677,6 +2926,7 @@ export async function POST(request) {
     if (
       !reply &&
       !ai.wants_explanation &&
+      !isServiceQuestion &&
       pendingOptions.length > 0 &&
       (nextStep === "esperando_seleccion_servicios" ||
         nextStep === "esperando_servicios")
@@ -2751,6 +3001,7 @@ export async function POST(request) {
 
     if (
       !reply &&
+      !isServiceQuestion &&
       (ai.intent === "book_appointment" ||
         ai.intent === "ask_services" ||
         nextStep === "esperando_servicios" ||
