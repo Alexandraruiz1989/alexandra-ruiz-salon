@@ -1641,8 +1641,8 @@ useEffect(() => {
           {conversations.length === 0 ? (
             <EmptyState text="Aún no hay conversaciones del bot." />
           ) : (
-            <div className="grid overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa] xl:grid-cols-[0.85fr_1.6fr]">
-              <aside className="max-h-[720px] overflow-y-auto border-b border-[#dde3e6] bg-white xl:border-b-0 xl:border-r">
+            <div className="grid h-[calc(100vh-220px)] min-h-[560px] overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa] xl:grid-cols-[0.85fr_1.6fr]">
+              <aside className="h-52 min-h-0 overflow-y-auto border-b border-[#dde3e6] bg-white xl:h-full xl:border-b-0 xl:border-r">
                 {conversations.map((conversation) => {
                   const isSelected = conversation.id === selectedConversationId;
                   const aiEnabled = isConversationAiEnabled(conversation);
@@ -1708,14 +1708,14 @@ useEffect(() => {
                 })}
               </aside>
 
-              <section className="flex min-h-[720px] flex-col bg-[#f7f9fa]">
+              <section className="flex h-full min-h-0 flex-col bg-[#f7f9fa]">
                 {!selectedConversation ? (
-                  <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-[#68777c]">
+                  <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-[#68777c]">
                     Selecciona una conversación para ver el historial.
                   </div>
                 ) : (
                   <>
-                    <div className="border-b border-[#dde3e6] bg-white p-5">
+                    <div className="shrink-0 border-b border-[#dde3e6] bg-white p-5">
                       <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
                         <div>
                           <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
@@ -1776,7 +1776,7 @@ useEffect(() => {
 
                     <div
                       ref={conversationScrollRef}
-                      className="flex-1 space-y-3 overflow-y-auto p-5"
+                      className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5"
                     >
                       {loadingConversationMessages ? (
                         <p className="text-sm text-[#68777c]">
@@ -1820,7 +1820,7 @@ useEffect(() => {
                       )}
                     </div>
 
-                    <div className="border-t border-[#dde3e6] bg-white p-5">
+                    <div className="shrink-0 border-t border-[#dde3e6] bg-white p-5">
                       <div className="mb-4">
                         <p className="mb-2 text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
                           Respuestas rápidas
