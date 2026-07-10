@@ -2484,9 +2484,16 @@ export async function POST(request) {
 
       if (
         asksLocation(incomingMessage) &&
-        reply &&
-        !extractFirstUrl(reply)
+        reply
       ) {
+        if (
+          isFirstMessage &&
+          !normalizeText(reply).startsWith("hola") &&
+          !normalizeText(reply).startsWith("buenas")
+        ) {
+          reply = `¡Hola! Claro 💕 ${reply}`;
+        }
+
         const locationUrl = getConfiguredLocationUrl({
           settings,
           faqs,
@@ -2494,7 +2501,13 @@ export async function POST(request) {
           mediaAssets,
         });
 
-        reply = `${reply}\n\nTe comparto nuestra ubicación para que puedas orientarte mejor:\n${locationUrl}`;
+        if (!extractFirstUrl(reply)) {
+          reply = `${reply}\n\n${
+            isFirstMessage
+              ? "Te comparto también nuestra ubicación para que puedas orientarte mejor:"
+              : "Te comparto nuestra ubicación para que puedas orientarte mejor:"
+          }\n${locationUrl}`;
+        }
       }
     }
 
