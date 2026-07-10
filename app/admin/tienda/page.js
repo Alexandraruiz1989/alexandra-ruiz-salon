@@ -591,9 +591,63 @@ export default function StorePage() {
     });
   };
 
+  const getStoreAccessToken = async () => {
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error || !data.session?.access_token) {
+      throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+    }
+
+    return data.session.access_token;
+  };
+
+  const saveProductWithApi = async ({ id = "", product, matchBySku = false }) => {
+    const token = await getStoreAccessToken();
+    const response = await fetch("/api/admin/store/products", {
+      method: id ? "PATCH" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(
+        id
+          ? { id, product }
+          : {
+              product,
+              match_by_sku: matchBySku,
+            }
+      ),
+    });
+
+    const result = await response
+      .json()
+      .catch(() => ({ success: false, error: "Respuesta inválida del servidor." }));
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || `Error técnico al guardar producto (${response.status}).`);
+    }
+
+    return result;
+  };
+
+  const getProductErrorMessage = (error, fallback) => {
+    const text = String(error?.message || error || "").trim();
+    const normalized = normalizeText(text);
+
+    if (normalized.includes("sesion expiro") || normalized.includes("session")) {
+      return "Tu sesión expiró. Vuelve a iniciar sesión.";
+    }
+
+    if (normalized.includes("permiso") || normalized.includes("permission denied")) {
+      return "No tienes permiso para administrar productos.";
+    }
+
+    return `${fallback}: ${text || "Error técnico desconocido."}`;
+  };
+
   const saveProduct = async () => {
     if (!canEditProducts) {
-      setMessage("No tienes permiso para editar productos.");
+      setMessage("No tienes permiso para administrar productos.");
       return;
     }
 
@@ -624,37 +678,36 @@ export default function StorePage() {
       updated_at: new Date().toISOString(),
     };
 
-    const query = editingProductId
-      ? supabase.from("store_products").update(payload).eq("id", editingProductId)
-      : supabase.from("store_products").insert([payload]);
-
-    const { error } = await query;
-    setSaving(false);
-
-    if (error) {
-      setMessage(`No se pudo guardar producto: ${error.message}`);
-      return;
+    try {
+      await saveProductWithApi({ id: editingProductId, product: payload });
+      setMessage("Producto guardado correctamente ✨");
+      resetProductForm();
+      await loadData();
+    } catch (error) {
+      setMessage(getProductErrorMessage(error, "No se pudo guardar producto"));
+    } finally {
+      setSaving(false);
     }
-
-    setMessage("Producto guardado correctamente ✨");
-    resetProductForm();
-    await loadData();
   };
 
   const toggleProduct = async (product) => {
-    if (!canEditProducts) return;
-
-    const { error } = await supabase
-      .from("store_products")
-      .update({ active: product.active === false, updated_at: new Date().toISOString() })
-      .eq("id", product.id);
-
-    if (error) {
-      setMessage(`No se pudo actualizar producto: ${error.message}`);
+    if (!canEditProducts) {
+      setMessage("No tienes permiso para administrar productos.");
       return;
     }
 
-    await loadData();
+    try {
+      await saveProductWithApi({
+        id: product.id,
+        product: {
+          active: product.active === false,
+          updated_at: new Date().toISOString(),
+        },
+      });
+      await loadData();
+    } catch (error) {
+      setMessage(getProductErrorMessage(error, "No se pudo actualizar producto"));
+    }
   };
 
   const saveStockMovement = async () => {
@@ -677,13 +730,16 @@ export default function StorePage() {
         ? quantity
         : previousStock + quantity;
 
-    const { error: productError } = await supabase
-      .from("store_products")
-      .update({ current_stock: newStock, updated_at: new Date().toISOString() })
-      .eq("id", product.id);
-
-    if (productError) {
-      setMessage(`No se pudo actualizar stock: ${productError.message}`);
+    try {
+      await saveProductWithApi({
+        id: product.id,
+        product: {
+          current_stock: newStock,
+          updated_at: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      setMessage(getProductErrorMessage(error, "No se pudo actualizar stock"));
       return;
     }
 
@@ -771,26 +827,19 @@ export default function StorePage() {
         updated_at: new Date().toISOString(),
       };
 
-      let existing = null;
-      if (row.sku) {
-        const { data } = await supabase
-          .from("store_products")
-          .select("id,current_stock")
-          .eq("sku", row.sku)
-          .maybeSingle();
-        existing = data;
-      }
+      try {
+        const result = await saveProductWithApi({
+          product: payload,
+          matchBySku: true,
+        });
 
-      const result = existing?.id
-        ? await supabase.from("store_products").update(payload).eq("id", existing.id)
-        : await supabase.from("store_products").insert([payload]);
-
-      if (result.error) {
-        errors.push(`Fila ${row.rowNumber}: ${result.error.message}`);
-      } else if (existing?.id) {
-        updated += 1;
-      } else {
-        created += 1;
+        if (result.action === "updated") {
+          updated += 1;
+        } else {
+          created += 1;
+        }
+      } catch (error) {
+        errors.push(`Fila ${row.rowNumber}: ${error.message}`);
       }
     }
 

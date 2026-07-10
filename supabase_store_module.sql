@@ -103,7 +103,10 @@ set search_path = public
 as $$
   select up.role
   from public.user_profiles up
-  where up.auth_user_id = auth.uid()
+  where (
+      up.auth_user_id = auth.uid()
+      or lower(up.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+    )
     and coalesce(up.active, true) = true
   limit 1
 $$;
@@ -400,3 +403,85 @@ begin
       using (public.store_user_has_role(array[''admin'']))';
   end if;
 end $$;
+
+-- Refresca definiciones si las políticas ya existían de una ejecución anterior.
+-- No borra datos ni tablas; solo actualiza expresiones de permisos.
+alter policy store_products_select_tienda_roles
+  on public.store_products
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja', 'product_owner', 'tecnica']));
+
+alter policy store_products_insert_admin_encargada
+  on public.store_products
+  with check (public.store_user_has_role(array['admin', 'encargada']));
+
+alter policy store_products_update_admin_encargada_caja
+  on public.store_products
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja']))
+  with check (public.store_user_has_role(array['admin', 'encargada', 'caja']));
+
+alter policy store_products_delete_admin
+  on public.store_products
+  using (public.store_user_has_role(array['admin']));
+
+alter policy store_inventory_movements_select_tienda_roles
+  on public.store_inventory_movements
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja', 'product_owner']));
+
+alter policy store_inventory_movements_insert_staff_tienda
+  on public.store_inventory_movements
+  with check (public.store_user_has_role(array['admin', 'encargada', 'caja']));
+
+alter policy store_inventory_movements_delete_admin
+  on public.store_inventory_movements
+  using (public.store_user_has_role(array['admin']));
+
+alter policy store_sales_select_tienda_roles
+  on public.store_sales
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja', 'product_owner']));
+
+alter policy store_sales_insert_staff_tienda
+  on public.store_sales
+  with check (public.store_user_has_role(array['admin', 'encargada', 'caja']));
+
+alter policy store_sales_update_admin_encargada
+  on public.store_sales
+  using (public.store_user_has_role(array['admin', 'encargada']))
+  with check (public.store_user_has_role(array['admin', 'encargada']));
+
+alter policy store_sales_delete_admin
+  on public.store_sales
+  using (public.store_user_has_role(array['admin']));
+
+alter policy store_sale_items_select_tienda_roles
+  on public.store_sale_items
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja', 'product_owner']));
+
+alter policy store_sale_items_insert_staff_tienda
+  on public.store_sale_items
+  with check (public.store_user_has_role(array['admin', 'encargada', 'caja']));
+
+alter policy store_sale_items_update_admin_encargada
+  on public.store_sale_items
+  using (public.store_user_has_role(array['admin', 'encargada']))
+  with check (public.store_user_has_role(array['admin', 'encargada']));
+
+alter policy store_sale_items_delete_admin
+  on public.store_sale_items
+  using (public.store_user_has_role(array['admin']));
+
+alter policy store_settings_select_tienda_roles
+  on public.store_settings
+  using (public.store_user_has_role(array['admin', 'encargada', 'caja', 'product_owner']));
+
+alter policy store_settings_insert_admin
+  on public.store_settings
+  with check (public.store_user_has_role(array['admin']));
+
+alter policy store_settings_update_admin
+  on public.store_settings
+  using (public.store_user_has_role(array['admin']))
+  with check (public.store_user_has_role(array['admin']));
+
+alter policy store_settings_delete_admin
+  on public.store_settings
+  using (public.store_user_has_role(array['admin']));
