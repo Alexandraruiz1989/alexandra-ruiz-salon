@@ -349,7 +349,7 @@ function buildServiceExplanationReply(message, service) {
   const price = Number(service?.base_price || 0);
 
   if (serviceText.includes("acripie") || text.includes("acripie")) {
-    return "El Acripie no incluye pedicure completo. Es un servicio enfocado en la aplicación o reconstrucción estética en uñas de los pies. Si deseas limpieza, retiro de cutícula, hidratación o gel en pies, debes agendar un pedicure aparte o elegir un servicio de pedicure que lo incluya.\n\n¿Quieres que te ayude a elegir entre Acripie y un pedicure completo?";
+    return "Sí, el Acripie incluye pedicure en seco de cortesía porque es un servicio de uñas en pies. Lo que no incluye es un pedicure más profundo como Clásico, Spa o Medicado. Si deseas una limpieza más completa, hidratación o atención de molestias/uñeros, podemos agregar un pedicure más completo.\n\n¿Te gustaría que te ayude a elegir la mejor opción?";
   }
 
   if (serviceText.includes("medicado") || text.includes("medicado")) {
@@ -461,9 +461,73 @@ function cleanServiceQuery(query) {
     .replace(/\btambien\b/g, " ")
     .replace(/\btambién\b/g, " ")
     .replace(/\bagrega\b/g, " ")
+    .replace(/\bpor\s*favor\b/g, " ")
+    .replace(/\bporfa(vor)?\b/g, " ")
     .replace(/\blargo\s*#?\s*\d+\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isGeneralPedicureQuery(value) {
+  const text = cleanServiceQuery(value);
+
+  return text === "pedi" || text === "pedicure" || text === "pedicura";
+}
+
+function isGeneralPedicureRequest(value) {
+  const text = cleanServiceQuery(value);
+
+  if (!/(^|\s)(pedi|pedicure|pedicura)(\s|$)/.test(text)) return false;
+
+  return ![
+    "clasico",
+    "spa",
+    "medicado",
+    "seco",
+    "acripie",
+    "uñero",
+    "unero",
+    "encarnada",
+  ].some((keyword) => text.includes(keyword));
+}
+
+function isPedicureRequestedServiceQuery(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("pedi") ||
+    text.includes("pedicura") ||
+    text.includes("acripie")
+  );
+}
+
+function findExplicitServiceSelections(text, options) {
+  if (isGeneralPedicureQuery(text)) return [];
+
+  const raw = normalizeText(text);
+  const clean = cleanServiceQuery(text);
+  const exactMatches = [];
+  const partialMatches = [];
+
+  for (const service of options || []) {
+    const name = normalizeText(service?.name);
+
+    if (!name) continue;
+
+    if (raw.includes(name) || clean === name) {
+      exactMatches.push(service);
+      continue;
+    }
+
+    if (clean.length >= 4 && name.includes(clean)) {
+      partialMatches.push(service);
+    }
+  }
+
+  if (exactMatches.length > 0) return exactMatches;
+  if (partialMatches.length === 1) return partialMatches;
+
+  return [];
 }
 
 function serviceScore(query, service) {
@@ -596,8 +660,18 @@ function parseSelectionFromOptions(text, options) {
       .map((num) => options[num - 1]);
   }
 
-  const matches = findMatches(text, options, 190).map((item) => item.service);
-  return matches.slice(0, 4);
+  const explicitMatches = findExplicitServiceSelections(text, options);
+
+  if (explicitMatches.length > 0) return explicitMatches;
+
+  const matches = findMatches(text, options, 220);
+  const [best, second] = matches;
+
+  if (best && (!second || best.score >= second.score + 120)) {
+    return [best.service];
+  }
+
+  return [];
 }
 
 function resolveRequestedServices(serviceQueries, services) {
@@ -621,7 +695,7 @@ function resolveRequestedServices(serviceQueries, services) {
 
     if (query === "rubber") {
       options = getRubberOptions(services);
-    } else if (query === "pedi" || query === "pedicure") {
+    } else if (isGeneralPedicureQuery(query)) {
       options = getPedicureOptions(services);
     } else if (
       query === "unas acrilicas" ||
@@ -1018,11 +1092,19 @@ function getDefaultKnowledgeItems() {
       active: true,
     },
     {
+      title: "Cortesía en servicios de uñas",
+      category: "Servicios",
+      content:
+        "Todos los servicios de uñas incluyen manicure en seco o pedicure en seco de cortesía según corresponda, excepto aplicación de gel semipermanente/Gelish. Acripie incluye pedicure en seco de cortesía, pero no sustituye un pedicure clásico, spa o medicado.",
+      keywords: "manicure en seco, pedicure en seco, cortesia, gelish, gel semipermanente, acripie incluye pedicure",
+      active: true,
+    },
+    {
       title: "Acripie",
       category: "Pedicure",
       content:
-        "Acripie no incluye pedicure completo. Es un servicio enfocado en la aplicación o reconstrucción estética en uñas de los pies. Si la clienta desea limpieza, retiro de cutícula, hidratación o gel en pies, debe agendar pedicure aparte o elegir un servicio de pedicure que lo incluya.",
-      keywords: "acripie, incluye pedi, reconstrucción estética, uñas de los pies",
+        "Acripie incluye pedicure en seco de cortesía porque es un servicio de uñas en pies. No incluye un pedicure más profundo como Pedicure Clásico, Pedicure Spa o Pedicure Medicado. Si la clienta desea limpieza más completa, hidratación profunda, atención de molestias, uñeros o un servicio más relajante, se puede ofrecer agregar un pedicure más completo.",
+      keywords: "acripie, incluye pedi, incluye pedicure, pedicure en seco de cortesia, reconstrucción estética, uñas de los pies",
       active: true,
     },
     {
@@ -1426,7 +1508,7 @@ Contexto:
 - Si la clienta dice "uñas" de forma general, no asumas el sistema exacto.
 - Si dice "rubber", puede referirse a Rubber Base o Relleno de Rubber.
 - Si dice "relleno de rubber", es específico.
-- Si dice "pedi", significa pedicure, pero puede faltar el tipo de pedicure.
+- Si dice "pedi" o "pedicure" de forma general, significa categoría pedicure; NO elijas varios servicios exactos. Usa services_requested: ["pedicure"] para que el bot muestre opciones y pida elegir una.
 - Si dice "también quiero", "agrega", "también", quiere sumar un servicio a lo ya elegido.
 - Si dice "ya pagué", "ya transferí", "te mando comprobante", la intención es comprobante de anticipo.
 - Si dice "Ale", se refiere a Alexandra Ruiz.
@@ -1439,6 +1521,7 @@ Contexto:
 - Si pide menú, precios o servicios, marca wants_prices_or_menu.
 - Si pregunta "incluye", "qué trae", "qué es", "explícame", "diferencia", "cuál me conviene" o "cuánto cuesta ese", marca wants_explanation.
 - Una pregunta explicativa sobre un servicio NO es una selección. Conserva el contexto y no agregues servicios hasta recibir una confirmación clara o números de opción.
+- Acripie incluye pedicure en seco de cortesía, pero no sustituye un pedicure clásico, spa o medicado.
 
 Fecha actual en Mérida, México: ${today}
 
@@ -2109,6 +2192,15 @@ export async function POST(request) {
       normalizeText(incomingMessage).includes("menu") ||
       normalizeText(incomingMessage).includes("menú");
 
+    if (!ai.wants_explanation && isGeneralPedicureRequest(incomingMessage)) {
+      const nonPedicureRequests = (Array.isArray(ai.services_requested)
+        ? ai.services_requested
+        : []
+      ).filter((query) => !isPedicureRequestedServiceQuery(query));
+
+      ai.services_requested = ["pedicure", ...nonPedicureRequests];
+    }
+
     if (asksGreetingOrInfo(incomingMessage) && ai.intent === "unknown") {
       ai.intent = "greeting";
     }
@@ -2433,13 +2525,14 @@ export async function POST(request) {
         const resolved = resolveRequestedServices(serviceQueries, services);
 
         if (resolved.ambiguous.length > 0) {
+          const keepExistingServices = selectedServicesFromContext.length > 0 && isAddingService;
+
           nextContext.pending_service_options = resolved.ambiguous;
-          nextContext.adding_service_mode =
-            selectedServicesFromContext.length > 0 || isAddingService;
+          nextContext.adding_service_mode = keepExistingServices;
 
           reply = buildServiceOptionsMessage(
             resolved.ambiguous,
-            selectedServicesFromContext
+            keepExistingServices ? selectedServicesFromContext : []
           );
 
           matchedSource = "ambiguous_services_options";
