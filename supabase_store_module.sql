@@ -90,3 +90,313 @@ create index if not exists store_sale_items_sale_idx on public.store_sale_items(
 -- Rol sugerido para user_profiles.role:
 -- product_owner
 -- Este rol se habilita en la app para ver solo /admin/tienda.
+
+-- Permisos y RLS para usar Tienda desde Supabase Auth.
+-- Este bloque es seguro para ejecutarse más de una vez.
+
+create or replace function public.store_current_user_role()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select up.role
+  from public.user_profiles up
+  where up.auth_user_id = auth.uid()
+    and coalesce(up.active, true) = true
+  limit 1
+$$;
+
+create or replace function public.store_user_has_role(allowed_roles text[])
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(public.store_current_user_role() = any(allowed_roles), false)
+$$;
+
+grant usage on schema public to authenticated;
+
+grant execute on function public.store_current_user_role() to authenticated;
+grant execute on function public.store_user_has_role(text[]) to authenticated;
+
+grant select, insert, update, delete on public.store_products to authenticated;
+grant select, insert, update, delete on public.store_inventory_movements to authenticated;
+grant select, insert, update, delete on public.store_sales to authenticated;
+grant select, insert, update, delete on public.store_sale_items to authenticated;
+grant select, insert, update, delete on public.store_settings to authenticated;
+
+alter table public.store_products enable row level security;
+alter table public.store_inventory_movements enable row level security;
+alter table public.store_sales enable row level security;
+alter table public.store_sale_items enable row level security;
+alter table public.store_settings enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_products'
+      and policyname = 'store_products_select_tienda_roles'
+  ) then
+    execute 'create policy store_products_select_tienda_roles
+      on public.store_products
+      for select
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'', ''product_owner'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_products'
+      and policyname = 'store_products_insert_admin_encargada'
+  ) then
+    execute 'create policy store_products_insert_admin_encargada
+      on public.store_products
+      for insert
+      to authenticated
+      with check (public.store_user_has_role(array[''admin'', ''encargada'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_products'
+      and policyname = 'store_products_update_admin_encargada_caja'
+  ) then
+    execute 'create policy store_products_update_admin_encargada_caja
+      on public.store_products
+      for update
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'']))
+      with check (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_products'
+      and policyname = 'store_products_delete_admin'
+  ) then
+    execute 'create policy store_products_delete_admin
+      on public.store_products
+      for delete
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))';
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_inventory_movements'
+      and policyname = 'store_inventory_movements_select_tienda_roles'
+  ) then
+    execute 'create policy store_inventory_movements_select_tienda_roles
+      on public.store_inventory_movements
+      for select
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'', ''product_owner'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_inventory_movements'
+      and policyname = 'store_inventory_movements_insert_staff_tienda'
+  ) then
+    execute 'create policy store_inventory_movements_insert_staff_tienda
+      on public.store_inventory_movements
+      for insert
+      to authenticated
+      with check (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_inventory_movements'
+      and policyname = 'store_inventory_movements_delete_admin'
+  ) then
+    execute 'create policy store_inventory_movements_delete_admin
+      on public.store_inventory_movements
+      for delete
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))';
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sales'
+      and policyname = 'store_sales_select_tienda_roles'
+  ) then
+    execute 'create policy store_sales_select_tienda_roles
+      on public.store_sales
+      for select
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'', ''product_owner'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sales'
+      and policyname = 'store_sales_insert_staff_tienda'
+  ) then
+    execute 'create policy store_sales_insert_staff_tienda
+      on public.store_sales
+      for insert
+      to authenticated
+      with check (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sales'
+      and policyname = 'store_sales_update_admin_encargada'
+  ) then
+    execute 'create policy store_sales_update_admin_encargada
+      on public.store_sales
+      for update
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'']))
+      with check (public.store_user_has_role(array[''admin'', ''encargada'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sales'
+      and policyname = 'store_sales_delete_admin'
+  ) then
+    execute 'create policy store_sales_delete_admin
+      on public.store_sales
+      for delete
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))';
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sale_items'
+      and policyname = 'store_sale_items_select_tienda_roles'
+  ) then
+    execute 'create policy store_sale_items_select_tienda_roles
+      on public.store_sale_items
+      for select
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'', ''product_owner'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sale_items'
+      and policyname = 'store_sale_items_insert_staff_tienda'
+  ) then
+    execute 'create policy store_sale_items_insert_staff_tienda
+      on public.store_sale_items
+      for insert
+      to authenticated
+      with check (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sale_items'
+      and policyname = 'store_sale_items_update_admin_encargada'
+  ) then
+    execute 'create policy store_sale_items_update_admin_encargada
+      on public.store_sale_items
+      for update
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'']))
+      with check (public.store_user_has_role(array[''admin'', ''encargada'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_sale_items'
+      and policyname = 'store_sale_items_delete_admin'
+  ) then
+    execute 'create policy store_sale_items_delete_admin
+      on public.store_sale_items
+      for delete
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))';
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_settings'
+      and policyname = 'store_settings_select_tienda_roles'
+  ) then
+    execute 'create policy store_settings_select_tienda_roles
+      on public.store_settings
+      for select
+      to authenticated
+      using (public.store_user_has_role(array[''admin'', ''encargada'', ''caja'', ''product_owner'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_settings'
+      and policyname = 'store_settings_insert_admin'
+  ) then
+    execute 'create policy store_settings_insert_admin
+      on public.store_settings
+      for insert
+      to authenticated
+      with check (public.store_user_has_role(array[''admin'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_settings'
+      and policyname = 'store_settings_update_admin'
+  ) then
+    execute 'create policy store_settings_update_admin
+      on public.store_settings
+      for update
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))
+      with check (public.store_user_has_role(array[''admin'']))';
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'store_settings'
+      and policyname = 'store_settings_delete_admin'
+  ) then
+    execute 'create policy store_settings_delete_admin
+      on public.store_settings
+      for delete
+      to authenticated
+      using (public.store_user_has_role(array[''admin'']))';
+  end if;
+end $$;
