@@ -459,6 +459,26 @@ function getServicePriceText(service, fallbackPrice = null) {
   return price ? `$${price}` : "te lo podemos cotizar con más detalle";
 }
 
+function getEsculturalesAcrylicPrice(services) {
+  const esculturalService = (services || []).find((service) => {
+    const text = normalizeServiceText(service);
+    const price = Number(service?.base_price || 0);
+
+    return (
+      isServiceBookable(service) &&
+      isHandsNailService(service) &&
+      !isDesignOrExtraService(service) &&
+      text.includes("escultural") &&
+      text.includes("acril") &&
+      price >= 300
+    );
+  });
+
+  return Number(esculturalService?.base_price || 0) >= 300
+    ? Number(esculturalService.base_price)
+    : 410;
+}
+
 function findServiceByKeywords(services, requiredKeywords = [], optionalKeywords = []) {
   const required = requiredKeywords.map(normalizeText).filter(Boolean);
   const optional = optionalKeywords.map(normalizeText).filter(Boolean);
@@ -494,21 +514,18 @@ function buildContextualServiceInquiryReply({
   );
 
   if (text.includes("escultural") || recentText.includes("escultural")) {
-    const esculturalService =
-      findServiceByKeywords(services, ["escultural"], ["acril", "extension"]) ||
-      findServiceByKeywords(services, ["extension"], ["acril"]);
-    const priceText = getServicePriceText(esculturalService, 410);
+    const priceText = `$${getEsculturalesAcrylicPrice(services)}`;
 
     if (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) {
       return {
-        reply: `Las extensiones esculturales en acrílico tienen costo de ${priceText} en largo base #2. Si deseas un largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendar esculturales o prefieres que te comparta otras opciones de extensiones?`,
+        reply: `Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. El largo extra tiene costo adicional de +$50 y el diseño se cotiza según lo que elijas.\n\n¿Te gustaría agendarlas?`,
         topic: "extensiones",
         serviceFocus: "esculturales",
       };
     }
 
     return {
-      reply: `Sí, manejamos uñas esculturales. Las extensiones esculturales en acrílico tienen costo de ${priceText} en largo base #2. Si deseas un largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendar esculturales o prefieres que te comparta otras opciones de extensiones?`,
+      reply: `Sí, manejamos uñas esculturales. Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. Si deseas largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendarlas?`,
       topic: "extensiones",
       serviceFocus: "esculturales",
     };
@@ -543,7 +560,7 @@ function buildContextualServiceInquiryReply({
   ) {
     return {
       reply:
-        "Sí, también manejamos servicios de uñas 💕 Tenemos extensiones, acrílico, softgel, polygel, rellenos, mantenimiento, rubber, gel de construcción, gel semipermanente y manicure.\n\nSi quieres, te puedo ayudar a elegir según si buscas extensión nueva, relleno o algo sobre tu uña natural.",
+        "Sí, también manejamos servicios de uñas en manos: extensiones, rellenos/mantenimientos, gel sobre uña natural, rubber, baños de gel/acrílico/polygel y manicure.\n\n¿Qué te gustaría realizarte?",
       topic: "uñas",
       serviceFocus: "uñas",
     };
@@ -573,13 +590,173 @@ function isDecorationService(service) {
   return text.includes("decor") || text.includes("diseno") || text.includes("diseño") || text.includes("frances") || text.includes("francés") || text.includes("ojo de gato") || text.includes("cristal") || text.includes("charm") || text.includes("sticker") || text.includes("mano alzada");
 }
 
+function hasAnyServiceText(service, keywords = []) {
+  const text = normalizeServiceText(service);
+  return keywords.some((keyword) => text.includes(normalizeText(keyword)));
+}
+
+function isHairService(service) {
+  return hasAnyServiceText(service, [
+    "cabello",
+    "pelo",
+    "capilar",
+    "keratina",
+    "botox",
+    "cirugia capilar",
+    "cirugía capilar",
+    "nanoplastia",
+    "pulgada",
+    "pulgadas",
+  ]);
+}
+
+function isFeetService(service) {
+  return hasAnyServiceText(service, [
+    "pedicure",
+    "pedi",
+    "pie",
+    "pies",
+    "acripie",
+    "uña para pie",
+    "una para pie",
+    "uñas de los pies",
+    "unas de los pies",
+  ]);
+}
+
+function isBrowsOrLashesService(service) {
+  return hasAnyServiceText(service, [
+    "ceja",
+    "cejas",
+    "pestana",
+    "pestaña",
+    "pestanas",
+    "pestañas",
+  ]);
+}
+
+function isDesignOrExtraService(service) {
+  const group = normalizeText(service?.bot_service_group);
+  const category = normalizeText(service?.category);
+
+  return (
+    group === "decoracion" ||
+    group === "extras" ||
+    category.includes("extra") ||
+    isDecorationService(service) ||
+    hasAnyServiceText(service, ["adicional", "diseño", "diseno"])
+  );
+}
+
+function isHandsNailService(service) {
+  if (!service || isHairService(service) || isFeetService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service)) {
+    return false;
+  }
+
+  return hasAnyServiceText(service, [
+    "mano",
+    "manos",
+    "uña",
+    "una",
+    "uñas",
+    "unas",
+    "manicure",
+    "acril",
+    "softgel",
+    "polygel",
+    "rubber",
+    "vitacare",
+    "gel semi",
+    "gelish",
+    "construccion",
+    "construcción",
+    "extension",
+    "extensión",
+    "escultural",
+    "relleno",
+    "mantenimiento",
+  ]);
+}
+
+function isPedicureService(service) {
+  if (!service || isHairService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service)) {
+    return false;
+  }
+
+  const group = normalizeText(service?.bot_service_group);
+  return group === "pedicure" || isFeetService(service);
+}
+
+function isNaturalNailHandService(service) {
+  if (!isHandsNailService(service)) return false;
+
+  const group = normalizeText(service?.bot_service_group);
+  const text = normalizeServiceText(service);
+
+  if (text.includes("relleno") || text.includes("mantenimiento")) return false;
+  if (text.includes("extension") || text.includes("extensión") || text.includes("softgel") || text.includes("escultural")) return false;
+
+  return (
+    group === "una_natural_refuerzo" ||
+    text.includes("gel semi permanente manos") ||
+    (text.includes("gel semi") && text.includes("manos")) ||
+    text.includes("rubber") ||
+    text.includes("vitacare") ||
+    text.includes("baño en gel") ||
+    text.includes("bano en gel") ||
+    text.includes("baño acril") ||
+    text.includes("bano acril") ||
+    text.includes("gel de construccion") ||
+    text.includes("gel de construcción") ||
+    text.includes("baño polygel") ||
+    text.includes("bano polygel") ||
+    text.includes("polygel liquido") ||
+    text.includes("polygel líquido")
+  );
+}
+
+function isExtensionNailHandService(service) {
+  if (!isHandsNailService(service)) return false;
+
+  const group = normalizeText(service?.bot_service_group);
+  const text = normalizeServiceText(service);
+
+  if (text.includes("relleno") || text.includes("mantenimiento")) return false;
+
+  return (
+    group === "extension_unas" ||
+    text.includes("extension") ||
+    text.includes("extensión") ||
+    text.includes("softgel") ||
+    text.includes("escultural") ||
+    text.includes("aplicacion acril") ||
+    text.includes("aplicación acril") ||
+    text.includes("polygel")
+  );
+}
+
+function isFillMaintenanceNailHandService(service) {
+  return (
+    isHandsNailService(service) &&
+    hasAnyServiceText(service, ["relleno", "mantenimiento"])
+  );
+}
+
+function isManicureService(service) {
+  return (
+    isHandsNailService(service) &&
+    hasAnyServiceText(service, ["manicure", "mani"]) &&
+    !isPedicureService(service)
+  );
+}
+
 function isServiceBookable(service) {
   if (service.bot_bookable === false) return false;
   const group = normalizeText(service.bot_service_group);
   const text = normalizeServiceText(service);
-  if (["retiro", "decoracion", "pestanas"].includes(group)) return false;
+  if (["retiro", "decoracion", "pestanas", "extras"].includes(group)) return false;
   if (text.includes("retiro")) return false;
-  if (text.includes("pestana") || text.includes("pestaña")) return false;
+  if (isDesignOrExtraService(service)) return false;
   if (text.includes("uña para pie") || text.includes("una para pie") || text.includes("reconstruccion estetica de una para pie")) return false;
   return true;
 }
@@ -591,16 +768,12 @@ function normalizeServiceText(service) {
 function getServiceGroup(service) {
   const group = normalizeText(service.bot_service_group);
   const text = normalizeServiceText(service);
-  if (group === "pedicure") return "pedicure";
-  if (group === "extension_unas") return "extensiones de uñas";
-  if (group === "relleno_mantenimiento") return "rellenos / mantenimientos";
-  if (group === "una_natural_refuerzo") return "uña natural / refuerzo";
-  if (group === "manicure") return "manicure";
-  if (text.includes("pedi")) return "pedicure";
-  if (text.includes("relleno") || text.includes("mantenimiento")) return "rellenos / mantenimientos";
-  if (text.includes("softgel") || text.includes("acril") || text.includes("polygel") || text.includes("extension") || text.includes("escultural")) return "extensiones de uñas";
-  if (text.includes("rubber") || text.includes("gel semi") || text.includes("gelish") || text.includes("vitacare") || text.includes("construccion")) return "uña natural / refuerzo";
-  if (text.includes("mani")) return "manicure";
+  if (isPedicureService(service)) return "pedicure";
+  if (isHairService(service)) return "cabello";
+  if (isManicureService(service) || group === "manicure") return "manicure";
+  if (isFillMaintenanceNailHandService(service) || group === "relleno_mantenimiento") return "rellenos / mantenimientos";
+  if (isNaturalNailHandService(service)) return "uña natural / refuerzo";
+  if (isExtensionNailHandService(service) || group === "extension_unas") return "extensiones de uñas";
   return "otros";
 }
 
@@ -765,7 +938,7 @@ function getRubberOptions(services) {
 }
 
 function getPedicureOptions(services) {
-  return services.filter((service) => getServiceGroup(service) === "pedicure");
+  return services.filter(isPedicureService);
 }
 
 function includesAnyKeyword(value, keywords = []) {
@@ -777,7 +950,9 @@ function includesAnyKeyword(value, keywords = []) {
   });
 }
 function getAcrylicOptions(services) {
-  return services.filter((service) => normalizeServiceText(service).includes("acril"));
+  return services.filter(
+    (service) => isHandsNailService(service) && normalizeServiceText(service).includes("acril")
+  );
 }
 
 function getNailSubcategoryOptions(input, services) {
@@ -815,7 +990,14 @@ function getNailSubcategoryOptions(input, services) {
 
   if (!group) return [];
 
-  return services.filter((service) => getServiceGroup(service) === group).slice(0, 14);
+  const filters = {
+    "extensiones de uñas": isExtensionNailHandService,
+    "rellenos / mantenimientos": isFillMaintenanceNailHandService,
+    "uña natural / refuerzo": isNaturalNailHandService,
+    manicure: isManicureService,
+  };
+
+  return services.filter(filters[group] || (() => false)).slice(0, 14);
 }
 
 function isGeneralNailOnly(text) {
@@ -825,8 +1007,17 @@ function isGeneralNailOnly(text) {
     t === "uñas" ||
     t === "unas" ||
     t === "uña" ||
+    t === "uñas en manos" ||
+    t === "unas en manos" ||
+    t === "uñas manos" ||
+    t === "unas manos" ||
+    t === "uñas de manos" ||
+    t === "unas de manos" ||
+    t === "manos" ||
     t === "quiero uñas" ||
     t === "quiero unas" ||
+    t === "quiero uñas en manos" ||
+    t === "quiero unas en manos" ||
     t === "extension" ||
     t === "extensión" ||
     t === "extensiones"
@@ -1303,19 +1494,16 @@ function buildMenuResponse(settings, menuOptions) {
 
 function buildServicesCatalogResponse(services) {
   const categories = [
-    { label: "Uñas", keys: ["uña", "una", "acril", "softgel", "rubber", "polygel", "gel", "relleno", "extension"] },
-    { label: "Manicure", keys: ["manicure", "mani"] },
-    { label: "Pedicure", keys: ["pedicure", "pedi"] },
-    { label: "Cejas y pestañas", keys: ["ceja", "pestana", "pestaña"] },
-    { label: "Cabello", keys: ["cabello", "pelo", "tratamiento capilar"] },
+    { label: "Uñas", filter: isHandsNailService },
+    { label: "Manicure", filter: isManicureService },
+    { label: "Pedicure", filter: isPedicureService },
+    { label: "Cejas y pestañas", filter: isBrowsOrLashesService },
+    { label: "Cabello", filter: isHairService },
   ];
 
   const lines = categories.map((category) => {
     const matches = (services || [])
-      .filter((service) => {
-        const text = normalizeServiceText(service);
-        return category.keys.some((key) => text.includes(normalizeText(key)));
-      })
+      .filter(category.filter)
       .slice(0, 5);
 
     if (matches.length === 0) {
@@ -1466,6 +1654,13 @@ function scoreKnowledgeText(searchText, itemText, keywords = "") {
   const words = tokenizeText(normalizedSearch);
 
   let score = 0;
+
+  if (
+    (normalizedItem.includes("acripie") || normalizedKeywords.includes("acripie")) &&
+    !normalizedSearch.includes("acripie")
+  ) {
+    return 0;
+  }
 
   for (const word of words) {
     if (normalizedKeywords.includes(word)) score += 8;
@@ -2703,6 +2898,26 @@ export async function POST(request) {
       nextStep = "esperando_comprobante";
     }
 
+    if (!reply && isServiceQuestion) {
+      const contextualServiceReply = buildContextualServiceInquiryReply({
+        incomingMessage,
+        context: nextContext,
+        recentMessages,
+        services,
+      });
+
+      if (contextualServiceReply?.reply) {
+        reply = contextualServiceReply.reply;
+        matchedSource = "contextual_service_inquiry";
+        nextContext.active_topic =
+          contextualServiceReply.topic || nextContext.active_topic;
+        nextContext.active_service_focus =
+          contextualServiceReply.serviceFocus ||
+          nextContext.active_service_focus ||
+          null;
+      }
+    }
+
     if (
       !reply &&
       matchedKnowledge &&
@@ -2737,26 +2952,6 @@ export async function POST(request) {
               : "Te comparto nuestra ubicación para que puedas orientarte mejor:"
           }\n${locationUrl}`;
         }
-      }
-    }
-
-    if (!reply && isServiceQuestion) {
-      const contextualServiceReply = buildContextualServiceInquiryReply({
-        incomingMessage,
-        context: nextContext,
-        recentMessages,
-        services,
-      });
-
-      if (contextualServiceReply?.reply) {
-        reply = contextualServiceReply.reply;
-        matchedSource = "contextual_service_inquiry";
-        nextContext.active_topic =
-          contextualServiceReply.topic || nextContext.active_topic;
-        nextContext.active_service_focus =
-          contextualServiceReply.serviceFocus ||
-          nextContext.active_service_focus ||
-          null;
       }
     }
 
