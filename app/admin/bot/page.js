@@ -1528,13 +1528,6 @@ useEffect(() => {
                           <p className="whitespace-pre-wrap leading-6">
                             {item.body}
                           </p>
-                          {item.direction === "bot" &&
-                            (item.matchedSource || item.intent) && (
-                              <p className="mt-2 border-t border-[#dde3e6] pt-2 text-[11px] text-[#8a969a]">
-                                Fuente: {item.matchedSource || "sin fuente"} ·
-                                Intent: {item.intent || "sin intent"}
-                              </p>
-                            )}
                         </div>
                       </div>
                     ))

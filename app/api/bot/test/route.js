@@ -412,10 +412,73 @@ function wantsExplanation(text) {
     t.includes("explicame") ||
     t.includes("recomiendas") ||
     t.includes("quita") ||
+    t.includes("quitan") ||
+    t.includes("retira") ||
+    t.includes("retiran") ||
+    t.includes("uñero") ||
+    t.includes("unero") ||
+    t.includes("encarnada") ||
+    t.includes("enterrada") ||
+    t.includes("me duele") ||
     t.includes("cuanto cuesta ese") ||
     /^ese\b/.test(t) ||
     t.includes("ese servicio")
   );
+}
+
+function hasNormalizedWord(value, word) {
+  const text = normalizeText(value);
+  const normalizedWord = normalizeText(word);
+
+  if (!text || !normalizedWord) return false;
+
+  return new RegExp(`(^|\\s)${normalizedWord}(\\s|$)`).test(text);
+}
+
+function mentionsPedicureTopic(value) {
+  const text = normalizeText(value);
+
+  return (
+    hasNormalizedWord(text, "pedi") ||
+    text.includes("pedicure") ||
+    text.includes("pedicura") ||
+    text.includes("acripie") ||
+    text.includes("pies") ||
+    hasNormalizedWord(text, "pie")
+  );
+}
+
+function asksPedicureIngrownNailQuestion(message, context = {}, recentMessages = []) {
+  const text = normalizeText(message);
+  const recentText = normalizeText(
+    `${context?.active_topic || ""} ${context?.active_service_focus || ""} ${
+      (recentMessages || []).map((item) => item.body || "").join(" ")
+    }`
+  );
+
+  const mentionsUnero =
+    text.includes("uñero") ||
+    text.includes("unero") ||
+    text.includes("encarnada") ||
+    text.includes("enterrada") ||
+    text.includes("enterrado") ||
+    text.includes("molestia") ||
+    text.includes("me duele") ||
+    text.includes("duele") ||
+    text.includes("dolor");
+
+  if (!mentionsUnero) return false;
+
+  return (
+    mentionsPedicureTopic(text) ||
+    mentionsPedicureTopic(recentText) ||
+    recentText.includes("pedicure") ||
+    recentText.includes("pedicure en seco")
+  );
+}
+
+function buildPedicureIngrownNailReply() {
+  return "No, el pedicure en seco es un servicio express y no incluye retiro de uñeros profundos ni atención de uñas encarnadas. Si tienes molestia, uñero o algo enterrado, lo ideal es valoración o pedicure medicado según el caso.\n\n¿Te gustaría que te ayude a elegir la mejor opción?";
 }
 
 function findMentionedServiceForExplanation(message, options, services) {
@@ -424,6 +487,9 @@ function findMentionedServiceForExplanation(message, options, services) {
   const unique = Array.from(
     new Map(candidates.filter((service) => service?.id).map((service) => [service.id, service])).values()
   );
+  const scopedUnique = mentionsPedicureTopic(text)
+    ? unique.filter(isPedicureService)
+    : unique;
 
   const aliases = [
     { keys: ["acripie"], match: (service) => normalizeServiceText(service).includes("acripie") },
@@ -435,12 +501,12 @@ function findMentionedServiceForExplanation(message, options, services) {
 
   for (const alias of aliases) {
     if (alias.keys.some((key) => text.includes(normalizeText(key)))) {
-      const matches = unique.filter(alias.match);
+      const matches = scopedUnique.filter(alias.match);
       if (matches.length > 0) return matches[0];
     }
   }
 
-  return unique.find((service) => {
+  return scopedUnique.find((service) => {
     const name = normalizeText(service.name);
     return name && text.includes(name);
   });
@@ -450,6 +516,10 @@ function buildServiceExplanationReply(message, service) {
   const text = normalizeText(message);
   const serviceText = normalizeServiceText(service);
   const price = Number(service?.base_price || 0);
+
+  if (asksPedicureIngrownNailQuestion(message)) {
+    return buildPedicureIngrownNailReply();
+  }
 
   if (serviceText.includes("acripie") || text.includes("acripie")) {
     return "Sí, el Acripie incluye pedicure en seco de cortesía porque es un servicio de uñas en pies. Lo que no incluye es un pedicure más profundo como Clásico, Spa o Medicado. Si deseas una limpieza más completa, hidratación o atención de molestias/uñeros, podemos agregar un pedicure más completo.\n\n¿Te gustaría que te ayude a elegir la mejor opción?";
@@ -599,7 +669,15 @@ function buildContextualServiceInquiryReply({
     recentMessages
   );
 
-  if (text.includes("escultural") || recentText.includes("escultural")) {
+  if (asksPedicureIngrownNailQuestion(incomingMessage, context, recentMessages)) {
+    return {
+      reply: buildPedicureIngrownNailReply(),
+      topic: "pedicure",
+      serviceFocus: "pedicure en seco / pedicure medicado",
+    };
+  }
+
+  if (text.includes("escultural")) {
     const priceText = `$${getEsculturalesAcrylicPrice(services)}`;
 
     if (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) {
@@ -697,17 +775,30 @@ function isHairService(service) {
 }
 
 function isFeetService(service) {
-  return hasAnyServiceText(service, [
-    "pedicure",
-    "pedi",
-    "pie",
-    "pies",
-    "acripie",
-    "uña para pie",
-    "una para pie",
-    "uñas de los pies",
-    "unas de los pies",
-  ]);
+  if (!service) return false;
+
+  const group = normalizeText(service?.bot_service_group);
+  const name = normalizeText(service?.name);
+  const category = normalizeText(service?.category);
+  const keywords = normalizeText(service?.bot_keywords);
+  const focusedText = `${name} ${category} ${keywords}`;
+
+  return (
+    group === "pedicure" ||
+    name.includes("pedicure") ||
+    name.includes("pedicura") ||
+    name.includes("acripie") ||
+    category.includes("pedicure") ||
+    category.includes("pedicura") ||
+    keywords.includes("pedicure") ||
+    keywords.includes("pedicura") ||
+    focusedText.includes("uñas de los pies") ||
+    focusedText.includes("unas de los pies") ||
+    focusedText.includes("uña para pie") ||
+    focusedText.includes("una para pie") ||
+    hasNormalizedWord(focusedText, "pies") ||
+    hasNormalizedWord(focusedText, "pie")
+  );
 }
 
 function isBrowsOrLashesService(service) {
@@ -734,8 +825,19 @@ function isDesignOrExtraService(service) {
   );
 }
 
+function isPromotionService(service) {
+  const text = normalizeServiceText(service);
+
+  return (
+    text.includes("promo") ||
+    text.includes("promocion") ||
+    text.includes("promoción") ||
+    text.includes("paquete")
+  );
+}
+
 function isHandsNailService(service) {
-  if (!service || isHairService(service) || isFeetService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service)) {
+  if (!service || isHairService(service) || isFeetService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service) || isPromotionService(service)) {
     return false;
   }
 
@@ -765,11 +867,51 @@ function isHandsNailService(service) {
 }
 
 function isPedicureService(service) {
-  if (!service || isHairService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service)) {
+  if (!service || isHairService(service) || isBrowsOrLashesService(service) || isDesignOrExtraService(service) || isPromotionService(service)) {
     return false;
   }
 
   const group = normalizeText(service?.bot_service_group);
+  const text = normalizeServiceText(service);
+  const name = normalizeText(service?.name);
+  const category = normalizeText(service?.category);
+
+  if (
+    [
+      "manicure",
+      "manos",
+      "mano",
+      "depilacion",
+      "depilación",
+      "patilla",
+      "patillas",
+      "ceja",
+      "cejas",
+      "pestana",
+      "pestaña",
+      "pestanas",
+      "pestañas",
+      "cabello",
+      "nanoplastia",
+      "promo",
+      "promocion",
+      "promoción",
+      "paquete",
+    ].some((keyword) => text.includes(normalizeText(keyword)))
+  ) {
+    return false;
+  }
+
+  if (
+    name.includes("pedicure") ||
+    name.includes("pedicura") ||
+    name.includes("acripie") ||
+    category.includes("pedicure") ||
+    category.includes("pedicura")
+  ) {
+    return true;
+  }
+
   return group === "pedicure" || isFeetService(service);
 }
 
@@ -841,6 +983,7 @@ function isServiceBookable(service) {
   const group = normalizeText(service.bot_service_group);
   const text = normalizeServiceText(service);
   if (["retiro", "decoracion", "pestanas", "extras"].includes(group)) return false;
+  if (isPromotionService(service)) return false;
   if (text.includes("retiro")) return false;
   if (isDesignOrExtraService(service)) return false;
   if (text.includes("uña para pie") || text.includes("una para pie") || text.includes("reconstruccion estetica de una para pie")) return false;
@@ -2096,6 +2239,8 @@ Reglas de negocio:
 - Si no sabes algo con certeza, ofrece pasar con una persona del equipo.
 - No confirmes citas como registradas; solo ayuda a recopilar datos o guiar la conversación.
 - Si la clienta quiere una persona, responde que una persona del equipo dará seguimiento.
+- Si el tema actual es pedicure/pies, no cambies a esculturales, acrílico en manos, cabello ni otros servicios a menos que la clienta lo pida explícitamente.
+- Solo hables de esculturales si el mensaje actual menciona "esculturales" o "uñas esculturales".
 `.trim();
 
   const input = `
@@ -2294,6 +2439,17 @@ function fallbackInterpret(message) {
   });
 }
 
+function shouldUseLocalInterpretationBeforeAI(message) {
+  const text = normalizeText(message);
+
+  return (
+    isGeneralPedicureRequest(message) ||
+    asksPedicureIngrownNailQuestion(message) ||
+    isServiceQuestionMessage(message) ||
+    isGeneralNailOnly(text)
+  );
+}
+
 async function interpretWithAI(message, context) {
   if (!isOpenAIConfigured()) {
     return fallbackInterpret(message);
@@ -2328,6 +2484,8 @@ Contexto:
 - Si pide menú, precios o servicios, marca wants_prices_or_menu.
 - Si pregunta "incluye", "qué trae", "qué es", "explícame", "diferencia", "cuál me conviene" o "cuánto cuesta ese", marca wants_explanation.
 - Una pregunta explicativa sobre un servicio NO es una selección. Conserva el contexto y no agregues servicios hasta recibir una confirmación clara o números de opción.
+- No respondas ni interpretes esculturales a menos que el mensaje actual mencione explícitamente "esculturales" o "uñas esculturales".
+- Si pregunta por uñeros, uñas encarnadas, uñas enterradas o molestias en pedicure, conserva el tema pedicure y no lo mezcles con esculturales.
 - Acripie incluye pedicure en seco de cortesía, pero no sustituye un pedicure clásico, spa o medicado.
 
 Fecha actual en Mérida, México: ${today}
@@ -3045,7 +3203,9 @@ export async function POST(request) {
     const mediaAssets = mediaResult.data || [];
     const isServiceQuestion = isServiceQuestionMessage(incomingMessage);
 
-    const ai = await interpretWithAI(incomingMessage, context);
+    const ai = shouldUseLocalInterpretationBeforeAI(incomingMessage)
+      ? fallbackInterpret(incomingMessage)
+      : await interpretWithAI(incomingMessage, context);
 
     ai.wants_location = ai.wants_location || asksLocation(incomingMessage);
     ai.wants_business_hours =
