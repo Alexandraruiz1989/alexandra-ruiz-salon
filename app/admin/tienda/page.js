@@ -723,8 +723,15 @@ export default function StorePage() {
       return "Tu sesión expiró. Vuelve a iniciar sesión.";
     }
 
-    if (normalized.includes("permiso") || normalized.includes("permission denied")) {
-      return "No tienes permiso para administrar productos.";
+    if (
+      normalized.includes("permission denied") ||
+      normalized.includes("store_products")
+    ) {
+      return `${fallback}: ${text}`;
+    }
+
+    if (normalized.includes("no tienes permiso")) {
+      return text;
     }
 
     if (

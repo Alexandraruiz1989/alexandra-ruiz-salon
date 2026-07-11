@@ -42,6 +42,29 @@ function createAdminClient() {
   });
 }
 
+function createAuthenticatedClient(accessToken) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !anonKey) {
+    throw new Error(
+      "Faltan variables de entorno. Revisa NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY."
+    );
+  }
+
+  return createClient(supabaseUrl, anonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  });
+}
+
 function logAccessDiagnostic({ user, profile, source }) {
   console.info("[store-products-access]", {
     source,
@@ -128,6 +151,7 @@ async function getSessionProfile(request, adminSupabase) {
       error: "No encontré tu perfil de acceso. Revisa /admin/accesos.",
       status: 403,
       user,
+      token,
       source,
     };
   }
@@ -138,13 +162,14 @@ async function getSessionProfile(request, adminSupabase) {
       status: 403,
       user,
       profile,
+      token,
       source,
     };
   }
 
   const role = normalizeRole(profile?.role);
 
-  return { profile, user, role, source };
+  return { profile, user, role, source, token };
 }
 
 function buildAccessDebug(session) {
@@ -276,9 +301,10 @@ export async function POST(request) {
     const product = body.product || body;
     const payload = buildProductPayload(product);
     const matchBySku = Boolean(body.match_by_sku);
+    const storeSupabase = createAuthenticatedClient(session.token);
 
     if (matchBySku && payload.sku) {
-      const { data: existing, error: existingError } = await adminSupabase
+      const { data: existing, error: existingError } = await storeSupabase
         .from("store_products")
         .select("id")
         .eq("sku", payload.sku)
@@ -287,7 +313,7 @@ export async function POST(request) {
       if (existingError) return errorResponse(existingError.message, 400);
 
       if (existing?.id) {
-        const { data, error } = await adminSupabase
+        const { data, error } = await storeSupabase
           .from("store_products")
           .update(payload)
           .eq("id", existing.id)
@@ -304,7 +330,7 @@ export async function POST(request) {
       }
     }
 
-    const { data, error } = await adminSupabase
+    const { data, error } = await storeSupabase
       .from("store_products")
       .insert([payload])
       .select()
@@ -343,8 +369,9 @@ export async function PATCH(request) {
 
     const product = body.product || body;
     const payload = buildProductPayload(product, { partial: true });
+    const storeSupabase = createAuthenticatedClient(session.token);
 
-    const { data, error } = await adminSupabase
+    const { data, error } = await storeSupabase
       .from("store_products")
       .update(payload)
       .eq("id", id)
