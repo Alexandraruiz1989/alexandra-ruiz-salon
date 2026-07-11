@@ -448,6 +448,63 @@ function mentionsPedicureTopic(value) {
   );
 }
 
+function mentionsGelishTopic(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("gelish") ||
+    text.includes("gel semi") ||
+    text.includes("gel semipermanente") ||
+    text.includes("semi permanente") ||
+    text.includes("semipermanente") ||
+    text.includes("solo gel") ||
+    text.includes("aplicacion de gel") ||
+    text.includes("aplicación de gel") ||
+    (text.includes("gel") && text.includes("sin manicure"))
+  );
+}
+
+function asksStandaloneGelishHands(message) {
+  const text = normalizeText(message);
+
+  if (asksGelishRemovalQuestion(message)) return false;
+
+  const clearlyStandalone =
+    text.includes("solo gelish") ||
+    text.includes("solo gel") ||
+    text.includes("sin manicure") ||
+    text.includes("solo aplicacion") ||
+    text.includes("solo aplicación") ||
+    text.includes("aplicacion de gelish") ||
+    text.includes("aplicación de gelish") ||
+    text.includes("gel semi") ||
+    text.includes("semipermanente");
+
+  return mentionsGelishTopic(text) && clearlyStandalone;
+}
+
+function asksGelishRemovalQuestion(message) {
+  const text = normalizeText(message);
+
+  const mentionsRemoval =
+    text.includes("retiro") ||
+    text.includes("retirar") ||
+    text.includes("retiran") ||
+    text.includes("retira") ||
+    text.includes("quitar") ||
+    text.includes("quitan") ||
+    text.includes("quita");
+
+  const asksCost =
+    text.includes("costo") ||
+    text.includes("cuesta") ||
+    text.includes("precio") ||
+    text.includes("cobran") ||
+    text.includes("tiene costo");
+
+  return mentionsGelishTopic(text) && (mentionsRemoval || asksCost);
+}
+
 function asksPedicureIngrownNailQuestion(message, context = {}, recentMessages = []) {
   const text = normalizeText(message);
   const recentText = normalizeText(
@@ -584,6 +641,8 @@ function detectConversationTopicFromText(value) {
   if (!text) return "";
   if (asksLocation(text)) return "ubicación";
   if (asksBusinessHours(text)) return "horarios";
+  if (asksGelishRemovalQuestion(text)) return "retiro gelish";
+  if (mentionsGelishTopic(text)) return "gelish manos";
   if (text.includes("pedicure") || text.includes("pedi") || text.includes("acripie")) return "pedicure";
   if (text.includes("escultural") || text.includes("extension") || text.includes("extensión") || text.includes("softgel")) return "extensiones";
   if (text.includes("acril")) return "acrílico";
@@ -613,6 +672,172 @@ function detectActiveConversationTopic(message, context, recentMessages) {
 function getServicePriceText(service, fallbackPrice = null) {
   const price = Number(service?.base_price || 0) || fallbackPrice;
   return price ? `$${price}` : "te lo podemos cotizar con más detalle";
+}
+
+function hasConfiguredPrice(service) {
+  return Number(service?.base_price || 0) > 0;
+}
+
+function isActiveServiceRecord(service) {
+  return service?.active !== false;
+}
+
+function getGelishHandsServiceScore(service) {
+  if (!isActiveServiceRecord(service) || isPromotionService(service)) return -999;
+
+  const name = normalizeText(service?.name);
+  const category = normalizeText(service?.category);
+  const keywords = normalizeText(service?.bot_keywords);
+  const text = `${name} ${category} ${keywords}`;
+
+  if (name.includes("retiro")) return -999;
+  if (name.includes("pedicure") || name.includes("pedi") || name.includes("pies")) return -999;
+  if (name.includes("manicure")) return -999;
+
+  const hasGel =
+    text.includes("gelish") ||
+    text.includes("gel semi") ||
+    text.includes("semipermanente") ||
+    text.includes("semi permanente");
+
+  if (!hasGel) return -999;
+
+  let score = 0;
+
+  if (name.includes("aplicacion") || name.includes("aplicación")) score += 80;
+  if (name.includes("gel semi permanente") || name.includes("gel semipermanente")) score += 160;
+  if (name.includes("gelish")) score += 150;
+  if (name.includes("manos") || name.includes("mano")) score += 140;
+  if (category.includes("manos") || category.includes("uñas")) score += 30;
+  if (hasConfiguredPrice(service)) score += 25;
+
+  return score;
+}
+
+function findGelishHandsService(services = []) {
+  const candidates = services
+    .map((service) => ({
+      service,
+      score: getGelishHandsServiceScore(service),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.service || null;
+}
+
+function findGelishRemovalServices(services = []) {
+  return services
+    .filter((service) => {
+      if (!isActiveServiceRecord(service) || isPromotionService(service)) return false;
+
+      const name = normalizeText(service?.name);
+      const category = normalizeText(service?.category);
+      const keywords = normalizeText(service?.bot_keywords);
+      const description = normalizeText(service?.description);
+      const text = `${name} ${category} ${keywords} ${description}`;
+
+      const mentionsRemoval =
+        text.includes("retiro") ||
+        text.includes("retirar") ||
+        text.includes("remocion") ||
+        text.includes("remoción");
+
+      const mentionsGel =
+        text.includes("gelish") ||
+        text.includes("gel semi") ||
+        text.includes("semipermanente") ||
+        text.includes("semi permanente") ||
+        hasNormalizedWord(text, "gel");
+
+      return mentionsRemoval && mentionsGel;
+    })
+    .sort((a, b) => {
+      const aText = normalizeServiceText(a);
+      const bText = normalizeServiceText(b);
+      const aScore =
+        (aText.includes("gelish") ? 20 : 0) +
+        (aText.includes("externo") ? 10 : 0) +
+        (hasConfiguredPrice(a) ? 5 : 0);
+      const bScore =
+        (bText.includes("gelish") ? 20 : 0) +
+        (bText.includes("externo") ? 10 : 0) +
+        (hasConfiguredPrice(b) ? 5 : 0);
+
+      return bScore - aScore;
+    });
+}
+
+function hasSelectedPedicureClassicForSecondPerson(context) {
+  const selectedServices = Array.isArray(context?.selected_services)
+    ? context.selected_services
+    : [];
+  const hasClassicPedicure = selectedServices.some((service) => {
+    const text = normalizeServiceText(service);
+    return text.includes("pedicure") && text.includes("clasico");
+  });
+
+  const multiPersonRequests = Array.isArray(context?.multi_person_requests)
+    ? context.multi_person_requests
+    : [];
+  const mentionsSecondPerson = multiPersonRequests.some((request) => {
+    const text = normalizeText(`${request?.person || ""} ${request?.label || ""}`);
+    return (
+      text.includes("mama") ||
+      text.includes("mamá") ||
+      text.includes("hija") ||
+      text.includes("otra")
+    );
+  });
+
+  return hasClassicPedicure && mentionsSecondPerson;
+}
+
+function buildGelishHandsReply(service, context = {}) {
+  if (!service || !hasConfiguredPrice(service)) {
+    return "Sí, manejamos solo aplicación de Gel Semi Permanente en manos. Permíteme confirmar el precio exacto con el equipo. No incluye manicure en seco ni manicure clásico.";
+  }
+
+  const followUp = hasSelectedPedicureClassicForSecondPerson(context)
+    ? "\n\n¿Deseas agendarlo junto con el Pedicure Clásico de tu mamá?"
+    : "\n\n¿Deseas que te ayude a agendarlo?";
+
+  return `Sí, manejamos solo aplicación de Gel Semi Permanente en manos. Tiene costo de ${getServicePriceText(
+    service
+  )}. No incluye manicure en seco ni manicure clásico.${followUp}`;
+}
+
+function buildGelishRemovalReply(services = []) {
+  const removalServices = findGelishRemovalServices(services);
+
+  if (removalServices.length === 1) {
+    const [service] = removalServices;
+
+    if (hasConfiguredPrice(service)) {
+      return `${service.name} tiene costo de ${getServicePriceText(
+        service
+      )}.\n\nPuede depender de si el gel fue realizado con nosotras o viene de otro lugar. Si gustas, te ayudo a confirmarlo con el equipo.`;
+    }
+
+    return `Sí manejamos ${service.name}, pero no veo el precio exacto configurado. Permíteme confirmarlo con el equipo.`;
+  }
+
+  if (removalServices.length > 1) {
+    const options = removalServices
+      .slice(0, 5)
+      .map((service) => {
+        const price = hasConfiguredPrice(service)
+          ? ` — ${getServicePriceText(service)}`
+          : " — precio por confirmar";
+
+        return `• ${service.name}${price}`;
+      })
+      .join("\n");
+
+    return `Tenemos estas opciones de retiro relacionadas con Gelish/gel:\n\n${options}\n\nPuede depender de si el gel fue realizado con nosotras o viene de otro lugar. Te ayudo a confirmarlo con el equipo si lo necesitas.`;
+  }
+
+  return "Puede depender de si el gel fue realizado con nosotras o viene de otro lugar. Te ayudo a confirmarlo con el equipo.";
 }
 
 function getEsculturalesAcrylicPrice(services) {
@@ -654,6 +879,7 @@ function buildContextualServiceInquiryReply({
   context,
   recentMessages,
   services,
+  allServices = services,
 }) {
   if (!isServiceQuestionMessage(incomingMessage)) return null;
 
@@ -674,6 +900,25 @@ function buildContextualServiceInquiryReply({
       reply: buildPedicureIngrownNailReply(),
       topic: "pedicure",
       serviceFocus: "pedicure en seco / pedicure medicado",
+    };
+  }
+
+  if (asksGelishRemovalQuestion(incomingMessage)) {
+    return {
+      reply: buildGelishRemovalReply(allServices),
+      topic: "retiro gelish",
+      serviceFocus: "retiro gelish",
+    };
+  }
+
+  if (asksStandaloneGelishHands(incomingMessage)) {
+    const gelishService = findGelishHandsService(allServices);
+
+    return {
+      reply: buildGelishHandsReply(gelishService, context),
+      topic: "gelish manos",
+      serviceFocus: "Aplicación de Gel Semi Permanente Manos",
+      selectedService: gelishService,
     };
   }
 
@@ -1170,6 +1415,11 @@ function getPedicureOptions(services) {
   return services.filter(isPedicureService);
 }
 
+function getGelishHandsOptions(services) {
+  const service = findGelishHandsService(services);
+  return service ? [service] : [];
+}
+
 function includesAnyKeyword(value, keywords = []) {
   const text = normalizeText(value);
 
@@ -1304,6 +1554,8 @@ function resolveRequestedServices(serviceQueries, services) {
       options = getRubberOptions(services);
     } else if (isGeneralPedicureQuery(query)) {
       options = getPedicureOptions(services);
+    } else if (mentionsGelishTopic(query)) {
+      options = getGelishHandsOptions(services);
     } else if (
       query === "unas acrilicas" ||
       query === "uñas acrilicas" ||
@@ -1311,6 +1563,16 @@ function resolveRequestedServices(serviceQueries, services) {
       query === "acrílicas"
     ) {
       options = getAcrylicOptions(services);
+    }
+
+    if (options.length === 1) {
+      const [option] = options;
+
+      if (!seenSelected.has(option.id)) {
+        selected.push(option);
+        seenSelected.add(option.id);
+      }
+      continue;
     }
 
     if (options.length > 1) {
@@ -1363,6 +1625,153 @@ function mergeServices(existing, incoming) {
   }
 
   return merged;
+}
+
+function detectsSecondPersonRequest(message) {
+  const text = normalizeText(message);
+
+  return (
+    text.includes("otra cita") ||
+    text.includes("dos personas") ||
+    text.includes("para dos") ||
+    text.includes("para mi mama") ||
+    text.includes("para mi mamá") ||
+    text.includes("para mi hija") ||
+    text.includes("para mi hermana") ||
+    text.includes("para mi amiga")
+  );
+}
+
+function detectsMultiPersonGelPedicureRequest(message) {
+  const text = normalizeText(message);
+
+  return (
+    detectsSecondPersonRequest(text) &&
+    text.includes("gel") &&
+    mentionsPedicureTopic(text)
+  );
+}
+
+function getInitialMultiPersonRequests(message) {
+  if (!detectsMultiPersonGelPedicureRequest(message)) return [];
+
+  return [
+    {
+      key: "clienta",
+      label: "Para ti",
+      person: "clienta",
+      service_query: "gel",
+      status: "needs_service_detail",
+    },
+    {
+      key: "mama",
+      label: "Para tu mamá",
+      person: "mamá",
+      service_query: "pedicure",
+      status: "needs_service_detail",
+    },
+  ];
+}
+
+function mergeMultiPersonRequests(existing = [], incoming = []) {
+  const byKey = new Map();
+
+  for (const request of [...existing, ...incoming]) {
+    if (!request?.key) continue;
+    byKey.set(request.key, {
+      ...(byKey.get(request.key) || {}),
+      ...request,
+    });
+  }
+
+  return Array.from(byKey.values());
+}
+
+function updateMultiPersonRequestsWithSelectedServices(context, selectedServices = []) {
+  const requests = Array.isArray(context?.multi_person_requests)
+    ? context.multi_person_requests
+    : [];
+
+  if (requests.length === 0 || selectedServices.length === 0) {
+    return requests;
+  }
+
+  return requests.map((request) => {
+    const requestText = normalizeText(
+      `${request?.service_query || ""} ${request?.service_name || ""}`
+    );
+    const isMamaPedicure =
+      (request?.key === "mama" || requestText.includes("pedicure")) &&
+      selectedServices.some(isPedicureService);
+    const selectedPedicure = selectedServices.find(isPedicureService);
+    const isClientGel =
+      request?.key === "clienta" &&
+      selectedServices.some((service) =>
+        normalizeServiceText(service).includes("gel semi")
+      );
+    const selectedGelish = selectedServices.find((service) =>
+      normalizeServiceText(service).includes("gel semi")
+    );
+
+    if (isMamaPedicure && selectedPedicure) {
+      return {
+        ...request,
+        service_id: selectedPedicure.id,
+        service_name: selectedPedicure.name,
+        status: "service_selected",
+      };
+    }
+
+    if (isClientGel && selectedGelish) {
+      return {
+        ...request,
+        service_id: selectedGelish.id,
+        service_name: selectedGelish.name,
+        status: "service_selected",
+      };
+    }
+
+    return request;
+  });
+}
+
+function hasPendingClientGelRequest(context) {
+  const requests = Array.isArray(context?.multi_person_requests)
+    ? context.multi_person_requests
+    : [];
+
+  return requests.some((request) => {
+    const text = normalizeText(`${request?.key || ""} ${request?.service_query || ""}`);
+    return (
+      request?.key === "clienta" &&
+      text.includes("gel") &&
+      !request?.service_id &&
+      request?.status !== "service_selected"
+    );
+  });
+}
+
+function buildMultiPersonGelPedicureReply(services = []) {
+  const pedicureOptions = getPedicureOptions(services);
+  const optionsText = pedicureOptions.length
+    ? `\n\nPara el pedicure de tu mamá, elige una opción:\n\n${pedicureOptions
+        .map((service, index) => serviceLine(service, index + 1))
+        .join("\n")}`
+    : "\n\nPara el pedicure de tu mamá, dime si buscas Clásico, Spa, en Seco o Medicado.";
+
+  return `Perfecto 💕 Revisamos dos citas:\n\n• Para ti: gel en manos. Necesito confirmar si deseas solo Gelish/Gel Semi Permanente o manicure con gel.\n• Para tu mamá: pedicure.${optionsText}\n\nPuedes responder con el número o el nombre del pedicure para tu mamá.`;
+}
+
+function buildPendingGelClarificationReply(context, requestedDate) {
+  const selectedServices = Array.isArray(context?.selected_services)
+    ? context.selected_services
+    : [];
+  const selectedPedicure = selectedServices.find(isPedicureService);
+  const dateLine = requestedDate ? ` para ${formatDate(requestedDate)}` : "";
+
+  return `Perfecto, revisamos${dateLine}:\n\n• Para ti: pendiente confirmar si deseas solo Gelish/Gel Semi Permanente en manos o manicure con gel.\n• Para tu mamá: ${
+    selectedPedicure?.name || "pedicure"
+  }.\n\nPara poder buscar espacios correctamente, ¿para ti sería solo Gelish sin manicure?`;
 }
 
 function extractBookingNotes(message, aiNotes = "") {
@@ -2383,6 +2792,7 @@ function fallbackInterpret(message) {
   else if (text.includes("rubber")) services.push("rubber");
 
   if (text.includes("pedi") || text.includes("pedicure")) services.push("pedicure");
+  if (mentionsGelishTopic(text)) services.push("gelish manos");
 
   if (text.includes("softgel")) services.push("softgel");
   if (text.includes("acril")) services.push("uñas acrílicas");
@@ -2445,6 +2855,9 @@ function shouldUseLocalInterpretationBeforeAI(message) {
   return (
     isGeneralPedicureRequest(message) ||
     asksPedicureIngrownNailQuestion(message) ||
+    asksStandaloneGelishHands(message) ||
+    asksGelishRemovalQuestion(message) ||
+    detectsMultiPersonGelPedicureRequest(message) ||
     isServiceQuestionMessage(message) ||
     isGeneralNailOnly(text)
   );
@@ -3168,7 +3581,6 @@ export async function POST(request) {
           "id, category, name, base_price, duration_minutes, cleanup_minutes, active, description, bot_active, bot_keywords, bot_description, bot_service_group, bot_bookable"
         )
         .eq("active", true)
-        .eq("bot_active", true)
         .order("category")
         .order("name"),
       supabase
@@ -3198,7 +3610,10 @@ export async function POST(request) {
       ...(knowledgeResult.data || []),
       ...getDefaultKnowledgeItems(),
     ];
-    const services = (servicesResult.data || []).filter(isServiceBookable);
+    const allServices = servicesResult.data || [];
+    const services = allServices
+      .filter((service) => service.bot_active !== false)
+      .filter(isServiceBookable);
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
     const isServiceQuestion = isServiceQuestionMessage(incomingMessage);
@@ -3286,6 +3701,16 @@ export async function POST(request) {
       time_mode: timePreference.mode || context.time_mode || "any",
     };
 
+    const incomingMultiPersonRequests =
+      getInitialMultiPersonRequests(incomingMessage);
+
+    if (incomingMultiPersonRequests.length > 0) {
+      nextContext.multi_person_requests = mergeMultiPersonRequests(
+        nextContext.multi_person_requests || [],
+        incomingMultiPersonRequests
+      );
+    }
+
     let nextStep = conversation?.booking_step || null;
     const pendingOptions = Array.isArray(nextContext.pending_service_options)
       ? nextContext.pending_service_options
@@ -3312,12 +3737,54 @@ export async function POST(request) {
       nextStep = "esperando_comprobante";
     }
 
+    if (!reply && incomingMultiPersonRequests.length > 0) {
+      const pedicureOptions = getPedicureOptions(services);
+
+      nextContext.pending_service_options = pedicureOptions;
+      nextContext.adding_service_mode = false;
+      nextContext.active_topic = "pedicure";
+      nextContext.active_service_focus = "gelish manos y pedicure";
+
+      reply = buildMultiPersonGelPedicureReply(services);
+      matchedSource = "multi_person_services";
+      nextStep = "esperando_seleccion_servicios";
+    }
+
+    if (!reply && asksGelishRemovalQuestion(incomingMessage)) {
+      reply = buildGelishRemovalReply(allServices);
+      matchedSource = "gelish_removal";
+      nextContext.active_topic = "retiro gelish";
+      nextContext.active_service_focus = "retiro gelish";
+    }
+
+    if (!reply && asksStandaloneGelishHands(incomingMessage)) {
+      const gelishService = findGelishHandsService(allServices);
+
+      reply = buildGelishHandsReply(gelishService, nextContext);
+      matchedSource = "gelish_hands_price";
+      nextContext.active_topic = "gelish manos";
+      nextContext.active_service_focus =
+        gelishService?.name || "Aplicación de Gel Semi Permanente Manos";
+
+      if (gelishService) {
+        nextContext.selected_services = mergeServices(
+          nextContext.selected_services || selectedServicesFromContext,
+          [gelishService]
+        );
+        nextContext.multi_person_requests =
+          updateMultiPersonRequestsWithSelectedServices(nextContext, [
+            gelishService,
+          ]);
+      }
+    }
+
     if (!reply && isServiceQuestion) {
       const contextualServiceReply = buildContextualServiceInquiryReply({
         incomingMessage,
         context: nextContext,
         recentMessages,
         services,
+        allServices,
       });
 
       if (contextualServiceReply?.reply) {
@@ -3329,6 +3796,16 @@ export async function POST(request) {
           contextualServiceReply.serviceFocus ||
           nextContext.active_service_focus ||
           null;
+        if (contextualServiceReply.selectedService) {
+          nextContext.selected_services = mergeServices(
+            nextContext.selected_services || selectedServicesFromContext,
+            [contextualServiceReply.selectedService]
+          );
+          nextContext.multi_person_requests =
+            updateMultiPersonRequestsWithSelectedServices(nextContext, [
+              contextualServiceReply.selectedService,
+            ]);
+        }
       }
     }
 
@@ -3555,6 +4032,8 @@ export async function POST(request) {
         nextContext.selected_services = merged;
         nextContext.pending_service_options = [];
         nextContext.adding_service_mode = false;
+        nextContext.multi_person_requests =
+          updateMultiPersonRequestsWithSelectedServices(nextContext, selected);
 
         reply = buildSelectedServicesMessage(merged, bookingNotes);
         matchedSource = "service_options_selected";
@@ -3668,6 +4147,11 @@ export async function POST(request) {
           nextContext.selected_services = mergedServices;
           nextContext.pending_service_options = [];
           nextContext.adding_service_mode = false;
+          nextContext.multi_person_requests =
+            updateMultiPersonRequestsWithSelectedServices(
+              nextContext,
+              resolved.selected
+            );
 
           const targetDate = requestedDate || nextContext.requested_date;
           const targetStaff = staffPreference;
@@ -3716,6 +4200,18 @@ export async function POST(request) {
     const selectedServicesNow = Array.isArray(nextContext.selected_services)
       ? nextContext.selected_services
       : selectedServicesFromContext;
+
+    if (
+      !reply &&
+      requestedDate &&
+      hasPendingClientGelRequest(nextContext) &&
+      selectedServicesNow.some(isPedicureService)
+    ) {
+      nextContext.requested_date = requestedDate;
+      reply = buildPendingGelClarificationReply(nextContext, requestedDate);
+      matchedSource = "multi_person_pending_gel";
+      nextStep = "esperando_servicios";
+    }
 
     if (!reply && staffPreference && selectedServicesNow.length === 0) {
       nextContext.preferred_staff_mode = staffPreference.mode;
