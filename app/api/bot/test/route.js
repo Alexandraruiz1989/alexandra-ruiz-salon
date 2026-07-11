@@ -5,8 +5,11 @@ import OpenAI from "openai";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const openaiApiKey = process.env.OPENAI_API_KEY;
-const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const openaiModel = process.env.OPENAI_MODEL || "gpt-5.6-luna";
 const aiEnabled = process.env.BOT_AI_ENABLED !== "false";
+const AI_RULES_FALLBACK_MESSAGE =
+  "IA no conectada. El bot está funcionando con reglas básicas.";
+let openaiClient = null;
 
 const SALON_TIME_ZONE = "America/Mexico_City";
 const SALON_NAME = "Alexandra Ruiz Salón";
@@ -28,6 +31,81 @@ Martes a viernes: 9:00 am a 9:00 pm
 Sábado: 9:00 am a 6:00 pm
 Domingo: 9:00 am a 2:00 pm
 Lunes: cerrado`;
+
+function isOpenAIConfigured() {
+  return Boolean(aiEnabled && openaiApiKey);
+}
+
+function getOpenAIClient() {
+  if (!isOpenAIConfigured()) return null;
+
+  if (!openaiClient) {
+    openaiClient = new OpenAI({
+      apiKey: openaiApiKey,
+    });
+  }
+
+  return openaiClient;
+}
+
+function getReasoningEffortForModel(model) {
+  const normalized = normalizeText(model);
+
+  if (!normalized.startsWith("gpt-5") && !normalized.startsWith("o")) {
+    return null;
+  }
+
+  if (normalized.includes("5.6") || normalized.includes("5.1")) {
+    return "none";
+  }
+
+  return "low";
+}
+
+function extractOpenAIResponseText(response) {
+  if (typeof response?.output_text === "string") {
+    return response.output_text.trim();
+  }
+
+  return (response?.output || [])
+    .flatMap((item) => item?.content || [])
+    .map((content) => content?.text || content?.value || "")
+    .join("")
+    .trim();
+}
+
+async function createOpenAITextResponse({
+  instructions,
+  input,
+  textFormat = { type: "text" },
+  maxOutputTokens = 500,
+  verbosity = "low",
+}) {
+  const client = getOpenAIClient();
+
+  if (!client) return "";
+
+  const payload = {
+    model: openaiModel,
+    instructions,
+    input,
+    max_output_tokens: maxOutputTokens,
+    text: {
+      format: textFormat,
+      verbosity,
+    },
+    truncation: "auto",
+  };
+
+  const reasoningEffort = getReasoningEffortForModel(openaiModel);
+
+  if (reasoningEffort) {
+    payload.reasoning = { effort: reasoningEffort };
+  }
+
+  const response = await client.responses.create(payload);
+  return extractOpenAIResponseText(response);
+}
 
 function normalizeText(text) {
   return String(text || "")
@@ -1844,38 +1922,26 @@ async function generateKnowledgeReplyWithAI({
   recentMessages,
   matchedKnowledge,
 }) {
-  if (!aiEnabled || !openaiApiKey || !matchedKnowledge?.content) {
+  if (!isOpenAIConfigured() || !matchedKnowledge?.content) {
     return matchedKnowledge?.content || "";
   }
 
-  const openai = new OpenAI({
-    apiKey: openaiApiKey,
-  });
-
   try {
-    const completion = await openai.chat.completions.create({
-      model: openaiModel,
-      temperature: 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            `Responde como el bot interno de ${SALON_NAME}. Tono profesional, cálido, claro y elegante. Sé breve. No uses 'hermosa' por defecto. Usa solo la información proporcionada; si no alcanza, ofrece pasar con una persona del equipo. No uses el nombre anterior del salón con la palabra Spa.`,
-        },
-        {
-          role: "user",
-          content: `Últimos mensajes:\n${formatRecentMessagesForSearch(
-            recentMessages
-          )}\n\nInformación configurada:\nTítulo: ${
-            matchedKnowledge.title || "Información"
-          }\nContenido: ${
-            matchedKnowledge.content
-          }\n\nPregunta actual:\n${incomingMessage}`,
-        },
-      ],
+    const text = await createOpenAITextResponse({
+      instructions:
+        `Responde como el bot interno de ${SALON_NAME}. Tono profesional, cálido, claro y elegante. Sé breve. No uses "hermosa" por defecto. Usa solo la información proporcionada; si no alcanza, ofrece pasar con una persona del equipo. No inventes precios ni disponibilidad. No uses etiquetas internas ni el nombre anterior del salón con la palabra Spa.`,
+      input: `Últimos mensajes:\n${formatRecentMessagesForSearch(
+        recentMessages
+      )}\n\nInformación configurada:\nTítulo: ${
+        matchedKnowledge.title || "Información"
+      }\nContenido: ${
+        matchedKnowledge.content
+      }\n\nPregunta actual:\n${incomingMessage}`,
+      maxOutputTokens: 420,
+      verbosity: "low",
     });
 
-    return completion.choices?.[0]?.message?.content?.trim() || matchedKnowledge.content;
+    return text || matchedKnowledge.content;
   } catch (error) {
     console.error("Knowledge AI reply error:", error);
     return matchedKnowledge.content;
@@ -1896,6 +1962,180 @@ function getRequestedServicesText(context, ai) {
   }
 
   return "";
+}
+
+function truncateForAI(value, maxLength = 700) {
+  const text = String(value || "").trim();
+
+  if (text.length <= maxLength) return text;
+
+  return `${text.slice(0, maxLength - 1).trim()}…`;
+}
+
+function formatServicesCatalogForAI(services = []) {
+  const grouped = services.reduce((acc, service) => {
+    const group = getServiceGroup(service);
+
+    if (!acc[group]) acc[group] = [];
+
+    const price = Number(service?.base_price || 0);
+    const duration = Number(service?.duration_minutes || 0);
+    const description =
+      service?.bot_description || service?.description || service?.bot_keywords || "";
+
+    acc[group].push(
+      [
+        service?.name || "Servicio",
+        price > 0 ? `precio: $${price}` : "precio: no configurado",
+        duration > 0 ? `duración aprox.: ${duration} min` : "",
+        description ? `nota: ${truncateForAI(description, 160)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | ")
+    );
+
+    return acc;
+  }, {});
+
+  return Object.entries(grouped)
+    .map(([group, items]) => {
+      const title = group.charAt(0).toUpperCase() + group.slice(1);
+      return `${title}:\n${items.slice(0, 18).map((item) => `- ${item}`).join("\n")}`;
+    })
+    .join("\n\n");
+}
+
+function formatKnowledgeForAI({ faqs = [], knowledgeItems = [], matchedKnowledge }) {
+  const priorityItems = [];
+
+  if (matchedKnowledge?.content) {
+    priorityItems.push({
+      title: matchedKnowledge.title || "Información relacionada",
+      content: matchedKnowledge.content,
+    });
+  }
+
+  const faqItems = faqs.slice(0, 18).map((faq) => ({
+    title: faq.question || faq.title || "FAQ",
+    content: faq.answer || faq.response || faq.content || "",
+  }));
+
+  const knowledge = knowledgeItems.slice(0, 24).map((item) => ({
+    title: item.title || item.category || "Base de conocimiento",
+    content: item.content || item.answer || item.response || "",
+  }));
+
+  const unique = [...priorityItems, ...faqItems, ...knowledge].filter(
+    (item, index, all) => {
+      const key = normalizeText(`${item.title} ${item.content}`);
+      return key && all.findIndex((candidate) => normalizeText(`${candidate.title} ${candidate.content}`) === key) === index;
+    }
+  );
+
+  return unique
+    .slice(0, 30)
+    .map((item) => `- ${truncateForAI(item.title, 120)}: ${truncateForAI(item.content, 520)}`)
+    .join("\n");
+}
+
+function formatMenuOptionsForAI(menuOptions = []) {
+  return menuOptions
+    .slice(0, 10)
+    .map(
+      (option) =>
+        `${option.option_order || ""}. ${option.option_label || option.option_key || "Opción"}`
+    )
+    .join("\n");
+}
+
+async function generateAssistantReplyWithAI({
+  incomingMessage,
+  recentMessages,
+  settings,
+  faqs,
+  knowledgeItems,
+  services,
+  menuOptions,
+  mediaAssets,
+  context,
+  ai,
+  matchedKnowledge,
+  isFirstMessage,
+}) {
+  if (!isOpenAIConfigured()) return "";
+
+  const locationUrl = getConfiguredLocationUrl({
+    settings,
+    faqs,
+    knowledgeItems,
+    mediaAssets,
+  });
+
+  const instructions = `
+Eres el asistente interno de ${SALON_NAME} para el probador del módulo Bot / WhatsApp.
+
+Reglas de estilo:
+- Responde en español mexicano, con tono cálido, profesional, claro y elegante.
+- No uses "hermosa" por defecto.
+- No uses ni menciones "${SALON_NAME} Spa"; el nombre correcto es "${SALON_NAME}".
+- No muestres etiquetas internas, nombres de intents, fuentes técnicas ni debug.
+- Sé breve y útil. Si falta un dato, pregunta solo lo necesario.
+
+Reglas de negocio:
+- No inventes precios, promociones, direcciones, horarios ni disponibilidad.
+- Cuando hables de servicios o precios, usa solo el catálogo provisto abajo. Si no hay precio exacto, di que se puede cotizar con más detalle.
+- Usa primero FAQs/base de conocimiento cuando resuelva la pregunta.
+- Si no sabes algo con certeza, ofrece pasar con una persona del equipo.
+- No confirmes citas como registradas; solo ayuda a recopilar datos o guiar la conversación.
+- Si la clienta quiere una persona, responde que una persona del equipo dará seguimiento.
+`.trim();
+
+  const input = `
+Mensaje actual:
+${incomingMessage}
+
+¿Es primer mensaje de la conversación?: ${isFirstMessage ? "sí" : "no"}
+
+Últimos mensajes:
+${formatRecentMessagesForSearch(recentMessages)}
+
+Contexto interno resumido:
+${truncateForAI(JSON.stringify(context || {}, null, 2), 1600)}
+
+Interpretación automática:
+${truncateForAI(JSON.stringify(ai || {}, null, 2), 900)}
+
+Configuración visible del bot:
+- Bot: ${settings?.bot_name || SALON_NAME}
+- Ubicación conocida: ${LOCATION_ADDRESS_TEXT}
+- Link de ubicación: ${locationUrl}
+- Mensaje de ayuda humana: ${settings?.human_help_message || "Una persona del equipo dará seguimiento."}
+
+Opciones principales configuradas:
+${formatMenuOptionsForAI(menuOptions) || "Sin opciones configuradas."}
+
+FAQs y base de conocimiento activas:
+${formatKnowledgeForAI({ faqs, knowledgeItems, matchedKnowledge }) || "Sin conocimiento configurado."}
+
+Catálogo de servicios activo:
+${formatServicesCatalogForAI(services) || "Sin catálogo activo disponible."}
+
+Redacta la mejor respuesta final para la clienta.
+`.trim();
+
+  try {
+    const reply = await createOpenAITextResponse({
+      instructions,
+      input,
+      maxOutputTokens: 520,
+      verbosity: "low",
+    });
+
+    return sanitizeBotReply(reply);
+  } catch (error) {
+    console.error("OpenAI assistant reply error:", error);
+    return "";
+  }
 }
 
 async function saveAppointmentRequest(supabase, { conversationId, clientPhone, clientName, context, ai, incomingMessage }) {
@@ -2047,13 +2287,9 @@ function fallbackInterpret(message) {
 }
 
 async function interpretWithAI(message, context) {
-  if (!aiEnabled || !openaiApiKey) {
+  if (!isOpenAIConfigured()) {
     return fallbackInterpret(message);
   }
-
-  const openai = new OpenAI({
-    apiKey: openaiApiKey,
-  });
 
   const today = todayISO();
 
@@ -2123,27 +2359,18 @@ Reglas:
 `;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: openaiModel,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        {
-          role: "user",
-          content: `Contexto previo:\n${JSON.stringify(
-            context || {},
-            null,
-            2
-          )}\n\nMensaje de la clienta:\n${message}`,
-        },
-      ],
+    const raw = await createOpenAITextResponse({
+      instructions: systemPrompt,
+      input: `Contexto previo:\n${JSON.stringify(
+        context || {},
+        null,
+        2
+      )}\n\nMensaje de la clienta:\n${message}`,
+      textFormat: { type: "json_object" },
+      maxOutputTokens: 700,
+      verbosity: "low",
     });
 
-    const raw = completion.choices?.[0]?.message?.content || "{}";
     return normalizeAIParsed(JSON.parse(raw));
   } catch (error) {
     console.error("AI interpret error:", error);
@@ -2605,10 +2832,16 @@ async function createAppointmentWithPayment({
 }
 
 export async function GET() {
+  const configured = isOpenAIConfigured();
+
   return NextResponse.json({
     ok: true,
-    aiConfigured: Boolean(aiEnabled && openaiApiKey),
-    model: openaiApiKey ? openaiModel : null,
+    aiConfigured: configured,
+    aiProvider: configured ? "openai" : "rules",
+    model: configured ? openaiModel : null,
+    message: configured
+      ? `IA conectada en servidor con ${openaiModel}.`
+      : AI_RULES_FALLBACK_MESSAGE,
   });
 }
 
@@ -2923,7 +3156,11 @@ export async function POST(request) {
       matchedKnowledge &&
       shouldUseKnowledgeBeforeFixed({ incomingMessage, ai })
     ) {
-      reply = matchedKnowledge.content || "";
+      reply = await generateKnowledgeReplyWithAI({
+        incomingMessage,
+        recentMessages,
+        matchedKnowledge,
+      });
       matchedSource = matchedKnowledge.type;
 
       if (
@@ -3520,8 +3757,34 @@ export async function POST(request) {
 
     if (!reply) {
       if (matchedKnowledge) {
-        reply = matchedKnowledge.content || "";
+        reply = await generateKnowledgeReplyWithAI({
+          incomingMessage,
+          recentMessages,
+          matchedKnowledge,
+        });
         matchedSource = matchedKnowledge.type;
+      }
+    }
+
+    if (!reply) {
+      const aiReply = await generateAssistantReplyWithAI({
+        incomingMessage,
+        recentMessages,
+        settings,
+        faqs,
+        knowledgeItems,
+        services,
+        menuOptions,
+        mediaAssets,
+        context: nextContext,
+        ai,
+        matchedKnowledge,
+        isFirstMessage,
+      });
+
+      if (aiReply) {
+        reply = aiReply;
+        matchedSource = "openai_assistant";
       }
     }
 

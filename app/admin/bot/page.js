@@ -390,7 +390,7 @@ useEffect(() => {
       setAiStatus({
         aiConfigured: false,
         message:
-          "No se pudo validar el estado de IA. El bot seguirá funcionando con reglas básicas.",
+          "IA no conectada. El bot está funcionando con reglas básicas.",
       });
     }
   };
@@ -1040,6 +1040,12 @@ useEffect(() => {
         </div>
       )}
 
+      {aiStatus?.aiConfigured === false && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-800">
+          IA no conectada. El bot está funcionando con reglas básicas.
+        </div>
+      )}
+
       {activeSection === "configuracion" && (
         <Card>
           <SectionHeader
@@ -1064,7 +1070,7 @@ useEffect(() => {
                   ? `IA conectada en modo servidor${
                       aiStatus.model ? ` con ${aiStatus.model}` : ""
                     }.`
-                  : "IA no conectada. El bot está funcionando con respuestas configuradas y reglas básicas."}
+                  : "IA no conectada. El bot está funcionando con reglas básicas."}
               </div>
             )}
 
