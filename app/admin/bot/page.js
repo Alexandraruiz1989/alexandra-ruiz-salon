@@ -78,14 +78,47 @@ function formatDateTime(value) {
 }
 
 function isConversationAiEnabled(conversation) {
-  return conversation?.bot_enabled !== false && conversation?.handoff_to_human !== true;
+  const status = String(conversation?.status || "").toLowerCase();
+  return (
+    conversation?.bot_enabled !== false &&
+    conversation?.handoff_to_human !== true &&
+    status !== "human" &&
+    status !== "humano"
+  );
 }
 
 function getConversationStatusLabel(conversation) {
-  if (!isConversationAiEnabled(conversation)) return "humano";
+  if (!isConversationAiEnabled(conversation)) return "Bot apagado";
   if (conversation?.status === "pendiente") return "pendiente";
   if (conversation?.status === "solicitud_cita") return "solicitud de cita";
-  return conversation?.status || "bot activo";
+  if (conversation?.status === "bot" || conversation?.status === "abierta") {
+    return "Bot activo";
+  }
+  return conversation?.status || "Bot activo";
+}
+
+function isMissingBotConversationColumns(error) {
+  const text = String(error?.message || error || "").toLowerCase();
+  return (
+    text.includes("schema cache") ||
+    text.includes("bot_enabled") ||
+    text.includes("handoff_to_human") ||
+    text.includes("assigned_to") ||
+    text.includes("unread_count") ||
+    text.includes("status") ||
+    text.includes("last_message_at") ||
+    text.includes("updated_at")
+  );
+}
+
+function getBotConversationErrorMessage(action, error) {
+  const detail = error?.message || "Error desconocido.";
+
+  if (isMissingBotConversationColumns(error)) {
+    return `Faltan columnas del bot en Supabase. Ejecuta el SQL actualizado del módulo Bot. Detalle: ${detail}`;
+  }
+
+  return `${action}: ${detail}`;
 }
 
 function Card({ children }) {
@@ -120,6 +153,7 @@ function getToastStyle(message) {
   if (
     text.includes("no se pudo") ||
     text.includes("error") ||
+    text.includes("faltan columnas") ||
     text.includes("obligatorio")
   ) {
     return "bg-red-600 text-white";
@@ -332,7 +366,10 @@ useEffect(() => {
 
     if (conversationsResult.error) {
       setMessage(
-        `No se pudieron cargar conversaciones: ${conversationsResult.error.message}`
+        getBotConversationErrorMessage(
+          "No se pudieron cargar conversaciones",
+          conversationsResult.error
+        )
       );
     } else {
       setConversations(conversationsResult.data || []);
@@ -382,10 +419,13 @@ useEffect(() => {
   const updateConversationControl = async (conversation, enabled) => {
     if (!conversation?.id) return;
 
+    setSaving(true);
+    setMessage("");
+
     const payload = {
       bot_enabled: enabled,
       handoff_to_human: !enabled,
-      status: enabled ? "bot" : "humano",
+      status: enabled ? "bot" : "human",
       unread_count: enabled ? 0 : Number(conversation.unread_count || 0),
       updated_at: new Date().toISOString(),
     };
@@ -397,8 +437,9 @@ useEffect(() => {
 
     if (error) {
       setMessage(
-        `No se pudo actualizar IA. Si faltan columnas, aplica el SQL agregado en el repo. Detalle: ${error.message}`
+        getBotConversationErrorMessage("No se pudo actualizar IA", error)
       );
+      setSaving(false);
       return;
     }
 
@@ -407,6 +448,7 @@ useEffect(() => {
         ? "IA activada para esta conversación."
         : "IA apagada para esta conversación."
     );
+    setSaving(false);
     await loadData();
     await loadConversationMessages(conversation.id);
   };
@@ -424,7 +466,7 @@ useEffect(() => {
 
     if (error) {
       setMessage(
-        `No se pudo guardar responsable. Si falta la columna assigned_to, aplica el SQL agregado en el repo. Detalle: ${error.message}`
+        getBotConversationErrorMessage("No se pudo guardar responsable", error)
       );
       return;
     }
@@ -478,7 +520,7 @@ useEffect(() => {
         handoff_to_human: true,
         assigned_to: assignedTo.trim() || null,
         unread_count: 0,
-        status: "humano",
+        status: "human",
         last_message: cleanReply,
         last_message_at: now,
         updated_at: now,
@@ -487,7 +529,10 @@ useEffect(() => {
 
     if (conversationError) {
       setMessage(
-        `Se guardó el mensaje, pero no se pudo apagar IA. Aplica el SQL agregado en el repo si faltan columnas. Detalle: ${conversationError.message}`
+        getBotConversationErrorMessage(
+          "Se guardó el mensaje, pero no se pudo apagar IA",
+          conversationError
+        )
       );
       setSaving(false);
       await loadConversationMessages(conversation.id);
@@ -1694,10 +1739,10 @@ useEffect(() => {
                           className={`rounded-full px-3 py-1 text-[11px] ${
                             aiEnabled
                               ? "bg-green-50 text-green-700"
-                              : "bg-amber-50 text-amber-700"
+                              : "bg-red-50 text-red-700"
                           }`}
                         >
-                          {aiEnabled ? "IA ON" : "IA OFF"}
+                          {aiEnabled ? "IA ON · Bot activo" : "IA OFF · Bot apagado"}
                         </span>
                         <span className="rounded-full bg-[#eef1f3] px-3 py-1 text-[11px] text-[#68777c]">
                           {getConversationStatusLabel(conversation)}
@@ -1739,6 +1784,7 @@ useEffect(() => {
 
                         <button
                           type="button"
+                          disabled={saving}
                           onClick={() =>
                             updateConversationControl(
                               selectedConversation,
@@ -1747,13 +1793,18 @@ useEffect(() => {
                           }
                           className={`rounded-full px-5 py-2 text-sm text-white transition hover:opacity-90 ${
                             isConversationAiEnabled(selectedConversation)
-                              ? "bg-amber-600"
-                              : "bg-green-600"
+                              ? "bg-green-600"
+                              : "bg-red-600"
                           }`}
+                          title={
+                            isConversationAiEnabled(selectedConversation)
+                              ? "Apagar IA para esta conversación"
+                              : "Activar IA para esta conversación"
+                          }
                         >
                           {isConversationAiEnabled(selectedConversation)
-                            ? "IA ON · Apagar"
-                            : "IA OFF · Activar IA"}
+                            ? "IA ON · Bot activo"
+                            : "IA OFF · Bot apagado"}
                         </button>
                       </div>
 

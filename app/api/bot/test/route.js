@@ -2769,7 +2769,7 @@ export async function POST(request) {
         clientPhoneFromTest,
         clientNameFromTest,
         {
-          status: "humano",
+          status: "human",
           last_message: incomingMessage,
           intent: "human_handoff",
           current_step: "humano",
