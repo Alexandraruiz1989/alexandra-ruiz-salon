@@ -297,6 +297,15 @@ export default function StorePage() {
   const [message, setMessage] = useState("");
   const [currentRole, setCurrentRole] = useState("tecnica");
   const [currentEmail, setCurrentEmail] = useState("");
+  const [accessDebug, setAccessDebug] = useState({
+    auth_email: "",
+    auth_user_id: "",
+    role: "",
+    active: null,
+    role_source: "sin validar",
+    can_manage_products: null,
+    error: "",
+  });
   const [activeSection, setActiveSection] = useState("productos");
 
   const [products, setProducts] = useState([]);
@@ -342,6 +351,10 @@ export default function StorePage() {
   const canManageStore = ["admin", "encargada", "caja"].includes(normalizedRole);
   const canEditProducts = isAdmin || normalizedRole === "encargada";
   const menuItems = isProductOwner ? ownerMenuItems : adminMenuItems;
+  const shouldShowAccessDebug =
+    normalizeText(currentEmail) === "alexandraruizsalon@gmail.com" ||
+    normalizeText(accessDebug.role) === "admin" ||
+    isAdmin;
 
   useEffect(() => {
     const start = async () => {
@@ -353,6 +366,12 @@ export default function StorePage() {
 
       const email = data.session.user?.email || "";
       setCurrentEmail(email);
+      setAccessDebug((current) => ({
+        ...current,
+        auth_email: email,
+        auth_user_id: data.session.user?.id || "",
+        role_source: "sesión detectada",
+      }));
       await loadRole(data.session.user);
       setLoadingSession(false);
       await loadData();
@@ -387,6 +406,21 @@ export default function StorePage() {
         .json()
         .catch(() => ({ success: false, error: "Respuesta inválida del servidor." }));
 
+      const apiDebug = result.debug || {};
+
+      setAccessDebug({
+        auth_email: apiDebug.auth_email || user.email || "",
+        auth_user_id: apiDebug.auth_user_id || user.id || "",
+        role: result.profile?.role || apiDebug.role || "",
+        active: result.profile?.active ?? apiDebug.active ?? null,
+        role_source: apiDebug.profile_source
+          ? `API (${apiDebug.profile_source})`
+          : "API",
+        can_manage_products:
+          result.can_manage_products ?? apiDebug.can_manage_products ?? null,
+        error: result.success ? "" : result.error || "",
+      });
+
       if (response.ok && result.success && result.profile?.role) {
         setCurrentRole(result.profile.role);
         return;
@@ -408,6 +442,13 @@ export default function StorePage() {
     const profileById = profilesById?.[0] || null;
     if (profileById?.role && profileById.active !== false) {
       setCurrentRole(profileById.role);
+      setAccessDebug((current) => ({
+        ...current,
+        role: profileById.role,
+        active: profileById.active !== false,
+        role_source: "cliente (auth_user_id)",
+        can_manage_products: ["admin", "encargada"].includes(normalizeText(profileById.role)),
+      }));
       return;
     }
 
@@ -419,6 +460,16 @@ export default function StorePage() {
 
     const profileByEmail = profilesByEmail?.[0] || null;
     setCurrentRole(profileByEmail?.role || "tecnica");
+    setAccessDebug((current) => ({
+      ...current,
+      role: profileByEmail?.role || "tecnica",
+      active: profileByEmail?.active ?? null,
+      role_source: profileByEmail ? "cliente (email)" : "cliente (sin perfil)",
+      can_manage_products: ["admin", "encargada"].includes(
+        normalizeText(profileByEmail?.role)
+      ),
+      error: profileByEmail ? "" : "No se encontró perfil desde cliente.",
+    }));
   };
 
   const loadData = async () => {
@@ -689,11 +740,6 @@ export default function StorePage() {
   };
 
   const saveProduct = async () => {
-    if (!canEditProducts) {
-      setMessage("No tienes permiso para administrar productos.");
-      return;
-    }
-
     if (!productForm.name.trim()) {
       setMessage("El nombre del producto es obligatorio.");
       return;
@@ -734,11 +780,6 @@ export default function StorePage() {
   };
 
   const toggleProduct = async (product) => {
-    if (!canEditProducts) {
-      setMessage("No tienes permiso para administrar productos.");
-      return;
-    }
-
     try {
       await saveProductWithApi({
         id: product.id,
@@ -754,11 +795,6 @@ export default function StorePage() {
   };
 
   const saveStockMovement = async () => {
-    if (!canEditProducts) {
-      setMessage("No tienes permiso para ajustar inventario.");
-      return;
-    }
-
     const product = products.find((item) => item.id === stockForm.product_id);
     const quantity = toInteger(stockForm.quantity);
 
@@ -838,11 +874,6 @@ export default function StorePage() {
   };
 
   const importProducts = async () => {
-    if (!canEditProducts) {
-      setMessage("No tienes permiso para importar productos.");
-      return;
-    }
-
     const validRows = importPreview.filter((row) => row.errors.length === 0);
     if (validRows.length === 0) {
       setMessage("No hay productos válidos para importar.");
@@ -1117,6 +1148,55 @@ export default function StorePage() {
         </div>
       )}
 
+      {shouldShowAccessDebug && (
+        <div className="mb-6 rounded-[1.5rem] border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          <p className="text-xs uppercase tracking-[0.24em] text-amber-700">
+            Diagnóstico de acceso Tienda
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <p>
+              <span className="font-medium">Email detectado:</span>{" "}
+              {accessDebug.auth_email || currentEmail || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Auth user ID:</span>{" "}
+              {accessDebug.auth_user_id || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Role detectado:</span>{" "}
+              {accessDebug.role || currentRole || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Active detectado:</span>{" "}
+              {accessDebug.active === null || accessDebug.active === undefined
+                ? "-"
+                : accessDebug.active
+                ? "true"
+                : "false"}
+            </p>
+            <p>
+              <span className="font-medium">Rol usado desde:</span>{" "}
+              {accessDebug.role_source || "sin validar"}
+            </p>
+            <p>
+              <span className="font-medium">API permite productos:</span>{" "}
+              {accessDebug.can_manage_products === null ||
+              accessDebug.can_manage_products === undefined
+                ? "-"
+                : accessDebug.can_manage_products
+                ? "sí"
+                : "no"}
+            </p>
+          </div>
+          {accessDebug.error && (
+            <p className="mt-3 rounded-2xl bg-white/70 px-4 py-3 text-amber-950">
+              <span className="font-medium">Último diagnóstico:</span>{" "}
+              {accessDebug.error}
+            </p>
+          )}
+        </div>
+      )}
+
       {activeSection === "productos" && (
         <div className="grid gap-6 xl:grid-cols-[0.9fr_1.4fr]">
           {!isProductOwner && (
@@ -1356,7 +1436,7 @@ export default function StorePage() {
                             </span>
                           </div>
                         </div>
-                        {canEditProducts && (
+                        {!isProductOwner && (
                           <div className="flex shrink-0 flex-wrap gap-2">
                             <button
                               type="button"

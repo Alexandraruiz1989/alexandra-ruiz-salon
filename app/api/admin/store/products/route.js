@@ -60,7 +60,7 @@ async function findAccessProfile(adminSupabase, user) {
 
   const { data: profilesById, error: profileByIdError } = await adminSupabase
     .from("user_profiles")
-    .select("id, email, role, active")
+    .select("id, auth_user_id, email, role, active")
     .eq("auth_user_id", user.id)
     .limit(1);
 
@@ -79,7 +79,7 @@ async function findAccessProfile(adminSupabase, user) {
     const { data: profilesByEmail, error: profileByEmailError } =
       await adminSupabase
         .from("user_profiles")
-        .select("id, email, role, active")
+        .select("id, auth_user_id, email, role, active")
         .ilike("email", userEmail)
         .limit(1);
 
@@ -97,7 +97,7 @@ async function findAccessProfile(adminSupabase, user) {
 
   logAccessDiagnostic({ user, profile, source });
 
-  return profile;
+  return { profile, source };
 }
 
 async function getSessionProfile(request, adminSupabase) {
@@ -121,12 +121,14 @@ async function getSessionProfile(request, adminSupabase) {
   }
 
   const user = userData.user;
-  const profile = await findAccessProfile(adminSupabase, user);
+  const { profile, source } = await findAccessProfile(adminSupabase, user);
 
   if (!profile) {
     return {
       error: "No encontré tu perfil de acceso. Revisa /admin/accesos.",
       status: 403,
+      user,
+      source,
     };
   }
 
@@ -134,12 +136,32 @@ async function getSessionProfile(request, adminSupabase) {
     return {
       error: "Tu perfil de acceso está desactivado. Revisa /admin/accesos.",
       status: 403,
+      user,
+      profile,
+      source,
     };
   }
 
   const role = normalizeRole(profile?.role);
 
-  return { profile, user, role };
+  return { profile, user, role, source };
+}
+
+function buildAccessDebug(session) {
+  return {
+    auth_email: normalizeEmail(session?.user?.email),
+    auth_user_id: session?.user?.id || null,
+    profile_found: Boolean(session?.profile),
+    profile_source: session?.source || "unknown",
+    profile_id: session?.profile?.id || null,
+    profile_auth_user_id: session?.profile?.auth_user_id || null,
+    profile_email: normalizeEmail(session?.profile?.email),
+    role: session?.profile?.role || null,
+    active: session?.profile?.active ?? null,
+    can_manage_products: session?.role
+      ? productManagerRoles.includes(session.role)
+      : false,
+  };
 }
 
 function requireProductManager(session) {
@@ -210,17 +232,28 @@ export async function GET(request) {
     const adminSupabase = createAdminClient();
     const session = await getSessionProfile(request, adminSupabase);
 
-    if (session.error) return errorResponse(session.error, session.status);
+    if (session.error) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: session.error,
+          debug: buildAccessDebug(session),
+        },
+        { status: session.status || 400 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
       profile: {
         id: session.profile.id,
+        auth_user_id: session.profile.auth_user_id,
         email: normalizeEmail(session.profile.email),
         role: session.profile.role,
         active: session.profile.active !== false,
       },
       can_manage_products: productManagerRoles.includes(session.role),
+      debug: buildAccessDebug(session),
     });
   } catch (error) {
     return errorResponse(error, 500);
