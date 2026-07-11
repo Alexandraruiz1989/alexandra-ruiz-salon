@@ -93,6 +93,11 @@ function cashPaymentMethodLabel(value) {
   return "Mixto";
 }
 
+function saleSourceLabel(value) {
+  if (value === "appointment_payment") return "Venta en cita/cobro";
+  return "Venta directa";
+}
+
 function Card({ children, className = "" }) {
   return (
     <div className={`rounded-[1.5rem] bg-white p-6 shadow-sm ${className}`}>
@@ -257,13 +262,37 @@ function normalizeImportRows(rows) {
   });
 }
 
-function downloadTemplate() {
-  const csv = `${templateHeaders.join(",")}\nGel ejemplo,SKU-001,Marca,Categoría,Descripción,100,160,10,2,Proveedor externo\n`;
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+async function downloadTemplate() {
+  const XLSX = await import("xlsx");
+  const rows = [
+    templateHeaders,
+    [
+      "Shampoo Hidratante",
+      "SH001",
+      "Marca Ejemplo",
+      "Cabello",
+      "Shampoo para venta en salón",
+      120,
+      250,
+      10,
+      2,
+      "Proveedor externo",
+    ],
+  ];
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Productos");
+  const arrayBuffer = XLSX.write(workbook, {
+    bookType: "xlsx",
+    type: "array",
+  });
+  const blob = new Blob([arrayBuffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "plantilla_tienda_productos.csv";
+  link.download = "plantilla_productos_tienda.xlsx";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -614,6 +643,12 @@ export default function StorePage() {
     const terminal = reportSales.reduce((sum, sale) => sum + Number(sale.terminal_fee_amount || 0), 0);
     const seller = reportSales.reduce((sum, sale) => sum + Number(sale.seller_commission_amount || 0), 0);
     const net = reportSales.reduce((sum, sale) => sum + Number(sale.external_owner_net_amount || 0), 0);
+    const direct = reportSales
+      .filter((sale) => (sale.source || "direct_sale") === "direct_sale")
+      .reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
+    const appointment = reportSales
+      .filter((sale) => sale.source === "appointment_payment")
+      .reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
 
     const bySeller = {};
     const byProduct = {};
@@ -641,6 +676,8 @@ export default function StorePage() {
       terminal,
       seller,
       net,
+      direct,
+      appointment,
       bySeller: Object.values(bySeller).sort((a, b) => b.total - a.total),
       byProduct: Object.values(byProduct).sort((a, b) => b.quantity - a.quantity),
     };
@@ -1016,6 +1053,7 @@ export default function StorePage() {
       seller_commission_amount: Number(saleTotals.sellerCommission.toFixed(2)),
       external_owner_net_amount: Number(saleTotals.externalNet.toFixed(2)),
       cash_registered: true,
+      source: "direct_sale",
       notes: saleForm.notes.trim() || null,
       created_by: currentEmail || null,
       updated_at: now,
@@ -1266,7 +1304,7 @@ export default function StorePage() {
                       onClick={downloadTemplate}
                       className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
                     >
-                      Descargar plantilla CSV
+                      Descargar plantilla Excel
                     </button>
                   }
                 />
@@ -1668,8 +1706,10 @@ export default function StorePage() {
               <InputField label="Hasta" type="date" value={reportDateTo} onChange={setReportDateTo} />
             </div>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-7">
               <Metric label="Total productos" value={formatMoney(reportSummary.total)} />
+              <Metric label="Venta directa" value={formatMoney(reportSummary.direct)} />
+              <Metric label="Venta en cita" value={formatMoney(reportSummary.appointment)} />
               <Metric label="Comisión salón" value={formatMoney(reportSummary.salon)} />
               <Metric label="Comisión terminal" value={formatMoney(reportSummary.terminal)} />
               <Metric label="Comisión vendedoras" value={formatMoney(reportSummary.seller)} />
@@ -1740,7 +1780,7 @@ export default function StorePage() {
                 {reportSales.map((sale) => (
                   <div key={sale.id} className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-4">
                     <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                      {sale.sale_date} · {paymentMethodLabel(sale.payment_method)}
+                      {sale.sale_date} · {paymentMethodLabel(sale.payment_method)} · {saleSourceLabel(sale.source)}
                     </p>
                     <h4 className="mt-2 text-lg font-light">
                       {formatMoney(sale.total_amount)} · {sale.seller_name || "Sin vendedora"}

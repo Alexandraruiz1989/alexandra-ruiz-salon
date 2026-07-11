@@ -87,6 +87,23 @@ create index if not exists store_inventory_movements_product_idx on public.store
 create index if not exists store_sales_date_idx on public.store_sales(sale_date desc);
 create index if not exists store_sale_items_sale_idx on public.store_sale_items(sale_id);
 
+alter table public.store_sales
+  add column if not exists appointment_id uuid null,
+  add column if not exists payment_id uuid null,
+  add column if not exists source text default 'direct_sale';
+
+alter table public.store_sales
+  add column if not exists client_id uuid null,
+  add column if not exists seller_staff_id uuid null;
+
+update public.store_sales
+set source = 'direct_sale'
+where source is null;
+
+create index if not exists store_sales_appointment_idx on public.store_sales(appointment_id);
+create index if not exists store_sales_payment_idx on public.store_sales(payment_id);
+create index if not exists store_sales_source_idx on public.store_sales(source);
+
 -- Rol sugerido para user_profiles.role:
 -- product_owner
 -- Este rol se habilita en la app para ver solo /admin/tienda.

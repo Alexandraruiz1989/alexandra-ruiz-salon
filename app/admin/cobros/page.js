@@ -69,7 +69,11 @@ function getToastStyle(message) {
     text.includes("no se pudo") ||
     text.includes("error") ||
     text.includes("obligatorio") ||
-    text.includes("válido")
+    text.includes("válido") ||
+    text.includes("stock") ||
+    text.includes("permiso") ||
+    text.includes("sesión") ||
+    text.includes("expiró")
   ) {
     return "bg-red-600 text-white";
   }
@@ -130,6 +134,8 @@ function CobrosContent() {
   const [allPaidAppointmentIds, setAllPaidAppointmentIds] = useState([]);
   const [extras, setExtras] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(null);
+  const [storeProducts, setStoreProducts] = useState([]);
+  const [staff, setStaff] = useState([]);
 
   const [selectedAppointment, setSelectedAppointment] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -144,6 +150,9 @@ function CobrosContent() {
   });
 
   const [extraLines, setExtraLines] = useState([]);
+  const [productLines, setProductLines] = useState([]);
+  const [productSearch, setProductSearch] = useState("");
+  const [productSellerStaffId, setProductSellerStaffId] = useState("");
 
   const currentRole = normalizeRole(currentProfile?.role);
   const isAdmin = currentRole === "admin";
@@ -336,8 +345,15 @@ function CobrosContent() {
       paymentsQuery = paymentsQuery.eq("created_by_user_id", userParam.id);
     }
 
-    const [appointmentsResult, paymentsResult, allPaymentsResult, extrasResult, settingsResult] =
-      await Promise.all([
+    const [
+      appointmentsResult,
+      paymentsResult,
+      allPaymentsResult,
+      extrasResult,
+      settingsResult,
+      storeProductsResult,
+      staffResult,
+    ] = await Promise.all([
         appointmentsQuery,
 
         paymentsQuery,
@@ -355,6 +371,14 @@ function CobrosContent() {
           .order("name", { ascending: true }),
 
         supabase.from("payment_settings").select("*").limit(1).maybeSingle(),
+
+        supabase
+          .from("store_products")
+          .select("*")
+          .eq("active", true)
+          .order("name", { ascending: true }),
+
+        supabase.from("staff").select("*").eq("active", true).order("full_name"),
       ]);
 
     if (appointmentsResult.error) {
@@ -391,6 +415,18 @@ function CobrosContent() {
       );
     } else {
       setPaymentSettings(settingsResult.data || null);
+    }
+
+    if (storeProductsResult.error) {
+      setMessage(`No se pudieron cargar productos: ${storeProductsResult.error.message}`);
+    } else {
+      setStoreProducts(storeProductsResult.data || []);
+    }
+
+    if (staffResult.error) {
+      setMessage(`No se pudo cargar personal para productos: ${staffResult.error.message}`);
+    } else {
+      setStaff(staffResult.data || []);
     }
 
     setLoadingData(false);
@@ -434,6 +470,13 @@ function CobrosContent() {
     payment_method: "Efectivo",
     notes: "",
   });
+  setProductLines([]);
+  setProductSearch("");
+  setProductSellerStaffId(
+    currentProfile?.staff_id ||
+      appointment.appointment_services?.find((item) => item.staff_id)?.staff_id ||
+      ""
+  );
 
   const { data, error } = await supabase
     .from("appointment_extra_items")
@@ -474,6 +517,9 @@ function CobrosContent() {
       notes: "",
     });
     setExtraLines([]);
+    setProductLines([]);
+    setProductSearch("");
+    setProductSellerStaffId("");
 
     if (
       typeof window !== "undefined" &&
@@ -542,6 +588,100 @@ function CobrosContent() {
     );
   };
 
+  const canAddProductsToPayment = ["admin", "encargada", "caja"].includes(
+    currentRole
+  );
+
+  const productSubtotal = useMemo(() => {
+    return productLines.reduce(
+      (sum, line) => sum + Number(line.total_price || 0),
+      0
+    );
+  }, [productLines]);
+
+  const filteredStoreProducts = useMemo(() => {
+    const term = String(productSearch || "").trim().toLowerCase();
+    return storeProducts
+      .filter((product) => product.active !== false)
+      .filter((product) => {
+        if (!term) return true;
+        const text = `${product.name || ""} ${product.sku || ""} ${
+          product.brand || ""
+        } ${product.category || ""}`.toLowerCase();
+        return text.includes(term);
+      })
+      .slice(0, 8);
+  }, [storeProducts, productSearch]);
+
+  const addProductLine = (product) => {
+    if (!canAddProductsToPayment) {
+      setPaymentMessage("No tienes permiso para agregar productos al cobro.");
+      return;
+    }
+
+    if (Number(product.current_stock || 0) <= 0) {
+      setPaymentMessage(`Sin stock disponible para ${product.name}.`);
+      return;
+    }
+
+    setProductLines((current) => {
+      const existing = current.find((line) => line.product_id === product.id);
+
+      if (existing) {
+        return current.map((line) => {
+          if (line.product_id !== product.id) return line;
+          const nextQuantity = Math.min(
+            Number(line.quantity || 0) + 1,
+            Number(line.stock || 0)
+          );
+          return {
+            ...line,
+            quantity: nextQuantity,
+            total_price: nextQuantity * Number(line.unit_price || 0),
+          };
+        });
+      }
+
+      return [
+        ...current,
+        {
+          product_id: product.id,
+          product_name: product.name,
+          sku: product.sku || "",
+          quantity: 1,
+          stock: Number(product.current_stock || 0),
+          unit_price: Number(product.sale_price || 0),
+          total_price: Number(product.sale_price || 0),
+        },
+      ];
+    });
+  };
+
+  const updateProductLineQuantity = (productId, value) => {
+    setProductLines((current) =>
+      current.map((line) => {
+        if (line.product_id !== productId) return line;
+
+        const quantity = Math.max(
+          0,
+          Math.min(Number(value || 0), Number(line.stock || 0))
+        );
+
+        return {
+          ...line,
+          quantity,
+          total_price: quantity * Number(line.unit_price || 0),
+        };
+      })
+    );
+  };
+
+  const removeProductLine = (productId) => {
+    setProductLines((current) =>
+      current.filter((line) => line.product_id !== productId)
+    );
+  };
+
   const getPaymentTotals = () => {
     const subtotalServices = selectedAppointment
       ? getAppointmentTotal(selectedAppointment)
@@ -555,16 +695,22 @@ function CobrosContent() {
     const depositAmount = Number(selectedAppointment?.deposit_amount || 0);
     const discountAmount = Number(paymentForm.discount_amount || 0);
     const tipAmount = Number(paymentForm.tip_amount || 0);
+    const subtotalProducts = productSubtotal;
+    const servicesPaymentTotal = Math.max(
+      subtotalServices + subtotalExtras - discountAmount - depositAmount + tipAmount,
+      0
+    );
 
-    const totalAmount =
-      subtotalServices + subtotalExtras - discountAmount - depositAmount + tipAmount;
+    const totalAmount = servicesPaymentTotal + subtotalProducts;
 
     return {
       subtotalServices,
       subtotalExtras,
+      subtotalProducts,
       depositAmount,
       discountAmount,
       tipAmount,
+      servicesPaymentTotal,
       totalAmount: Math.max(totalAmount, 0),
     };
   };
@@ -782,6 +928,59 @@ function CobrosContent() {
     }
   };
 
+  const getCurrentAccessToken = async () => {
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error || !data.session?.access_token) {
+      throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+    }
+
+    return data.session.access_token;
+  };
+
+  const registerAppointmentProductSale = async (payment) => {
+    if (productLines.length === 0) return null;
+
+    const token = await getCurrentAccessToken();
+    const response = await fetch("/api/admin/store/sales", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        sale_date: selectedDate,
+        source: "appointment_payment",
+        appointment_id: selectedAppointment.id,
+        client_id: selectedAppointment.client_id || null,
+        payment_id: payment.id,
+        seller_staff_id: productSellerStaffId || null,
+        payment_method: paymentForm.payment_method,
+        notes: `Productos agregados al cobro de cita de ${
+          selectedAppointment.clients?.full_name || "clienta"
+        }`,
+        products: productLines.map((line) => ({
+          product_id: line.product_id,
+          quantity: Number(line.quantity || 0),
+          unit_price: Number(line.unit_price || 0),
+        })),
+      }),
+    });
+
+    const result = await response
+      .json()
+      .catch(() => ({ success: false, error: "Respuesta inválida del servidor." }));
+
+    if (!response.ok || !result.success) {
+      throw new Error(
+        result.error ||
+          `No se pudo guardar la venta de productos (${response.status}).`
+      );
+    }
+
+    return result;
+  };
+
   const savePayment = async () => {
     if (!selectedAppointment) return;
 
@@ -790,6 +989,27 @@ function CobrosContent() {
     setMessage("");
 
     const totals = getPaymentTotals();
+
+    const invalidProduct = productLines.find(
+      (line) =>
+        Number(line.quantity || 0) <= 0 ||
+        Number(line.unit_price || 0) < 0 ||
+        Number(line.quantity || 0) > Number(line.stock || 0)
+    );
+
+    if (invalidProduct) {
+      setPaymentMessage(
+        `Revisa cantidad, precio y stock de ${invalidProduct.product_name}.`
+      );
+      setSavingPayment(false);
+      return;
+    }
+
+    if (productLines.length > 0 && !productSellerStaffId) {
+      setPaymentMessage("Selecciona la vendedora de los productos.");
+      setSavingPayment(false);
+      return;
+    }
 
     const existingPayment = allPaidAppointmentIds.includes(selectedAppointment.id);
 
@@ -912,28 +1132,45 @@ function CobrosContent() {
       }
     }
 
-    const { error: cashError } = await supabase.from("cash_movements").insert([
-      {
-        movement_date: selectedDate,
-        movement_type: "ingreso",
-        amount: totals.totalAmount,
-        payment_method: paymentForm.payment_method,
-        concept: `Cobro de cita - ${
-          selectedAppointment.clients?.full_name || "Clienta"
-        }`,
-        notes: paymentForm.notes?.trim() || null,
-        payment_id: payment.id,
-        created_by_user_id: currentUser?.id || null,
-        created_by_email: currentUser?.email || null,
-      },
-    ]);
+    if (productLines.length > 0) {
+      try {
+        await registerAppointmentProductSale(payment);
+      } catch (error) {
+        setPaymentMessage(
+          `El pago se guardó, pero no se pudieron guardar productos: ${
+            error?.message || "intenta nuevamente."
+          }`
+        );
+        setSavingPayment(false);
+        return;
+      }
+    }
 
-    if (cashError) {
-      setPaymentMessage(
-        `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
-      );
-      setSavingPayment(false);
-      return;
+    if (Number(totals.servicesPaymentTotal || 0) > 0) {
+      const { error: cashError } = await supabase.from("cash_movements").insert([
+        {
+          movement_date: selectedDate,
+          movement_type: "ingreso",
+          amount: totals.servicesPaymentTotal,
+          payment_method: paymentForm.payment_method,
+          concept: `Cobro de cita - ${
+            selectedAppointment.clients?.full_name || "Clienta"
+          }`,
+          category: "servicio",
+          notes: paymentForm.notes?.trim() || null,
+          payment_id: payment.id,
+          created_by_user_id: currentUser?.id || null,
+          created_by_email: currentUser?.email || null,
+        },
+      ]);
+
+      if (cashError) {
+        setPaymentMessage(
+          `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
+        );
+        setSavingPayment(false);
+        return;
+      }
     }
 
     setMessage("Pago guardado correctamente ✨");
@@ -1390,12 +1627,23 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
           paymentSettings={paymentSettings}
           paymentForm={paymentForm}
           extraLines={extraLines}
+          productLines={productLines}
+          productSearch={productSearch}
+          productSellerStaffId={productSellerStaffId}
+          filteredStoreProducts={filteredStoreProducts}
+          staff={staff}
+          canAddProductsToPayment={canAddProductsToPayment}
           savingPayment={savingPayment}
           paymentMessage={paymentMessage}
           handlePaymentFormChange={handlePaymentFormChange}
           addExtraLine={addExtraLine}
           removeExtraLine={removeExtraLine}
           handleExtraLineChange={handleExtraLineChange}
+          setProductSearch={setProductSearch}
+          setProductSellerStaffId={setProductSellerStaffId}
+          addProductLine={addProductLine}
+          updateProductLineQuantity={updateProductLineQuantity}
+          removeProductLine={removeProductLine}
           getPaymentTotals={getPaymentTotals}
           savePayment={savePayment}
           onClose={closePaymentModal}
@@ -1411,12 +1659,23 @@ function PaymentModal({
   paymentSettings,
   paymentForm,
   extraLines,
+  productLines,
+  productSearch,
+  productSellerStaffId,
+  filteredStoreProducts,
+  staff,
+  canAddProductsToPayment,
   savingPayment,
   paymentMessage,
   handlePaymentFormChange,
   addExtraLine,
   removeExtraLine,
   handleExtraLineChange,
+  setProductSearch,
+  setProductSellerStaffId,
+  addProductLine,
+  updateProductLineQuantity,
+  removeProductLine,
   getPaymentTotals,
   savePayment,
   onClose,
@@ -1609,6 +1868,152 @@ function PaymentModal({
             </div>
 
             <div className="rounded-2xl bg-[#f7f9fa] p-5">
+              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                <div>
+                  <h4 className="text-lg font-light">Productos</h4>
+                  <p className="mt-1 text-sm text-[#68777c]">
+                    Agrega productos al cobro manteniendo caja y reportes separados.
+                  </p>
+                </div>
+                {!canAddProductsToPayment && (
+                  <span className="rounded-full bg-amber-50 px-4 py-2 text-xs text-amber-700">
+                    Tu rol solo puede consultar, no vender productos.
+                  </span>
+                )}
+              </div>
+
+              {canAddProductsToPayment && (
+                <>
+                  <div className="mt-4 grid gap-4 md:grid-cols-[1fr_0.8fr]">
+                    <div>
+                      <label className="mb-2 block text-sm text-[#68777c]">
+                        Buscar producto
+                      </label>
+                      <input
+                        value={productSearch}
+                        onChange={(event) => setProductSearch(event.target.value)}
+                        placeholder="Nombre, SKU, marca..."
+                        className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-sm text-[#68777c]">
+                        Vendedora del producto
+                      </label>
+                      <select
+                        value={productSellerStaffId}
+                        onChange={(event) => setProductSellerStaffId(event.target.value)}
+                        className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                      >
+                        <option value="">Seleccionar vendedora</option>
+                        {staff.map((person) => (
+                          <option key={person.id} value={person.id}>
+                            {person.full_name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {filteredStoreProducts.length === 0 ? (
+                      <div className="rounded-2xl bg-white p-4 text-sm text-[#68777c] md:col-span-2">
+                        No hay productos disponibles con esa búsqueda.
+                      </div>
+                    ) : (
+                      filteredStoreProducts.map((product) => (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => addProductLine(product)}
+                          className="rounded-2xl border border-[#dde3e6] bg-white p-4 text-left transition hover:border-[#bd7b83]"
+                        >
+                          <p className="font-medium text-[#263238]">{product.name}</p>
+                          <p className="mt-1 text-sm text-[#68777c]">
+                            {product.sku || "Sin SKU"} · {formatMoney(product.sale_price)} · Stock{" "}
+                            {product.current_stock || 0}
+                          </p>
+                          {Number(product.current_stock || 0) <= 0 && (
+                            <p className="mt-2 text-xs text-red-600">Sin stock disponible</p>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+
+              <div className="mt-4 space-y-3">
+                {productLines.length === 0 ? (
+                  <div className="rounded-2xl bg-white p-4 text-sm text-[#68777c]">
+                    No hay productos agregados al cobro.
+                  </div>
+                ) : (
+                  productLines.map((line) => (
+                    <div
+                      key={line.product_id}
+                      className="rounded-2xl border border-[#dde3e6] bg-white p-4"
+                    >
+                      <div className="grid gap-4 lg:grid-cols-[1fr_0.35fr_0.35fr_0.35fr_auto]">
+                        <div>
+                          <p className="font-medium text-[#263238]">{line.product_name}</p>
+                          <p className="text-sm text-[#68777c]">
+                            SKU: {line.sku || "-"} · Stock disponible: {line.stock}
+                          </p>
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Cantidad
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            max={line.stock}
+                            value={line.quantity}
+                            onChange={(event) =>
+                              updateProductLineQuantity(line.product_id, event.target.value)
+                            }
+                            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Precio
+                          </label>
+                          <div className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-sm text-[#263238]">
+                            {formatMoney(line.unit_price)}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Total
+                          </label>
+                          <div className="rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-sm text-[#263238]">
+                            {formatMoney(line.total_price)}
+                          </div>
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            type="button"
+                            onClick={() => removeProductLine(line.product_id)}
+                            className="rounded-full border border-[#bd7b83] px-4 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      </div>
+                      {Number(line.quantity || 0) > Number(line.stock || 0) && (
+                        <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
+                          Stock insuficiente para este producto.
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-[#f7f9fa] p-5">
               <h4 className="text-lg font-light">Pago</h4>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -1703,6 +2108,11 @@ function PaymentModal({
                 <div className="flex justify-between gap-3">
                   <span className="text-[#68777c]">Extras</span>
                   <span>{formatMoney(totals.subtotalExtras)}</span>
+                </div>
+
+                <div className="flex justify-between gap-3">
+                  <span className="text-[#68777c]">Productos</span>
+                  <span>{formatMoney(totals.subtotalProducts)}</span>
                 </div>
 
                 <div className="flex justify-between gap-3">
