@@ -1686,8 +1686,8 @@ useEffect(() => {
           {conversations.length === 0 ? (
             <EmptyState text="Aún no hay conversaciones del bot." />
           ) : (
-            <div className="grid h-[calc(100vh-220px)] min-h-[560px] overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa] xl:grid-cols-[0.85fr_1.6fr]">
-              <aside className="h-52 min-h-0 overflow-y-auto border-b border-[#dde3e6] bg-white xl:h-full xl:border-b-0 xl:border-r">
+            <div className="grid w-full max-w-full min-w-0 overflow-hidden rounded-[1.5rem] border border-[#dde3e6] bg-[#f7f9fa] lg:h-[calc(100vh-220px)] lg:min-h-[560px] lg:grid-cols-[minmax(260px,0.85fr)_minmax(0,1.6fr)]">
+              <aside className="max-h-56 w-full min-w-0 overflow-y-auto border-b border-[#dde3e6] bg-white lg:h-full lg:max-h-none lg:border-b-0 lg:border-r">
                 {conversations.map((conversation) => {
                   const isSelected = conversation.id === selectedConversationId;
                   const aiEnabled = isConversationAiEnabled(conversation);
@@ -1698,7 +1698,7 @@ useEffect(() => {
                       type="button"
                       key={conversation.id}
                       onClick={() => setSelectedConversationId(conversation.id)}
-                      className={`w-full border-b border-[#edf0f1] px-4 py-4 text-left transition hover:bg-[#f7f9fa] ${
+                      className={`w-full min-w-0 border-b border-[#edf0f1] px-4 py-4 text-left transition hover:bg-[#f7f9fa] ${
                         isSelected ? "bg-[#f9eef0]" : "bg-white"
                       }`}
                     >
@@ -1714,7 +1714,7 @@ useEffect(() => {
                           </p>
                         </div>
 
-                        <div className="shrink-0 text-right">
+                        <div className="max-w-[42%] shrink-0 text-right">
                           <p className="text-[11px] text-[#8a969a]">
                             {formatDateTime(
                               conversation.last_message_at ||
@@ -1753,20 +1753,20 @@ useEffect(() => {
                 })}
               </aside>
 
-              <section className="flex h-full min-h-0 flex-col bg-[#f7f9fa]">
+              <section className="flex min-h-0 min-w-0 flex-col bg-[#f7f9fa] lg:h-full">
                 {!selectedConversation ? (
                   <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-[#68777c]">
                     Selecciona una conversación para ver el historial.
                   </div>
                 ) : (
                   <>
-                    <div className="shrink-0 border-b border-[#dde3e6] bg-white p-5">
-                      <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
-                        <div>
+                    <div className="shrink-0 border-b border-[#dde3e6] bg-white p-4 sm:p-5">
+                      <div className="flex min-w-0 flex-col justify-between gap-4 sm:flex-row sm:items-start">
+                        <div className="min-w-0">
                           <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
                             {getConversationStatusLabel(selectedConversation)}
                           </p>
-                          <h4 className="mt-2 text-2xl font-light">
+                          <h4 className="mt-2 break-words text-2xl font-light">
                             {selectedConversation.client_name ||
                               selectedConversation.client_phone}
                           </h4>
@@ -1791,7 +1791,7 @@ useEffect(() => {
                               !isConversationAiEnabled(selectedConversation)
                             )
                           }
-                          className={`rounded-full px-5 py-2 text-sm text-white transition hover:opacity-90 ${
+                          className={`w-full shrink-0 whitespace-nowrap rounded-full px-5 py-2 text-sm text-white transition hover:opacity-90 disabled:opacity-60 sm:w-auto ${
                             isConversationAiEnabled(selectedConversation)
                               ? "bg-green-600"
                               : "bg-red-600"
@@ -1808,17 +1808,19 @@ useEffect(() => {
                         </button>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-                        <InputField
-                          label="Responsable"
-                          value={assignedTo}
-                          onChange={setAssignedTo}
-                          placeholder="Nombre de asesora o responsable"
-                        />
+                      <div className="mt-4 flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+                        <div className="min-w-0 flex-1">
+                          <InputField
+                            label="Responsable"
+                            value={assignedTo}
+                            onChange={setAssignedTo}
+                            placeholder="Nombre de asesora o responsable"
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={() => saveAssignedTo(selectedConversation)}
-                          className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                          className="w-full shrink-0 whitespace-nowrap rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:w-auto"
                         >
                           Guardar responsable
                         </button>
@@ -1827,7 +1829,7 @@ useEffect(() => {
 
                     <div
                       ref={conversationScrollRef}
-                      className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5"
+                      className="h-[420px] max-h-[60vh] min-h-0 space-y-3 overflow-y-auto p-4 sm:p-5 lg:h-auto lg:max-h-none lg:flex-1"
                     >
                       {loadingConversationMessages ? (
                         <p className="text-sm text-[#68777c]">
@@ -1847,13 +1849,13 @@ useEffect(() => {
                               }`}
                             >
                               <div
-                                className={`max-w-[78%] rounded-[1.25rem] px-4 py-3 text-sm leading-6 shadow-sm ${
+                                className={`min-w-0 max-w-[88%] rounded-[1.25rem] px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-[78%] ${
                                   isIncoming
                                     ? "bg-white text-[#263238]"
                                     : "bg-[#bd7b83] text-white"
                                 }`}
                               >
-                                <p className="whitespace-pre-wrap">{item.body}</p>
+                                <p className="whitespace-pre-wrap break-words">{item.body}</p>
                                 <p
                                   className={`mt-2 text-[11px] ${
                                     isIncoming
@@ -1871,18 +1873,18 @@ useEffect(() => {
                       )}
                     </div>
 
-                    <div className="shrink-0 border-t border-[#dde3e6] bg-white p-5">
+                    <div className="shrink-0 border-t border-[#dde3e6] bg-white p-4 sm:p-5">
                       <div className="mb-4">
                         <p className="mb-2 text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
                           Respuestas rápidas
                         </p>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex max-w-full flex-wrap gap-2">
                           {quickReplies.map((reply) => (
                             <button
                               type="button"
                               key={reply.label}
                               onClick={() => setManualReply(reply.text)}
-                              className="rounded-full border border-[#dde3e6] px-4 py-2 text-xs text-[#68777c] transition hover:border-[#bd7b83] hover:text-[#bd7b83]"
+                              className="max-w-full rounded-full border border-[#dde3e6] px-4 py-2 text-xs text-[#68777c] transition hover:border-[#bd7b83] hover:text-[#bd7b83]"
                             >
                               {reply.label}
                             </button>
@@ -1890,18 +1892,20 @@ useEffect(() => {
                         </div>
                       </div>
 
-                      <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-                        <TextAreaField
-                          label="Respuesta manual"
-                          value={manualReply}
-                          onChange={setManualReply}
-                          placeholder="Escribe una respuesta para la clienta..."
-                        />
+                      <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+                        <div className="min-w-0 flex-1">
+                          <TextAreaField
+                            label="Respuesta manual"
+                            value={manualReply}
+                            onChange={setManualReply}
+                            placeholder="Escribe una respuesta para la clienta..."
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={() => sendManualReply(selectedConversation)}
                           disabled={saving || !manualReply.trim()}
-                          className="rounded-full bg-[#bd7b83] px-6 py-4 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+                          className="w-full shrink-0 whitespace-nowrap rounded-full bg-[#bd7b83] px-6 py-4 text-sm text-white transition hover:opacity-90 disabled:opacity-60 sm:w-auto"
                         >
                           Enviar respuesta manual
                         </button>
