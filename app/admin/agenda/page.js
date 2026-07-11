@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
+const DESIGN_IMAGE_BUCKET = "appointment-designs";
+
 const agendaMenuItems = [
   { key: "nueva", label: "Nueva cita" },
   { key: "diaria", label: "Vista diaria" },
@@ -26,6 +28,8 @@ const emptyServiceLine = {
 };
 
 const emptyAppointmentExtraLine = {
+  extra_id: "",
+  staff_id: "",
   name: "",
   quantity: 1,
   unit_price: "",
@@ -432,6 +436,7 @@ export default function AgendaPage() {
   const [clients, setClients] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
+  const [extras, setExtras] = useState([]);
 
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
 const [savingQuickClient, setSavingQuickClient] = useState(false);
@@ -466,12 +471,14 @@ const [quickClientForm, setQuickClientForm] = useState({
     appointment_date: todayISO(),
     deposit_amount: "",
     deposit_payment_method: "",
+    design_image_url: "",
     notes: "",
     force_created: false,
   });
 
   const [serviceLines, setServiceLines] = useState([{ ...emptyServiceLine }]);
 const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
+const [designImageFile, setDesignImageFile] = useState(null);
 const [acrylicWarning, setAcrylicWarning] = useState(null);
 const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
 
@@ -506,6 +513,7 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
   clientsResult,
   staffResult,
   servicesResult,
+  extrasResult,
   schedulesResult,
   followupRulesResult,
   paymentsResult,
@@ -514,6 +522,12 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
         supabase.from("staff").select("*").eq("active", true).order("full_name"),
         supabase
           .from("services")
+          .select("*")
+          .eq("active", true)
+          .order("category", { ascending: true })
+          .order("name", { ascending: true }),
+        supabase
+          .from("service_extras")
           .select("*")
           .eq("active", true)
           .order("category", { ascending: true })
@@ -555,6 +569,12 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
       setServices(servicesResult.data || []);
     }
 
+    if (extrasResult.error) {
+      setMessage(`Error al cargar extras: ${extrasResult.error.message}`);
+    } else {
+      setExtras(extrasResult.data || []);
+    }
+
     if (schedulesResult.error) {
       setMessage(`Error al cargar horarios: ${schedulesResult.error.message}`);
     } else {
@@ -565,11 +585,50 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
     await loadRangeData(selectedDate);
 
     setLoadingData(false);
-    if (paymentsResult.error) {
+  if (paymentsResult.error) {
   setMessage(`Error al cargar pagos: ${paymentsResult.error.message}`);
 } else {
   setPayments(paymentsResult.data || []);
 }
+  };
+
+  const attachAppointmentExtras = async (appointmentsList) => {
+    const list = appointmentsList || [];
+
+    if (list.length === 0) return list;
+
+    const appointmentIds = list.map((appointment) => appointment.id).filter(Boolean);
+
+    if (appointmentIds.length === 0) return list;
+
+    const { data, error } = await supabase
+      .from("appointment_extra_items")
+      .select("*")
+      .in("appointment_id", appointmentIds)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      setMessage(`Error al cargar extras de citas: ${error.message}`);
+      return list.map((appointment) => ({
+        ...appointment,
+        appointment_extra_items: appointment.appointment_extra_items || [],
+      }));
+    }
+
+    const extrasByAppointment = {};
+
+    (data || []).forEach((item) => {
+      if (!extrasByAppointment[item.appointment_id]) {
+        extrasByAppointment[item.appointment_id] = [];
+      }
+
+      extrasByAppointment[item.appointment_id].push(item);
+    });
+
+    return list.map((appointment) => ({
+      ...appointment,
+      appointment_extra_items: extrasByAppointment[appointment.id] || [],
+    }));
   };
 
   const loadDateData = async (date) => {
@@ -620,7 +679,10 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
     if (appointmentsResult.error) {
       setMessage(`Error al cargar citas: ${appointmentsResult.error.message}`);
     } else {
-      setAppointments(appointmentsResult.data || []);
+      const appointmentsWithExtras = await attachAppointmentExtras(
+        appointmentsResult.data || []
+      );
+      setAppointments(appointmentsWithExtras);
     }
 
     if (blocksResult.error) {
@@ -688,7 +750,10 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
     ]);
 
     if (!appointmentsResult.error) {
-      setRangeAppointments(appointmentsResult.data || []);
+      const appointmentsWithExtras = await attachAppointmentExtras(
+        appointmentsResult.data || []
+      );
+      setRangeAppointments(appointmentsWithExtras);
     }
 
     if (!blocksResult.error) {
@@ -775,13 +840,92 @@ const saveQuickClient = async () => {
   resetQuickClientForm();
   setMessage("Cliente registrado y seleccionado correctamente ✨");
 };
-    const handleFormChange = (event) => {
+  const handleFormChange = (event) => {
     const { name, value, type, checked } = event.target;
 
     setForm((current) => ({
       ...current,
       [name]: type === "checkbox" ? checked : value,
     }));
+  };
+
+  const handleDesignImageFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+
+    if (!file) {
+      setDesignImageFile(null);
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setDesignImageFile(null);
+      setMessage("Selecciona una imagen válida para el diseño.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setDesignImageFile(null);
+      setMessage("La imagen del diseño debe pesar máximo 5 MB.");
+      event.target.value = "";
+      return;
+    }
+
+    setDesignImageFile(file);
+    setMessage("Imagen lista para subir al guardar la cita.");
+  };
+
+  const clearDesignImage = () => {
+    setDesignImageFile(null);
+    setForm((current) => ({
+      ...current,
+      design_image_url: "",
+    }));
+  };
+
+  const getDesignImageUploadMessage = (error) => {
+    const detail = String(error?.message || error || "");
+    const normalized = detail.toLowerCase();
+
+    if (
+      normalized.includes("bucket") ||
+      normalized.includes("row-level security") ||
+      normalized.includes("permission") ||
+      normalized.includes("not found")
+    ) {
+      return "No se pudo subir la imagen. Ejecuta el SQL de Agenda para crear el bucket appointment-designs y sus permisos.";
+    }
+
+    return `No se pudo subir la imagen del diseño: ${detail || "intenta nuevamente."}`;
+  };
+
+  const uploadDesignImageFile = async (appointmentId) => {
+    if (!designImageFile) return null;
+
+    const extension =
+      designImageFile.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
+      "jpg";
+    const filePath = `${appointmentId}/${Date.now()}.${extension}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(DESIGN_IMAGE_BUCKET)
+      .upload(filePath, designImageFile, {
+        cacheControl: "3600",
+        contentType: designImageFile.type,
+        upsert: true,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage
+      .from(DESIGN_IMAGE_BUCKET)
+      .getPublicUrl(filePath);
+
+    if (!data?.publicUrl) {
+      throw new Error("Supabase no devolvió una URL pública para la imagen.");
+    }
+
+    return data.publicUrl;
   };
 
   const getServiceMatches = (searchText) => {
@@ -983,6 +1127,19 @@ const handleAppointmentExtraLineChange = (index, field, value) => {
         [field]: value,
       };
 
+      if (field === "extra_id") {
+        const selectedExtra = extras.find((extra) => extra.id === value);
+
+        if (selectedExtra) {
+          updatedLine.name = selectedExtra.name || "";
+          updatedLine.unit_price = Number(selectedExtra.price || 0);
+
+          if (!updatedLine.quantity) {
+            updatedLine.quantity = 1;
+          }
+        }
+      }
+
       const quantity = Number(
         field === "quantity" ? value : updatedLine.quantity || 0
       );
@@ -990,7 +1147,7 @@ const handleAppointmentExtraLineChange = (index, field, value) => {
         field === "unit_price" ? value : updatedLine.unit_price || 0
       );
 
-      updatedLine.total_price = quantity * unitPrice;
+      updatedLine.total_price = Number((quantity * unitPrice).toFixed(2));
 
       return updatedLine;
     })
@@ -1155,11 +1312,14 @@ const validAppointmentExtras = useMemo(() => {
       appointment_date: selectedDate,
       deposit_amount: "",
       deposit_payment_method: "",
+      design_image_url: "",
       notes: "",
       force_created: false,
     });
 
     setServiceLines([{ ...emptyServiceLine }]);
+    setAppointmentExtraLines([]);
+    setDesignImageFile(null);
     setActiveSuggestion({});
     setClosedSuggestions({});
     setAvailabilitySuggestions([]);
@@ -1177,9 +1337,12 @@ const validAppointmentExtras = useMemo(() => {
       appointment_date: targetDate,
       deposit_amount: "",
       deposit_payment_method: "",
+      design_image_url: "",
       notes: "",
       force_created: false,
     });
+    setAppointmentExtraLines([]);
+    setDesignImageFile(null);
 
     setServiceLines(() => {
       const firstLine = { ...emptyServiceLine };
@@ -1225,6 +1388,7 @@ const getPaymentForAppointment = (appointmentId) => {
       appointment_date: appointment.appointment_date || selectedDate,
       deposit_amount: appointment.deposit_amount ?? "",
       deposit_payment_method: appointment.deposit_payment_method || "",
+      design_image_url: appointment.design_image_url || "",
       notes: appointment.notes || "",
       force_created: Boolean(appointment.force_created),
     });
@@ -1245,6 +1409,18 @@ const getPaymentForAppointment = (appointmentId) => {
     }));
 
     setServiceLines(lines.length > 0 ? lines : [{ ...emptyServiceLine }]);
+    setAppointmentExtraLines(
+      (appointment.appointment_extra_items || []).map((item) => ({
+        extra_id: item.extra_id || "",
+        staff_id: item.staff_id || "",
+        name: item.name || "",
+        quantity: Number(item.quantity || 1),
+        unit_price: Number(item.unit_price || 0),
+        total_price: Number(item.total_price || 0),
+        notes: item.notes || "",
+      }))
+    );
+    setDesignImageFile(null);
     setMessage("Cita cargada para edición ✨");
     setActiveSection("nueva");
   };
@@ -1826,12 +2002,14 @@ const handleSubmit = async () => {
       estimated_total: estimatedTotal,
       deposit_amount: Number(form.deposit_amount || 0),
       deposit_payment_method: form.deposit_payment_method || null,
+      design_image_url: form.design_image_url?.trim() || null,
       force_created: form.force_created,
       notes: form.notes.trim() || null,
     };
 
     let appointment = null;
     const wasEditing = Boolean(editingAppointmentId);
+    let designImageWarning = "";
 
     if (editingAppointmentId) {
       const { data: updatedAppointment, error: updateError } = await supabase
@@ -1924,6 +2102,8 @@ const handleSubmit = async () => {
 if (validAppointmentExtras.length > 0) {
   const extrasToInsert = validAppointmentExtras.map((line) => ({
     appointment_id: appointment.id,
+    extra_id: line.extra_id || null,
+    staff_id: line.staff_id || null,
     name: line.name.trim(),
     quantity: Number(line.quantity || 1),
     unit_price: Number(line.unit_price || 0),
@@ -1943,6 +2123,32 @@ if (validAppointmentExtras.length > 0) {
     return;
   }
 } 
+if (designImageFile) {
+  try {
+    const uploadedDesignImageUrl = await uploadDesignImageFile(appointment.id);
+
+    if (uploadedDesignImageUrl) {
+      const { data: updatedDesignAppointment, error: designImageUpdateError } =
+        await supabase
+          .from("appointments")
+          .update({
+            design_image_url: uploadedDesignImageUrl,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", appointment.id)
+          .select()
+          .single();
+
+      if (designImageUpdateError) throw designImageUpdateError;
+
+      appointment = updatedDesignAppointment || appointment;
+    }
+  } catch (error) {
+    console.error("No se pudo subir o guardar imagen de diseño", error);
+    designImageWarning = ` ${getDesignImageUploadMessage(error)}`;
+  }
+}
+
 await createAppointmentFollowups(appointment);
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
@@ -1950,13 +2156,16 @@ await createAppointmentFollowups(appointment);
 
     resetForm();
     setMessage(
-      wasEditing
-        ? "Cita actualizada correctamente ✨"
-        : "Cita registrada correctamente ✨"
+      `${
+        wasEditing
+          ? "Cita actualizada correctamente ✨"
+          : "Cita registrada correctamente ✨"
+      }${designImageWarning}`
     );
     setSaving(false);
     setActiveSection("diaria");
     setAppointmentExtraLines([]);
+    setDesignImageFile(null);
   };
 
   const appointmentsByStaff = useMemo(() => {
@@ -2073,8 +2282,11 @@ await createAppointmentFollowups(appointment);
           clients={clients}
           staff={staff}
           services={services}
+          extras={extras}
           form={form}
           serviceLines={serviceLines}
+          appointmentExtraLines={appointmentExtraLines}
+          designImageFile={designImageFile}
           message={message}
           editingAppointmentId={editingAppointmentId}
           activeSuggestion={activeSuggestion}
@@ -2092,6 +2304,11 @@ await createAppointmentFollowups(appointment);
           handleServiceSearchKeyDown={handleServiceSearchKeyDown}
           addServiceLine={addServiceLine}
           removeServiceLine={removeServiceLine}
+          addAppointmentExtraLine={addAppointmentExtraLine}
+          removeAppointmentExtraLine={removeAppointmentExtraLine}
+          handleAppointmentExtraLineChange={handleAppointmentExtraLineChange}
+          handleDesignImageFileChange={handleDesignImageFileChange}
+          clearDesignImage={clearDesignImage}
           setActiveSuggestion={setActiveSuggestion}
           handleSubmit={handleSubmit}
           findAvailableSpaces={findAvailableSpaces}
@@ -2112,10 +2329,6 @@ await createAppointmentFollowups(appointment);
           openNewAppointment={openNewAppointment}
           openAppointmentDetail={openAppointmentDetail}
           openEditAppointment={openEditAppointment}
-          appointmentExtraLines={appointmentExtraLines}
-addAppointmentExtraLine={addAppointmentExtraLine}
-removeAppointmentExtraLine={removeAppointmentExtraLine}
-handleAppointmentExtraLineChange={handleAppointmentExtraLineChange}
           getPaymentForAppointment={getPaymentForAppointment}
           activeSection={activeSection}
           setActiveSection={setActiveSection}
@@ -2188,8 +2401,11 @@ function NewAppointmentSection({
   clients,
   staff,
   services,
+  extras,
   form,
   serviceLines,
+  appointmentExtraLines,
+  designImageFile,
   message,
   editingAppointmentId,
   activeSuggestion,
@@ -2207,12 +2423,13 @@ function NewAppointmentSection({
   handleServiceSearchKeyDown,
   addServiceLine,
   removeServiceLine,
+  addAppointmentExtraLine,
+  removeAppointmentExtraLine,
+  handleAppointmentExtraLineChange,
+  handleDesignImageFileChange,
+  clearDesignImage,
   setActiveSuggestion,
   handleSubmit,
-  appointmentExtraLines,
-addAppointmentExtraLine,
-removeAppointmentExtraLine,
-handleAppointmentExtraLineChange,
   findAvailableSpaces,
   availabilityMessage,
   availabilitySuggestions,
@@ -2454,6 +2671,76 @@ const shouldShowNoClientFound =
             </div>
           )}
 
+          <div className="rounded-[1.5rem] bg-[#fff6fb] p-4">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+              <div>
+                <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                  Imagen de diseño
+                </p>
+                <p className="mt-1 text-sm text-[#68777c]">
+                  Agrega una foto o URL del diseño que quiere la clienta.
+                </p>
+              </div>
+
+              {(form.design_image_url || designImageFile) && (
+                <button
+                  type="button"
+                  onClick={clearDesignImage}
+                  className="rounded-full border border-[#bd7b83] px-4 py-2 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                >
+                  Quitar imagen
+                </button>
+              )}
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  URL de imagen
+                </label>
+                <input
+                  type="url"
+                  name="design_image_url"
+                  value={form.design_image_url}
+                  onChange={handleFormChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                  placeholder="https://..."
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-[#68777c]">
+                  Subir imagen
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleDesignImageFileChange}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 text-sm outline-none"
+                />
+                {designImageFile && (
+                  <p className="mt-2 text-xs text-[#68777c]">
+                    Lista para subir: {designImageFile.name}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {form.design_image_url ? (
+              <div className="mt-4 overflow-hidden rounded-2xl border border-[#dde3e6] bg-white">
+                <img
+                  src={form.design_image_url}
+                  alt="Diseño solicitado por la clienta"
+                  className="max-h-72 w-full object-contain"
+                />
+              </div>
+            ) : (
+              <p className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm text-[#68777c]">
+                Sin imagen de diseño.
+              </p>
+            )}
+          </div>
+
           <div className="rounded-[1.5rem] bg-[#f7f9fa] p-4">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
               <div>
@@ -2517,135 +2804,6 @@ const shouldShowNoClientFound =
                         </button>
                       )}
                     </div>
-
-                    {(appointmentExtraLines || []).length > 0 && (
-  <div className="mt-5 rounded-[1.5rem] bg-[#fff6fb] p-4">
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
-          Extras de la cita
-        </p>
-        <p className="mt-1 text-sm text-[#68777c]">
-          Agrega decoraciones, retiros, largo extra u otros cargos.
-        </p>
-      </div>
-    </div>
-
-    <div className="mt-4 space-y-4">
-      {(appointmentExtraLines || []).map((line, index) => (
-        <div
-          key={index}
-          className="rounded-2xl border border-[#dde3e6] bg-white p-4"
-        >
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="font-medium text-[#263238]">
-              Extra {index + 1}
-            </h3>
-
-            <button
-              type="button"
-              onClick={() => removeAppointmentExtraLine(index)}
-              className="text-sm text-[#bd7b83]"
-            >
-              Quitar
-            </button>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <div className="lg:col-span-2">
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Nombre del extra *
-              </label>
-              <input
-                value={line.name}
-                onChange={(event) =>
-                  handleAppointmentExtraLineChange(
-                    index,
-                    "name",
-                    event.target.value
-                  )
-                }
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                placeholder="Ej. Francés, retiro, largo extra, cristales..."
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Cantidad
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={line.quantity}
-                onChange={(event) =>
-                  handleAppointmentExtraLineChange(
-                    index,
-                    "quantity",
-                    event.target.value
-                  )
-                }
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Precio unitario
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={line.unit_price}
-                onChange={(event) =>
-                  handleAppointmentExtraLineChange(
-                    index,
-                    "unit_price",
-                    event.target.value
-                  )
-                }
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                placeholder="0"
-              />
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Total
-              </label>
-              <input
-                value={line.total_price}
-                readOnly
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#edf0f2] px-4 py-3 outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Notas
-              </label>
-              <input
-                value={line.notes}
-                onChange={(event) =>
-                  handleAppointmentExtraLineChange(
-                    index,
-                    "notes",
-                    event.target.value
-                  )
-                }
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                placeholder="Detalle opcional"
-              />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
 
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div className="relative">
@@ -2896,6 +3054,183 @@ const shouldShowNoClientFound =
               })}
             </div>
           </div>
+
+          {(appointmentExtraLines || []).length > 0 && (
+            <div className="rounded-[1.5rem] bg-[#fff6fb] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                    Extras de la cita
+                  </p>
+                  <p className="mt-1 text-sm text-[#68777c]">
+                    Selecciona decoraciones, retiros, largo extra u otros cargos.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {(appointmentExtraLines || []).map((line, index) => (
+                  <div
+                    key={index}
+                    className="rounded-2xl border border-[#dde3e6] bg-white p-4"
+                  >
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <h3 className="font-medium text-[#263238]">
+                        Extra {index + 1}
+                      </h3>
+
+                      <button
+                        type="button"
+                        onClick={() => removeAppointmentExtraLine(index)}
+                        className="text-sm text-[#bd7b83]"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                      <div className="lg:col-span-2">
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Seleccionar extra
+                        </label>
+                        <select
+                          value={line.extra_id}
+                          onChange={(event) =>
+                            handleAppointmentExtraLineChange(
+                              index,
+                              "extra_id",
+                              event.target.value
+                            )
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                        >
+                          <option value="">Extra personalizado</option>
+                          {(extras || []).map((extra) => (
+                            <option key={extra.id} value={extra.id}>
+                              {extra.name} · ${extra.price}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Cantidad
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={line.quantity}
+                          onChange={(event) =>
+                            handleAppointmentExtraLineChange(
+                              index,
+                              "quantity",
+                              event.target.value
+                            )
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Precio unitario
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={line.unit_price}
+                          onChange={(event) =>
+                            handleAppointmentExtraLineChange(
+                              index,
+                              "unit_price",
+                              event.target.value
+                            )
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                      <div className="lg:col-span-2">
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Nombre del extra *
+                        </label>
+                        <input
+                          value={line.name}
+                          onChange={(event) =>
+                            handleAppointmentExtraLineChange(
+                              index,
+                              "name",
+                              event.target.value
+                            )
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                          placeholder="Ej. Francés, retiro, largo extra, cristales..."
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Técnica / responsable
+                        </label>
+                        <select
+                          value={line.staff_id}
+                          onChange={(event) =>
+                            handleAppointmentExtraLineChange(
+                              index,
+                              "staff_id",
+                              event.target.value
+                            )
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                        >
+                          <option value="">Sin asignar</option>
+                          {staff.map((person) => (
+                            <option key={person.id} value={person.id}>
+                              {person.full_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Total
+                        </label>
+                        <input
+                          value={line.total_price}
+                          readOnly
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-[#edf0f2] px-4 py-3 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <label className="mb-2 block text-sm text-[#68777c]">
+                        Notas
+                      </label>
+                      <input
+                        value={line.notes}
+                        onChange={(event) =>
+                          handleAppointmentExtraLineChange(
+                            index,
+                            "notes",
+                            event.target.value
+                          )
+                        }
+                        className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                        placeholder="Detalle opcional"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
@@ -3749,6 +4084,8 @@ function normalizeRole(role) {
 
 function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const services = appointment.appointment_services || [];
+  const appointmentExtras = appointment.appointment_extra_items || [];
+  const designImageUrl = appointment.design_image_url || "";
   const clientName = appointment.clients?.full_name || "";
  const clientFirstName = getClientFirstName(clientName);
   const clientPhone = appointment.clients?.phone || "";
@@ -3927,6 +4264,19 @@ const deleteAppointment = async () => {
     }
   }
 
+  const { error: extrasError } = await supabase
+    .from("appointment_extra_items")
+    .delete()
+    .eq("appointment_id", appointment.id);
+
+  if (extrasError) {
+    setDeleteMessage(
+      `No se pudieron borrar los extras de la cita: ${extrasError.message}`
+    );
+    setDeletingAppointment(false);
+    return;
+  }
+
   const { error: servicesError } = await supabase
     .from("appointment_services")
     .delete()
@@ -4017,6 +4367,71 @@ const deleteAppointment = async () => {
             <p className="mt-3 text-sm text-[#68777c]">
               No hay una cita anterior registrada para esta clienta.
             </p>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Diseño solicitado
+          </p>
+          {designImageUrl ? (
+            <div className="mt-3 overflow-hidden rounded-2xl border border-[#dde3e6] bg-white">
+              <img
+                src={designImageUrl}
+                alt="Diseño solicitado por la clienta"
+                className="max-h-96 w-full object-contain"
+              />
+              <div className="border-t border-[#edf0f1] p-3">
+                <a
+                  href={designImageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-[#bd7b83]"
+                >
+                  Abrir imagen en tamaño completo
+                </a>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-[#68777c]">Sin imagen de diseño.</p>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-[#fff6fb] p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Extras / decoraciones
+          </p>
+          {appointmentExtras.length === 0 ? (
+            <p className="mt-3 text-sm text-[#68777c]">
+              Sin extras registrados.
+            </p>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {appointmentExtras.map((extra) => (
+                <div
+                  key={extra.id || `${extra.name}-${extra.total_price}`}
+                  className="rounded-2xl border border-[#dde3e6] bg-white p-3"
+                >
+                  <div className="flex justify-between gap-3 text-sm">
+                    <div>
+                      <p className="font-medium text-[#263238]">
+                        {extra.name || "Extra"}
+                      </p>
+                      <p className="text-[#68777c]">
+                        Cantidad: {extra.quantity || 1} · Precio:{" "}
+                        {formatMoney(extra.unit_price || 0)}
+                      </p>
+                      {extra.notes && (
+                        <p className="mt-1 text-[#68777c]">{extra.notes}</p>
+                      )}
+                    </div>
+                    <p className="font-medium text-[#263238]">
+                      {formatMoney(extra.total_price || 0)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
