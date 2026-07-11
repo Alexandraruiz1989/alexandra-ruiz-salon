@@ -36,6 +36,14 @@ function isOpenAIConfigured() {
   return Boolean(aiEnabled && openaiApiKey);
 }
 
+function isAutomaticBotDisabled(conversation) {
+  return Boolean(
+    conversation &&
+      (conversation.bot_enabled === false ||
+        conversation.handoff_to_human === true)
+  );
+}
+
 function getOpenAIClient() {
   if (!isOpenAIConfigured()) return null;
 
@@ -2917,13 +2925,57 @@ export async function POST(request) {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const conversation = await getConversation(supabase, clientPhoneFromTest);
+    const existingContext = conversation?.conversation_context || {};
+
+    if (isAutomaticBotDisabled(conversation)) {
+      const savedConversation = await saveConversation(
+        supabase,
+        clientPhoneFromTest,
+        clientNameFromTest,
+        {
+          bot_enabled: false,
+          handoff_to_human: true,
+          status: "human",
+          last_message: incomingMessage,
+          intent: "human_handoff",
+          current_step: "humano",
+          booking_step: "humano",
+          conversation_context: existingContext,
+          unread_count: Number(conversation.unread_count || 0) + 1,
+        }
+      );
+
+      await saveIncomingBotMessage(
+        supabase,
+        savedConversation.id,
+        clientPhoneFromTest,
+        incomingMessage,
+        {
+          ...body,
+          bot_disabled: true,
+          automatic_reply_skipped: true,
+        }
+      );
+
+      return NextResponse.json({
+        ok: true,
+        reply: null,
+        message: null,
+        bot_disabled: true,
+        botMuted: true,
+        intent: "human_handoff",
+        matchedSource: "bot_disabled",
+        step: "humano",
+      });
+    }
+
     const recentMessages = await getRecentBotMessages(
       supabase,
       conversation?.id,
       clientPhoneFromTest
     );
     const context = {
-      ...(conversation?.conversation_context || {}),
+      ...existingContext,
       recent_messages: recentMessages,
     };
 
@@ -2992,37 +3044,6 @@ export async function POST(request) {
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
     const isServiceQuestion = isServiceQuestionMessage(incomingMessage);
-
-    if (
-      conversation &&
-      (conversation.bot_enabled === false || conversation.handoff_to_human === true)
-    ) {
-      const savedConversation = await saveConversation(
-        supabase,
-        clientPhoneFromTest,
-        clientNameFromTest,
-        {
-          status: "human",
-          last_message: incomingMessage,
-          intent: "human_handoff",
-          current_step: "humano",
-          booking_step: "humano",
-          conversation_context: context,
-          unread_count: Number(conversation.unread_count || 0) + 1,
-        }
-      );
-
-      await saveIncomingBotMessage(supabase, savedConversation.id, clientPhoneFromTest, incomingMessage, body);
-
-      return NextResponse.json({
-        ok: true,
-        reply: "",
-        botMuted: true,
-        intent: "human_handoff",
-        matchedSource: "bot_disabled",
-        step: "humano",
-      });
-    }
 
     const ai = await interpretWithAI(incomingMessage, context);
 

@@ -77,7 +77,7 @@ function formatDateTime(value) {
   }
 }
 
-function isConversationAiEnabled(conversation) {
+function isConversationBotEnabled(conversation) {
   const status = String(conversation?.status || "").toLowerCase();
   return (
     conversation?.bot_enabled !== false &&
@@ -88,7 +88,7 @@ function isConversationAiEnabled(conversation) {
 }
 
 function getConversationStatusLabel(conversation) {
-  if (!isConversationAiEnabled(conversation)) return "Bot apagado";
+  if (!isConversationBotEnabled(conversation)) return "Bot apagado";
   if (conversation?.status === "pendiente") return "pendiente";
   if (conversation?.status === "solicitud_cita") return "solicitud de cita";
   if (conversation?.status === "bot" || conversation?.status === "abierta") {
@@ -437,7 +437,7 @@ useEffect(() => {
 
     if (error) {
       setMessage(
-        getBotConversationErrorMessage("No se pudo actualizar IA", error)
+        getBotConversationErrorMessage("No se pudo actualizar Bot", error)
       );
       setSaving(false);
       return;
@@ -445,8 +445,8 @@ useEffect(() => {
 
     setMessage(
       enabled
-        ? "IA activada para esta conversación."
-        : "IA apagada para esta conversación."
+        ? "Bot automático activado para esta conversación."
+        : "Bot automático apagado para esta conversación."
     );
     setSaving(false);
     await loadData();
@@ -530,7 +530,7 @@ useEffect(() => {
     if (conversationError) {
       setMessage(
         getBotConversationErrorMessage(
-          "Se guardó el mensaje, pero no se pudo apagar IA",
+          "Se guardó el mensaje, pero no se pudo apagar el bot",
           conversationError
         )
       );
@@ -541,7 +541,7 @@ useEffect(() => {
 
     setManualReply("");
     setMessage(
-      "Respuesta manual guardada. La IA quedó apagada para esta conversación."
+      "Respuesta manual guardada. El bot automático quedó apagado para esta conversación."
     );
     setSaving(false);
     await loadData();
@@ -921,7 +921,7 @@ useEffect(() => {
 
       if (data.botMuted) {
         setMessage(
-          "La IA está apagada para esta conversación. El mensaje quedó en la bandeja para seguimiento manual."
+          "El bot está apagado para esta conversación. El mensaje quedó en la bandeja para seguimiento manual."
         );
         setTestLoading(false);
         await loadData();
@@ -1677,7 +1677,7 @@ useEffect(() => {
           <SectionHeader
             eyebrow="Conversaciones"
             title="Gestor de conversaciones"
-            description="Bandeja interna para revisar chats, responder manualmente y prender o apagar la IA por conversación."
+            description="Bandeja interna para revisar chats, responder manualmente y prender o apagar el bot automático por conversación."
             action={
               <button
                 type="button"
@@ -1696,7 +1696,7 @@ useEffect(() => {
               <aside className="max-h-56 w-full min-w-0 overflow-y-auto border-b border-[#dde3e6] bg-white lg:h-full lg:max-h-none lg:border-b-0 lg:border-r">
                 {conversations.map((conversation) => {
                   const isSelected = conversation.id === selectedConversationId;
-                  const aiEnabled = isConversationAiEnabled(conversation);
+                  const botEnabled = isConversationBotEnabled(conversation);
                   const unreadCount = Number(conversation.unread_count || 0);
 
                   return (
@@ -1743,12 +1743,12 @@ useEffect(() => {
                       <div className="mt-3 flex flex-wrap gap-2">
                         <span
                           className={`rounded-full px-3 py-1 text-[11px] ${
-                            aiEnabled
+                            botEnabled
                               ? "bg-green-50 text-green-700"
                               : "bg-red-50 text-red-700"
                           }`}
                         >
-                          {aiEnabled ? "IA ON · Bot activo" : "IA OFF · Bot apagado"}
+                          {botEnabled ? "Bot ON" : "Bot OFF"}
                         </span>
                         <span className="rounded-full bg-[#eef1f3] px-3 py-1 text-[11px] text-[#68777c]">
                           {getConversationStatusLabel(conversation)}
@@ -1794,25 +1794,31 @@ useEffect(() => {
                           onClick={() =>
                             updateConversationControl(
                               selectedConversation,
-                              !isConversationAiEnabled(selectedConversation)
+                              !isConversationBotEnabled(selectedConversation)
                             )
                           }
                           className={`w-full shrink-0 whitespace-nowrap rounded-full px-5 py-2 text-sm text-white transition hover:opacity-90 disabled:opacity-60 sm:w-auto ${
-                            isConversationAiEnabled(selectedConversation)
+                            isConversationBotEnabled(selectedConversation)
                               ? "bg-green-600"
                               : "bg-red-600"
                           }`}
                           title={
-                            isConversationAiEnabled(selectedConversation)
-                              ? "Apagar IA para esta conversación"
-                              : "Activar IA para esta conversación"
+                            isConversationBotEnabled(selectedConversation)
+                              ? "Apagar bot automático para esta conversación"
+                              : "Activar bot automático para esta conversación"
                           }
                         >
-                          {isConversationAiEnabled(selectedConversation)
-                            ? "IA ON · Bot activo"
-                            : "IA OFF · Bot apagado"}
+                          {isConversationBotEnabled(selectedConversation)
+                            ? "Bot ON"
+                            : "Bot OFF"}
                         </button>
                       </div>
+
+                      {!isConversationBotEnabled(selectedConversation) && (
+                        <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                          Bot apagado para esta conversación. Las respuestas automáticas están detenidas hasta que lo actives nuevamente.
+                        </div>
+                      )}
 
                       <div className="mt-4 flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
                         <div className="min-w-0 flex-1">
@@ -1918,7 +1924,7 @@ useEffect(() => {
                       </div>
 
                       <p className="mt-3 text-xs text-[#8a969a]">
-                        Al enviar una respuesta manual, la IA se apaga para esta conversación y queda en seguimiento humano. Puedes reactivarla con “Activar IA”.
+                        Al enviar una respuesta manual, el bot automático se apaga para esta conversación y queda en seguimiento humano. Puedes reactivarlo con “Bot ON”.
                       </p>
                     </div>
                   </>
