@@ -1141,10 +1141,9 @@ const saveQuickClient = async () => {
   const isStaffAllowedForService = (staffId, serviceId) => {
     if (!staffId || !serviceId) return true;
 
-    const staffRows = getStaffServiceRowsForStaff(staffId);
     const serviceRows = getStaffServiceRowsForService(serviceId);
 
-    if (staffRows.length === 0 && serviceRows.length === 0) return true;
+    if (serviceRows.length === 0) return true;
 
     return staffServices.some(
       (item) =>
@@ -1175,7 +1174,11 @@ const saveQuickClient = async () => {
 
     if (linkedServiceIds.length === 0) return services;
 
-    return services.filter((service) => linkedServiceIds.includes(service.id));
+    return services.filter(
+      (service) =>
+        linkedServiceIds.includes(service.id) ||
+        getStaffServiceRowsForService(service.id).length === 0
+    );
   };
 
   const getServiceMatches = (searchText, staffId = "") => {
@@ -1479,11 +1482,9 @@ const validAppointmentExtras = useMemo(() => {
 
       return {
         hasConflict: true,
-        message: `${staffName} no tiene ligado el servicio ${serviceName}. ${
-          canForceAgenda
-            ? "Marca “Forzar cita” si deseas guardarlo de todos modos."
-            : "Pide a admin que ligue ese servicio a la técnica en /admin/tecnicas."
-        }`,
+        message: canForceAgenda
+          ? `${staffName} no tiene asignado el servicio ${serviceName}. Revisa Servicios por técnica o marca “Forzar cita” si deseas guardarlo de todos modos.`
+          : "Esta técnica no tiene asignado este servicio. Revisa Servicios por técnica o selecciona otra técnica.",
       };
     }
 
@@ -3051,6 +3052,8 @@ if (adminNotificationResult.error) {
           handleFormChange={handleFormChange}
           openQuickClientModal={openQuickClientModal}
           getServiceMatches={getServiceMatches}
+          getAllowedStaffForService={getAllowedStaffForService}
+          isStaffAllowedForService={isStaffAllowedForService}
           applySelectedService={applySelectedService}
           handleServiceLineChange={handleServiceLineChange}
           handleServiceSearchKeyDown={handleServiceSearchKeyDown}
@@ -3203,6 +3206,8 @@ function NewAppointmentSection({
   handleFormChange,
   openQuickClientModal,
   getServiceMatches,
+  getAllowedStaffForService,
+  isStaffAllowedForService,
   applySelectedService,
   handleServiceLineChange,
   handleServiceSearchKeyDown,
@@ -3720,9 +3725,9 @@ const shouldShowNoClientFound =
                             line.service_id
                           ) && (
                             <p className="mt-2 rounded-xl bg-yellow-50 p-3 text-xs leading-5 text-yellow-800">
-                              Esta técnica no tiene ligado este servicio. Solo
-                              admin/encargada/caja pueden guardarlo marcando
-                              “Forzar cita”.
+                              Esta técnica no tiene asignado este servicio.
+                              Revisa Servicios por técnica o selecciona otra
+                              técnica.
                             </p>
                           )}
                       </div>

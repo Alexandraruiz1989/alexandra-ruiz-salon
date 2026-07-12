@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
@@ -350,6 +350,25 @@ function SectionHeader({ eyebrow, title, description, action }) {
   );
 }
 
+function CategoryCheckbox({ checked, indeterminate, onChange }) {
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.indeterminate = Boolean(indeterminate);
+    }
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={inputRef}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+    />
+  );
+}
+
 export default function TecnicasPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -382,6 +401,7 @@ export default function TecnicasPage() {
 
   const [staffSearch, setStaffSearch] = useState("");
   const [selectedStaffForServices, setSelectedStaffForServices] = useState("");
+  const [serviceSearch, setServiceSearch] = useState("");
   const [selectedServiceForResources, setSelectedServiceForResources] =
     useState("");
   const [blockDateFilter, setBlockDateFilter] = useState(
@@ -714,7 +734,17 @@ export default function TecnicasPage() {
   };
 
   const servicesByCategory = useMemo(() => {
-    return services.reduce((result, service) => {
+    const term = serviceSearch.toLowerCase().trim();
+
+    return services
+      .filter((service) => {
+        if (!term) return true;
+
+        return `${service.category || ""} ${service.name || ""}`
+          .toLowerCase()
+          .includes(term);
+      })
+      .reduce((result, service) => {
       const category = service.category || "Servicios";
 
       if (!result[category]) result[category] = [];
@@ -722,13 +752,57 @@ export default function TecnicasPage() {
 
       return result;
     }, {});
-  }, [services]);
+  }, [services, serviceSearch]);
 
   const selectedStaffServiceIds = useMemo(() => {
     return staffServices
       .filter((item) => item.staff_id === selectedStaffForServices)
       .map((item) => item.service_id);
   }, [staffServices, selectedStaffForServices]);
+
+  const selectedStaffServiceCount = selectedStaffServiceIds.length;
+
+  const areAllCategoryServicesSelected = (categoryServices = []) => {
+    if (categoryServices.length === 0) return false;
+
+    return categoryServices.every((service) =>
+      selectedStaffServiceIds.includes(service.id)
+    );
+  };
+
+  const areSomeCategoryServicesSelected = (categoryServices = []) => {
+    return categoryServices.some((service) =>
+      selectedStaffServiceIds.includes(service.id)
+    );
+  };
+
+  const toggleCategoryForSelectedStaff = (categoryServices = []) => {
+    if (!selectedStaffForServices) {
+      setServiceMessage("Selecciona una técnica antes de marcar servicios.");
+      return;
+    }
+
+    const categoryServiceIds = categoryServices.map((service) => service.id);
+    const shouldSelectAll = !areAllCategoryServicesSelected(categoryServices);
+
+    setStaffServices((current) => {
+      const withoutCategory = current.filter(
+        (item) =>
+          item.staff_id !== selectedStaffForServices ||
+          !categoryServiceIds.includes(item.service_id)
+      );
+
+      if (!shouldSelectAll) return withoutCategory;
+
+      const rowsToAdd = categoryServiceIds.map((serviceId) => ({
+        staff_id: selectedStaffForServices,
+        service_id: serviceId,
+        active: true,
+      }));
+
+      return [...withoutCategory, ...rowsToAdd];
+    });
+  };
 
   const toggleServiceForSelectedStaff = (serviceId) => {
     if (!selectedStaffForServices) {
@@ -2347,12 +2421,26 @@ export default function TecnicasPage() {
               </select>
             </div>
 
-            <div className="rounded-2xl bg-[#f7f9fa] p-4 text-sm leading-6 text-[#68777c]">
-              Si una técnica no tiene servicios ligados, Agenda seguirá
-              mostrando todos hasta que configures su lista. Cuando ya tenga
-              servicios marcados, solo podrá agendarse con esos servicios, salvo
-              que admin/encargada/caja use “Forzar cita”.
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Buscar servicio
+              </label>
+              <input
+                value={serviceSearch}
+                onChange={(event) => setServiceSearch(event.target.value)}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                placeholder="Buscar por nombre o categoría..."
+              />
             </div>
+          </div>
+
+          <div className="mb-6 rounded-2xl bg-[#f7f9fa] p-4 text-sm leading-6 text-[#68777c]">
+            <span className="font-medium text-[#263238]">
+              {selectedStaffServiceCount} servicios seleccionados.
+            </span>{" "}
+            Si una técnica no tiene servicios ligados, Agenda seguirá mostrando
+            todos hasta que configures su lista. Cuando ya tenga servicios
+            marcados, Agenda prioriza esa lista y valida al guardar.
           </div>
 
           <SectionToast message={serviceMessage} />
@@ -2373,9 +2461,37 @@ export default function TecnicasPage() {
                     key={category}
                     className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
                   >
-                    <h3 className="text-lg font-light text-[#263238]">
-                      {category}
-                    </h3>
+                    <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+                      <div>
+                        <h3 className="text-lg font-light text-[#263238]">
+                          {category}
+                        </h3>
+                        <p className="mt-1 text-xs text-[#68777c]">
+                          {
+                            categoryServices.filter((service) =>
+                              selectedStaffServiceIds.includes(service.id)
+                            ).length
+                          }{" "}
+                          de {categoryServices.length} seleccionados
+                        </p>
+                      </div>
+
+                      <label className="flex items-center gap-2 rounded-full bg-[#f7eeee] px-4 py-2 text-sm text-[#8a5f63]">
+                        <CategoryCheckbox
+                          checked={areAllCategoryServicesSelected(
+                            categoryServices
+                          )}
+                          indeterminate={
+                            areSomeCategoryServicesSelected(categoryServices) &&
+                            !areAllCategoryServicesSelected(categoryServices)
+                          }
+                          onChange={() =>
+                            toggleCategoryForSelectedStaff(categoryServices)
+                          }
+                        />
+                        Seleccionar todos los servicios de esta categoría
+                      </label>
+                    </div>
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       {categoryServices.map((service) => (
