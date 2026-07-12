@@ -524,6 +524,41 @@ async function triggerPushForNotificationIds(notificationIds = []) {
   }
 }
 
+async function triggerAdminAppointmentNotification(payload = {}) {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (!token) {
+    return { error: { message: "Tu sesión expiró. Vuelve a iniciar sesión." } };
+  }
+
+  try {
+    const response = await fetch("/api/push/admin-appointment", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return {
+        error: {
+          message:
+            result.error ||
+            "No se pudo notificar al admin sobre el cambio de cita.",
+        },
+      };
+    }
+
+    return { error: null, result };
+  } catch (error) {
+    return { error };
+  }
+}
+
 export default function AgendaPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -537,6 +572,11 @@ export default function AgendaPage() {
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
   const [extras, setExtras] = useState([]);
+  const [staffServices, setStaffServices] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [serviceResources, setServiceResources] = useState([]);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [currentRole, setCurrentRole] = useState("tecnica");
 
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
 const [savingQuickClient, setSavingQuickClient] = useState(false);
@@ -595,6 +635,7 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
         return;
       }
 
+      await loadCurrentAccessProfile(data.session.user);
       setLoadingSession(false);
       await loadInitialData();
     };
@@ -609,6 +650,33 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
     }
   }, [selectedDate, loadingSession]);
 
+  const loadCurrentAccessProfile = async (user) => {
+    if (!user) return;
+
+    const { data: profileById } = await supabase
+      .from("user_profiles")
+      .select("id, auth_user_id, email, full_name, role, active, staff_id")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+
+    let profile = profileById || null;
+
+    if (!profile && user.email) {
+      const { data: profileByEmail } = await supabase
+        .from("user_profiles")
+        .select("id, auth_user_id, email, full_name, role, active, staff_id")
+        .ilike("email", user.email)
+        .maybeSingle();
+
+      profile = profileByEmail || null;
+    }
+
+    if (profile) {
+      setCurrentProfile(profile);
+      setCurrentRole(profile.role || "tecnica");
+    }
+  };
+
   const loadInitialData = async () => {
     setLoadingData(true);
     setMessage("");
@@ -621,6 +689,9 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
   schedulesResult,
   followupRulesResult,
   paymentsResult,
+  staffServicesResult,
+  resourcesResult,
+  serviceResourcesResult,
 ] = await Promise.all([
         supabase.from("clients").select("*").order("full_name"),
         supabase.from("staff").select("*").eq("active", true).order("full_name"),
@@ -646,6 +717,9 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
   .from("payments")
   .select("id, appointment_id, total_amount, payment_method, payment_date")
   .not("appointment_id", "is", null),
+  supabase.from("staff_services").select("*").eq("active", true),
+  supabase.from("resources").select("*").eq("active", true).order("name"),
+  supabase.from("service_resources").select("*").eq("active", true),
       ]);
 
     if (clientsResult.error) {
@@ -683,6 +757,33 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
       setMessage(`Error al cargar horarios: ${schedulesResult.error.message}`);
     } else {
       setStaffSchedules(schedulesResult.data || []);
+    }
+
+    if (staffServicesResult.error) {
+      console.warn(
+        "No se pudieron cargar servicios por técnica",
+        staffServicesResult.error.message
+      );
+      setStaffServices([]);
+    } else {
+      setStaffServices(staffServicesResult.data || []);
+    }
+
+    if (resourcesResult.error) {
+      console.warn("No se pudieron cargar recursos", resourcesResult.error.message);
+      setResources([]);
+    } else {
+      setResources(resourcesResult.data || []);
+    }
+
+    if (serviceResourcesResult.error) {
+      console.warn(
+        "No se pudieron cargar recursos por servicio",
+        serviceResourcesResult.error.message
+      );
+      setServiceResources([]);
+    } else {
+      setServiceResources(serviceResourcesResult.data || []);
     }
 
     await loadDateData(selectedDate);
@@ -1026,12 +1127,63 @@ const saveQuickClient = async () => {
     return data.publicUrl;
   };
 
-  const getServiceMatches = (searchText) => {
+  const normalizedCurrentRole = normalizeRole(currentRole);
+  const canForceAgenda = ["admin", "encargada", "caja"].includes(
+    normalizedCurrentRole
+  );
+
+  const getStaffServiceRowsForStaff = (staffId) =>
+    staffServices.filter((item) => item.staff_id === staffId && item.active !== false);
+
+  const getStaffServiceRowsForService = (serviceId) =>
+    staffServices.filter((item) => item.service_id === serviceId && item.active !== false);
+
+  const isStaffAllowedForService = (staffId, serviceId) => {
+    if (!staffId || !serviceId) return true;
+
+    const staffRows = getStaffServiceRowsForStaff(staffId);
+    const serviceRows = getStaffServiceRowsForService(serviceId);
+
+    if (staffRows.length === 0 && serviceRows.length === 0) return true;
+
+    return staffServices.some(
+      (item) =>
+        item.staff_id === staffId &&
+        item.service_id === serviceId &&
+        item.active !== false
+    );
+  };
+
+  const getAllowedStaffForService = (serviceId) => {
+    if (!serviceId) return staff;
+
+    const linkedStaffIds = getStaffServiceRowsForService(serviceId).map(
+      (item) => item.staff_id
+    );
+
+    if (linkedStaffIds.length === 0) return staff;
+
+    return staff.filter((person) => linkedStaffIds.includes(person.id));
+  };
+
+  const getAllowedServicesForStaff = (staffId) => {
+    if (!staffId) return services;
+
+    const linkedServiceIds = getStaffServiceRowsForStaff(staffId).map(
+      (item) => item.service_id
+    );
+
+    if (linkedServiceIds.length === 0) return services;
+
+    return services.filter((service) => linkedServiceIds.includes(service.id));
+  };
+
+  const getServiceMatches = (searchText, staffId = "") => {
     const term = searchText.toLowerCase().trim();
 
     if (term.length < 2) return [];
 
-    return services
+    return getAllowedServicesForStaff(staffId)
       .filter((service) => {
         const searchable = `${service.category} ${service.name}`.toLowerCase();
         return searchable.includes(term);
@@ -1052,6 +1204,12 @@ const saveQuickClient = async () => {
         ...previousLine,
         service_id: selectedService.id,
         service_search: `${selectedService.category} - ${selectedService.name}`,
+        staff_id: isStaffAllowedForService(
+          previousLine.staff_id,
+          selectedService.id
+        )
+          ? previousLine.staff_id
+          : "",
         duration_minutes: Number(selectedService.duration_minutes || 0),
         cleanup_minutes: Number(selectedService.cleanup_minutes || 0),
         price: Number(selectedService.base_price || 0),
@@ -1084,6 +1242,30 @@ const saveQuickClient = async () => {
 
     if (field === "service_search") {
       line.service_id = "";
+      line.duration_minutes = 0;
+      line.cleanup_minutes = 0;
+      line.price = 0;
+      line.end_time = "";
+
+      setClosedSuggestions((current) => ({
+        ...current,
+        [index]: false,
+      }));
+
+      setActiveSuggestion((current) => ({
+        ...current,
+        [index]: 0,
+      }));
+    }
+
+    if (
+      field === "staff_id" &&
+      value &&
+      line.service_id &&
+      !isStaffAllowedForService(value, line.service_id)
+    ) {
+      line.service_id = "";
+      line.service_search = "";
       line.duration_minutes = 0;
       line.cleanup_minutes = 0;
       line.price = 0;
@@ -1264,6 +1446,49 @@ const validAppointmentExtras = useMemo(() => {
         line.service_id && line.staff_id && line.start_time && line.end_time
     );
   }, [serviceLines]);
+
+  const incompleteServiceLines = useMemo(() => {
+    return serviceLines
+      .map((line, index) => ({ ...line, index }))
+      .filter((line) => {
+        const hasAnyValue =
+          line.service_id ||
+          line.service_search?.trim() ||
+          line.staff_id ||
+          line.start_time ||
+          line.end_time ||
+          line.notes?.trim();
+
+        if (!hasAnyValue) return false;
+
+        return !(
+          line.service_id &&
+          line.staff_id &&
+          line.start_time &&
+          line.end_time
+        );
+      });
+  }, [serviceLines]);
+
+  const checkStaffServiceRestrictions = () => {
+    for (const line of validServiceLines) {
+      if (isStaffAllowedForService(line.staff_id, line.service_id)) continue;
+
+      const staffName = getStaffName(line.staff_id);
+      const serviceName = getServiceName(line.service_id);
+
+      return {
+        hasConflict: true,
+        message: `${staffName} no tiene ligado el servicio ${serviceName}. ${
+          canForceAgenda
+            ? "Marca “Forzar cita” si deseas guardarlo de todos modos."
+            : "Pide a admin que ligue ese servicio a la técnica en /admin/tecnicas."
+        }`,
+      };
+    }
+
+    return { hasConflict: false, message: "" };
+  };
 
  const estimatedTotal = useMemo(() => {
   const servicesTotal = serviceLines.reduce((sum, line) => {
@@ -1833,6 +2058,142 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
     return { hasConflict: false, message: "" };
   };
 
+  const checkResourceConflicts = async () => {
+    const activeServiceResources = serviceResources.filter(
+      (item) => item.active !== false
+    );
+
+    if (activeServiceResources.length === 0 || resources.length === 0) {
+      return { hasConflict: false, message: "" };
+    }
+
+    const serviceResourceRows = (serviceId) =>
+      activeServiceResources.filter((item) => item.service_id === serviceId);
+
+    const appointmentUsesResources = validServiceLines.some(
+      (line) => serviceResourceRows(line.service_id).length > 0
+    );
+
+    if (!appointmentUsesResources) {
+      return { hasConflict: false, message: "" };
+    }
+
+    const { data, error } = await supabase
+      .from("appointment_services")
+      .select(
+        `
+        id,
+        appointment_id,
+        service_id,
+        service_date,
+        start_time,
+        end_time,
+        appointments (
+          status
+        )
+      `
+      )
+      .eq("service_date", form.appointment_date);
+
+    if (error) {
+      return {
+        hasConflict: true,
+        message: `No se pudo validar mobiliario/recursos: ${error.message}`,
+      };
+    }
+
+    const existingServices = (data || []).filter((item) => {
+      const status = item.appointments?.status || "";
+
+      if (status === "cancelada" || status === "cancelado") return false;
+
+      if (editingAppointmentId && item.appointment_id === editingAppointmentId) {
+        return false;
+      }
+
+      return true;
+    });
+
+    for (const line of validServiceLines) {
+      const requiredResources = serviceResourceRows(line.service_id);
+
+      for (const requiredResource of requiredResources) {
+        const resource = resources.find(
+          (item) => item.id === requiredResource.resource_id
+        );
+
+        if (!resource || resource.active === false) continue;
+
+        const quantityAvailable = Number(resource.quantity || 0);
+        const resourceName = resource.name || "recurso";
+
+        const existingUsage = existingServices.reduce((sum, existing) => {
+          if (
+            !timesOverlap(
+              line.start_time,
+              line.end_time,
+              existing.start_time,
+              existing.end_time
+            )
+          ) {
+            return sum;
+          }
+
+          const existingRequirement = activeServiceResources.find(
+            (item) =>
+              item.service_id === existing.service_id &&
+              item.resource_id === requiredResource.resource_id &&
+              item.active !== false
+          );
+
+          return (
+            sum + Number(existingRequirement?.quantity_required || 0)
+          );
+        }, 0);
+
+        const currentAppointmentUsage = validServiceLines.reduce(
+          (sum, currentLine) => {
+            if (
+              !timesOverlap(
+                line.start_time,
+                line.end_time,
+                currentLine.start_time,
+                currentLine.end_time
+              )
+            ) {
+              return sum;
+            }
+
+            const currentRequirement = activeServiceResources.find(
+              (item) =>
+                item.service_id === currentLine.service_id &&
+                item.resource_id === requiredResource.resource_id &&
+                item.active !== false
+            );
+
+            return (
+              sum + Number(currentRequirement?.quantity_required || 0)
+            );
+          },
+          0
+        );
+
+        if (existingUsage + currentAppointmentUsage > quantityAvailable) {
+          return {
+            hasConflict: true,
+            message: `No hay suficientes ${resourceName} disponibles en ese horario. ${
+              canForceAgenda
+                ? "Marca “Forzar cita” si deseas guardarlo de todos modos."
+                : "Pide a admin revisar el horario o recursos."
+            }`,
+          };
+        }
+      }
+    }
+
+    return { hasConflict: false, message: "" };
+  };
+
   const isSlotAvailableForStaff = ({
     staffId,
     date,
@@ -2206,9 +2567,29 @@ const handleSubmit = async () => {
       return;
     }
 
+    if (incompleteServiceLines.length > 0) {
+      const firstIncomplete = incompleteServiceLines[0];
+      setMessage(
+        `El servicio ${firstIncomplete.index + 1} está incompleto. Selecciona servicio, técnica, hora de inicio y hora de fin antes de guardar.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    const staffServiceConflict = checkStaffServiceRestrictions();
+
+    if (
+      staffServiceConflict.hasConflict &&
+      (!form.force_created || !canForceAgenda)
+    ) {
+      setMessage(staffServiceConflict.message);
+      setSaving(false);
+      return;
+    }
+
     const internalConflict = checkInternalConflicts();
 
-    if (internalConflict.hasConflict && !form.force_created) {
+    if (internalConflict.hasConflict && (!form.force_created || !canForceAgenda)) {
       setMessage(internalConflict.message);
       setSaving(false);
       return;
@@ -2216,7 +2597,7 @@ const handleSubmit = async () => {
 
     const scheduleConflict = checkStaffScheduleConflicts();
 
-    if (scheduleConflict.hasConflict && !form.force_created) {
+    if (scheduleConflict.hasConflict && (!form.force_created || !canForceAgenda)) {
       setMessage(scheduleConflict.message);
       setSaving(false);
       return;
@@ -2224,7 +2605,7 @@ const handleSubmit = async () => {
 
     const timeBlockConflict = await checkTimeBlockConflicts();
 
-    if (timeBlockConflict.hasConflict && !form.force_created) {
+    if (timeBlockConflict.hasConflict && (!form.force_created || !canForceAgenda)) {
       setMessage(timeBlockConflict.message);
       setSaving(false);
       return;
@@ -2232,8 +2613,16 @@ const handleSubmit = async () => {
 
     const databaseConflict = await checkDatabaseConflicts();
 
-    if (databaseConflict.hasConflict && !form.force_created) {
+    if (databaseConflict.hasConflict && (!form.force_created || !canForceAgenda)) {
       setMessage(databaseConflict.message);
+      setSaving(false);
+      return;
+    }
+
+    const resourceConflict = await checkResourceConflicts();
+
+    if (resourceConflict.hasConflict && (!form.force_created || !canForceAgenda)) {
+      setMessage(resourceConflict.message);
       setSaving(false);
       return;
     }
@@ -2281,6 +2670,19 @@ const handleSubmit = async () => {
           previousAppointmentSnapshot.end_time,
           previousStaffIds.sort().join(","),
         ].join("|")
+      : "";
+    const previousServicesSignature = previousAppointmentSnapshot
+      ? (previousAppointmentSnapshot.appointment_services || [])
+          .map((item) =>
+            [
+              item.service_id,
+              item.staff_id,
+              formatTime(item.start_time),
+              formatTime(item.end_time),
+            ].join(":")
+          )
+          .sort()
+          .join("|")
       : "";
 
     if (editingAppointmentId) {
@@ -2446,6 +2848,36 @@ if (shouldNotifyAppointment) {
   if (notificationError) {
     notificationWarning = ` La cita se guardó, pero no se pudo enviar notificación push: ${notificationError.message}`;
   }
+}
+
+const currentServicesSignature = validServiceLines
+  .map((line) =>
+    [line.service_id, line.staff_id, line.start_time, line.end_time].join(":")
+  )
+  .sort()
+  .join("|");
+const adminEventType = !wasEditing
+  ? "cita_nueva_admin"
+  : previousServicesSignature !== currentServicesSignature
+  ? "cita_servicios_admin"
+  : "cita_actualizada_admin";
+const clientForNotification = clients.find(
+  (item) => item.id === appointment.client_id
+);
+const adminNotificationResult = await triggerAdminAppointmentNotification({
+  appointment_id: appointment.id,
+  event_type: adminEventType,
+  client_name: clientForNotification?.full_name || "Clienta",
+  summary: `${appointment.appointment_date} ${formatTime(
+    appointment.start_time
+  )}-${formatTime(appointment.end_time)} · ${validServiceLines
+    .map((line) => getServiceName(line.service_id))
+    .filter(Boolean)
+    .join(", ")}`,
+});
+
+if (adminNotificationResult.error) {
+  notificationWarning = `${notificationWarning} No se pudo notificar al admin: ${adminNotificationResult.error.message}`;
 }
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
@@ -3137,10 +3569,23 @@ const shouldShowNoClientFound =
 
             <div className="mt-5 space-y-4">
               {serviceLines.map((line, index) => {
-                const matches = getServiceMatches(line.service_search);
+                const matches = getServiceMatches(line.service_search, line.staff_id);
                 const selectedService = services.find(
                   (service) => service.id === line.service_id
                 );
+                const allowedStaffForService = getAllowedStaffForService(
+                  line.service_id
+                );
+                const selectedStaffOutsideAllowed =
+                  line.staff_id &&
+                  !allowedStaffForService.some(
+                    (person) => person.id === line.staff_id
+                  )
+                    ? staff.find((person) => person.id === line.staff_id)
+                    : null;
+                const staffOptionsForLine = selectedStaffOutsideAllowed
+                  ? [...allowedStaffForService, selectedStaffOutsideAllowed]
+                  : allowedStaffForService;
                 const shouldShowMatches =
                   matches.length > 0 &&
                   !line.service_id &&
@@ -3262,12 +3707,24 @@ const shouldShowNoClientFound =
                           className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                         >
                           <option value="">Seleccionar técnica</option>
-                          {staff.map((person) => (
+                          {staffOptionsForLine.map((person) => (
                             <option key={person.id} value={person.id}>
                               {person.full_name}
                             </option>
                           ))}
                         </select>
+                        {line.staff_id &&
+                          line.service_id &&
+                          !isStaffAllowedForService(
+                            line.staff_id,
+                            line.service_id
+                          ) && (
+                            <p className="mt-2 rounded-xl bg-yellow-50 p-3 text-xs leading-5 text-yellow-800">
+                              Esta técnica no tiene ligado este servicio. Solo
+                              admin/encargada/caja pueden guardarlo marcando
+                              “Forzar cita”.
+                            </p>
+                          )}
                       </div>
                     </div>
 
@@ -3656,9 +4113,12 @@ const shouldShowNoClientFound =
               type="checkbox"
               name="force_created"
               checked={form.force_created}
+              disabled={!canForceAgenda}
               onChange={handleFormChange}
             />
-            Forzar cita fuera de horario o disponibilidad
+            {canForceAgenda
+              ? "Forzar cita fuera de horario, disponibilidad o recursos"
+              : "Solo admin/encargada/caja pueden forzar citas"}
           </label>
 
           <div>
@@ -5142,6 +5602,20 @@ const saveAttendanceStatus = async () => {
       if (pushResult.error) {
         attendancePushWarning = ` No se pudo enviar push: ${pushResult.error.message}`;
       }
+    }
+  }
+  if (selectedStatus === "cancelo") {
+    const adminNotificationResult = await triggerAdminAppointmentNotification({
+      appointment_id: appointment.id,
+      event_type: "cita_cancelada_admin",
+      client_name: appointment.clients?.full_name || "Clienta",
+      summary: `${appointment.appointment_date} ${formatTime(
+        appointment.start_time
+      )}`,
+    });
+
+    if (adminNotificationResult.error) {
+      attendancePushWarning = `${attendancePushWarning} No se pudo notificar al admin: ${adminNotificationResult.error.message}`;
     }
   }
   setAttendanceMessage(

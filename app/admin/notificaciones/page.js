@@ -720,6 +720,7 @@ export default function NotificacionesPage() {
                         <p>
                           Para:{" "}
                           {notification.staff?.full_name ||
+                            notification.recipient_email ||
                             "Sin colaborador asignado"}
                         </p>
                         <p>Creada: {formatDateTime(notification.created_at)}</p>

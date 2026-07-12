@@ -104,9 +104,25 @@ $$;
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.push_subscriptions to authenticated;
+grant all on public.push_subscriptions to service_role;
 grant execute on function public.set_push_subscriptions_updated_at() to authenticated;
 grant execute on function public.push_current_user_role() to authenticated;
 grant execute on function public.push_user_has_role(text[]) to authenticated;
+
+alter table public.notifications
+  add column if not exists recipient_auth_user_id uuid null,
+  add column if not exists recipient_email text null,
+  add column if not exists created_by_auth_user_id uuid null,
+  add column if not exists created_by_email text null;
+
+create index if not exists notifications_recipient_auth_user_idx
+  on public.notifications(recipient_auth_user_id, is_read, created_at desc);
+
+create index if not exists notifications_recipient_email_idx
+  on public.notifications(lower(recipient_email), is_read, created_at desc);
+
+grant select, insert, update, delete on public.notifications to authenticated;
+grant all on public.notifications to service_role;
 
 alter table public.push_subscriptions enable row level security;
 

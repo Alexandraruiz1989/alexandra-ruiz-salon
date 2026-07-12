@@ -91,7 +91,7 @@ export async function getSessionProfile(request, adminSupabase) {
 
   const { data: profilesById, error: profileByIdError } = await adminSupabase
     .from("user_profiles")
-    .select("id, auth_user_id, email, role, active, staff_id")
+    .select("id, auth_user_id, email, full_name, role, active, staff_id")
     .eq("auth_user_id", user.id)
     .limit(1);
 
@@ -105,7 +105,7 @@ export async function getSessionProfile(request, adminSupabase) {
     const { data: profilesByEmail, error: profileByEmailError } =
       await adminSupabase
         .from("user_profiles")
-        .select("id, auth_user_id, email, role, active, staff_id")
+        .select("id, auth_user_id, email, full_name, role, active, staff_id")
         .ilike("email", userEmail)
         .limit(1);
 
@@ -261,6 +261,50 @@ async function loadSubscriptionsForStaff(adminSupabase, staffId) {
   return [...subscriptionMap.values()];
 }
 
+async function loadSubscriptionsForRecipient(adminSupabase, notification) {
+  const subscriptionMap = new Map();
+
+  const addSubscriptions = (items = []) => {
+    items.forEach((item) => {
+      if (item?.endpoint) {
+        subscriptionMap.set(item.endpoint, item);
+      }
+    });
+  };
+
+  if (notification.staff_id) {
+    const staffSubscriptions = await loadSubscriptionsForStaff(
+      adminSupabase,
+      notification.staff_id
+    );
+    addSubscriptions(staffSubscriptions);
+  }
+
+  if (notification.recipient_auth_user_id) {
+    const { data, error } = await adminSupabase
+      .from("push_subscriptions")
+      .select("*")
+      .eq("auth_user_id", notification.recipient_auth_user_id)
+      .eq("active", true);
+
+    if (error) throw error;
+    addSubscriptions(data);
+  }
+
+  if (notification.recipient_email) {
+    const { data, error } = await adminSupabase
+      .from("push_subscriptions")
+      .select("*")
+      .ilike("user_email", normalizeEmail(notification.recipient_email))
+      .eq("active", true);
+
+    if (error) throw error;
+    addSubscriptions(data);
+  }
+
+  return [...subscriptionMap.values()];
+}
+
 export async function sendPushForNotifications(adminSupabase, notificationIds = []) {
   const ids = [...new Set((notificationIds || []).filter(Boolean))];
 
@@ -287,15 +331,18 @@ export async function sendPushForNotifications(adminSupabase, notificationIds = 
   let firstError = "";
 
   for (const notification of notifications || []) {
-    if (!notification.staff_id) continue;
+    if (
+      !notification.staff_id &&
+      !notification.recipient_auth_user_id &&
+      !notification.recipient_email
+    ) {
+      continue;
+    }
 
     let subscriptions = [];
 
     try {
-      subscriptions = await loadSubscriptionsForStaff(
-        adminSupabase,
-        notification.staff_id
-      );
+      subscriptions = await loadSubscriptionsForRecipient(adminSupabase, notification);
     } catch (error) {
       totalFailed += 1;
       firstError = firstError || error.message || "No se pudieron cargar suscripciones.";

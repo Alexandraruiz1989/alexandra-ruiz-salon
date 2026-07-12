@@ -67,7 +67,14 @@ export async function POST(request) {
       .select("id, staff_id, active")
       .single();
 
-    if (error) return errorResponse(error.message, 400);
+    if (error) {
+      const detail = String(error.message || "");
+      const permissionMessage = detail.toLowerCase().includes("permission denied")
+        ? "No se pudo guardar la suscripción push con service role. Revisa que SUPABASE_SERVICE_ROLE_KEY sea la llave service_role en Vercel y ejecuta el SQL actualizado de notificaciones push."
+        : detail;
+
+      return errorResponse(permissionMessage, 400);
+    }
 
     return NextResponse.json({
       success: true,
