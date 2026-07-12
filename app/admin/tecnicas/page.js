@@ -380,7 +380,6 @@ export default function TecnicasPage() {
   const [savingIncidence, setSavingIncidence] = useState(false);
   const [savingServices, setSavingServices] = useState(false);
   const [savingResource, setSavingResource] = useState(false);
-  const [savingServiceResource, setSavingServiceResource] = useState(false);
 
   const [staffMessage, setStaffMessage] = useState("");
   const [blockMessage, setBlockMessage] = useState("");
@@ -402,8 +401,6 @@ export default function TecnicasPage() {
   const [staffSearch, setStaffSearch] = useState("");
   const [selectedStaffForServices, setSelectedStaffForServices] = useState("");
   const [serviceSearch, setServiceSearch] = useState("");
-  const [selectedServiceForResources, setSelectedServiceForResources] =
-    useState("");
   const [blockDateFilter, setBlockDateFilter] = useState(
     new Date().toISOString().slice(0, 10)
   );
@@ -411,6 +408,7 @@ export default function TecnicasPage() {
   const [editingStaffId, setEditingStaffId] = useState(null);
   const [editingBlockId, setEditingBlockId] = useState(null);
   const [editingIncidenceId, setEditingIncidenceId] = useState(null);
+  const [editingResourceId, setEditingResourceId] = useState(null);
 
   const [staffForm, setStaffForm] = useState(emptyStaffForm);
   const [weekSchedule, setWeekSchedule] = useState(defaultWeekSchedule);
@@ -895,12 +893,6 @@ export default function TecnicasPage() {
     setSavingServices(false);
   };
 
-  const selectedServiceResourceRows = useMemo(() => {
-    return serviceResources.filter(
-      (item) => item.service_id === selectedServiceForResources
-    );
-  }, [serviceResources, selectedServiceForResources]);
-
   const handleResourceFormChange = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -912,6 +904,32 @@ export default function TecnicasPage() {
 
   const resetResourceForm = () => {
     setResourceForm(emptyResourceForm);
+    setEditingResourceId(null);
+  };
+
+  const getResourceServiceSummaries = (resourceId) => {
+    return serviceResources
+      .filter((item) => item.resource_id === resourceId && item.active !== false)
+      .map((item) => {
+        const service = services.find(
+          (serviceItem) => serviceItem.id === item.service_id
+        );
+
+        return `${service?.name || "Servicio"} x${Number(
+          item.quantity_required || 1
+        )}`;
+      });
+  };
+
+  const editResource = (resource) => {
+    setEditingResourceId(resource.id);
+    setResourceForm({
+      name: resource.name || "",
+      quantity: resource.quantity ?? "1",
+      notes: resource.notes || "",
+      active: resource.active !== false,
+    });
+    setResourceMessage("Recurso cargado para edición.");
   };
 
   const saveResource = async () => {
@@ -926,14 +944,22 @@ export default function TecnicasPage() {
     clearMessagesExcept("resources");
     setResourceMessage("Guardando recurso...");
 
-    const { error } = await supabase.from("resources").insert([
-      {
-        name,
-        quantity: Number(resourceForm.quantity || 1),
-        notes: resourceForm.notes.trim() || null,
-        active: Boolean(resourceForm.active),
-      },
-    ]);
+    const payload = {
+      name,
+      quantity: Number(resourceForm.quantity || 1),
+      notes: resourceForm.notes.trim() || null,
+      active: Boolean(resourceForm.active),
+      updated_at: new Date().toISOString(),
+    };
+
+    const wasEditingResource = Boolean(editingResourceId);
+
+    const { error } = editingResourceId
+      ? await supabase
+          .from("resources")
+          .update(payload)
+          .eq("id", editingResourceId)
+      : await supabase.from("resources").insert([payload]);
 
     if (error) {
       setResourceMessage(`No se pudo guardar recurso: ${error.message}`);
@@ -943,107 +969,12 @@ export default function TecnicasPage() {
 
     resetResourceForm();
     await loadData();
-    setResourceMessage("Recurso guardado correctamente ✨");
+    setResourceMessage(
+      wasEditingResource
+        ? "Recurso actualizado correctamente ✨"
+        : "Recurso guardado correctamente ✨"
+    );
     setSavingResource(false);
-  };
-
-  const toggleResourceForSelectedService = (resourceId) => {
-    if (!selectedServiceForResources) {
-      setResourceMessage("Selecciona un servicio antes de ligar recursos.");
-      return;
-    }
-
-    setServiceResources((current) => {
-      const exists = current.some(
-        (item) =>
-          item.service_id === selectedServiceForResources &&
-          item.resource_id === resourceId
-      );
-
-      if (exists) {
-        return current.filter(
-          (item) =>
-            !(
-              item.service_id === selectedServiceForResources &&
-              item.resource_id === resourceId
-            )
-        );
-      }
-
-      return [
-        ...current,
-        {
-          service_id: selectedServiceForResources,
-          resource_id: resourceId,
-          quantity_required: 1,
-          active: true,
-        },
-      ];
-    });
-  };
-
-  const updateServiceResourceQuantity = (resourceId, quantity) => {
-    setServiceResources((current) =>
-      current.map((item) =>
-        item.service_id === selectedServiceForResources &&
-        item.resource_id === resourceId
-          ? { ...item, quantity_required: Number(quantity || 1) }
-          : item
-      )
-    );
-  };
-
-  const saveServiceResources = async () => {
-    if (!selectedServiceForResources) {
-      setResourceMessage("Selecciona un servicio para guardar sus recursos.");
-      return;
-    }
-
-    setSavingServiceResource(true);
-    clearMessagesExcept("resources");
-    setResourceMessage("Guardando recursos del servicio...");
-
-    const selectedRows = serviceResources.filter(
-      (item) => item.service_id === selectedServiceForResources
-    );
-
-    const { error: deleteError } = await supabase
-      .from("service_resources")
-      .delete()
-      .eq("service_id", selectedServiceForResources);
-
-    if (deleteError) {
-      setResourceMessage(
-        `No se pudieron actualizar recursos del servicio: ${deleteError.message}`
-      );
-      setSavingServiceResource(false);
-      return;
-    }
-
-    if (selectedRows.length > 0) {
-      const { error: insertError } = await supabase
-        .from("service_resources")
-        .insert(
-          selectedRows.map((item) => ({
-            service_id: selectedServiceForResources,
-            resource_id: item.resource_id,
-            quantity_required: Number(item.quantity_required || 1),
-            active: true,
-          }))
-        );
-
-      if (insertError) {
-        setResourceMessage(
-          `No se pudieron guardar recursos del servicio: ${insertError.message}`
-        );
-        setSavingServiceResource(false);
-        return;
-      }
-    }
-
-    await loadData();
-    setResourceMessage("Recursos del servicio guardados correctamente ✨");
-    setSavingServiceResource(false);
   };
 
   const handleStaffChange = (event) => {
@@ -2544,8 +2475,8 @@ export default function TecnicasPage() {
           <Card>
             <SectionHeader
               eyebrow="Mobiliario"
-              title="Crear recurso"
-              description="Ej. Silla de pedicure, cabina, camilla, lámpara o estación."
+              title={editingResourceId ? "Editar recurso" : "Crear recurso"}
+              description="Da de alta el catálogo de recursos disponibles: sillas, cabinas, camillas, lámparas o estaciones."
             />
 
             <div className="space-y-4">
@@ -2597,58 +2528,48 @@ export default function TecnicasPage() {
 
             <div className="mt-6">
               <SectionToast message={resourceMessage} />
-              <button
-                type="button"
-                onClick={saveResource}
-                disabled={savingResource}
-                className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-              >
-                {savingResource ? "Guardando..." : "Guardar recurso"}
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                {editingResourceId && (
+                  <button
+                    type="button"
+                    onClick={resetResourceForm}
+                    className="rounded-full border border-[#c9d3d8] px-6 py-4 text-[#68777c] transition hover:bg-[#f7f9fa] sm:w-40"
+                  >
+                    Cancelar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={saveResource}
+                  disabled={savingResource}
+                  className="flex-1 rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
+                >
+                  {savingResource
+                    ? "Guardando..."
+                    : editingResourceId
+                      ? "Actualizar recurso"
+                      : "Guardar recurso"}
+                </button>
+              </div>
             </div>
           </Card>
 
           <Card>
             <SectionHeader
-              eyebrow="Recursos por servicio"
-              title="Qué mobiliario usa cada servicio"
-              description="Agenda validará empalmes según la cantidad disponible de cada recurso."
+              eyebrow="Catálogo de recursos"
+              title="Recursos disponibles del salón"
+              description="La relación con servicios se configura desde el alta o edición de cada servicio."
             />
 
-            <div className="mb-6">
-              <label className="mb-2 block text-sm text-[#68777c]">
-                Servicio
-              </label>
-              <select
-                value={selectedServiceForResources}
-                onChange={(event) => {
-                  setSelectedServiceForResources(event.target.value);
-                  setResourceMessage("");
-                }}
-                className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-              >
-                <option value="">Seleccionar servicio</option>
-                {services.map((service) => (
-                  <option key={service.id} value={service.id}>
-                    {service.category} - {service.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {!selectedServiceForResources ? (
-              <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
-                Selecciona un servicio para ligar recursos.
-              </div>
-            ) : resources.length === 0 ? (
+            {resources.length === 0 ? (
               <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
                 Aún no hay recursos registrados.
               </div>
             ) : (
               <div className="space-y-3">
                 {resources.map((resource) => {
-                  const selectedRow = selectedServiceResourceRows.find(
-                    (item) => item.resource_id === resource.id
+                  const serviceSummaries = getResourceServiceSummaries(
+                    resource.id
                   );
 
                   return (
@@ -2660,64 +2581,57 @@ export default function TecnicasPage() {
                           : "border-[#dde3e6] bg-white"
                       }`}
                     >
-                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                        <label className="flex items-start gap-3 text-sm text-[#68777c]">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selectedRow)}
-                            onChange={() =>
-                              toggleResourceForSelectedService(resource.id)
-                            }
-                          />
-                          <span>
-                            <span className="block font-medium text-[#263238]">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                        <div className="text-sm text-[#68777c]">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-[#263238]">
                               {resource.name}
                             </span>
-                            <span>
-                              Disponibles: {resource.quantity || 0}
-                              {resource.active === false ? " · Inactivo" : ""}
+                            <span
+                              className={`rounded-full px-3 py-1 text-xs ${
+                                resource.active === false
+                                  ? "bg-[#eef1f2] text-[#68777c]"
+                                  : "bg-[#e6f4ec] text-[#2f7a4f]"
+                              }`}
+                            >
+                              {resource.active === false
+                                ? "Inactivo"
+                                : "Activo"}
                             </span>
-                          </span>
-                        </label>
-
-                        {selectedRow && (
-                          <div className="w-full md:w-40">
-                            <label className="mb-1 block text-xs text-[#68777c]">
-                              Requiere
-                            </label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={selectedRow.quantity_required || 1}
-                              onChange={(event) =>
-                                updateServiceResourceQuantity(
-                                  resource.id,
-                                  event.target.value
-                                )
-                              }
-                              className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-                            />
                           </div>
-                        )}
+                          <p className="mt-1">
+                            Cantidad disponible: {resource.quantity || 0}
+                          </p>
+                          {resource.notes && (
+                            <p className="mt-2 text-xs">{resource.notes}</p>
+                          )}
+                          <div className="mt-3 rounded-2xl bg-[#f7f9fa] p-3 text-xs">
+                            {serviceSummaries.length > 0 ? (
+                              <>
+                                <span className="font-medium text-[#263238]">
+                                  Usado por:
+                                </span>{" "}
+                                {serviceSummaries.join(", ")}
+                              </>
+                            ) : (
+                              "Sin servicios ligados. Configúralo desde Servicios."
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => editResource(resource)}
+                          className="rounded-full border border-[#bd7b83] px-5 py-2 text-sm text-[#bd7b83] transition hover:bg-[#fff5f6]"
+                        >
+                          Editar
+                        </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
             )}
-
-            <div className="mt-6">
-              <button
-                type="button"
-                onClick={saveServiceResources}
-                disabled={savingServiceResource || !selectedServiceForResources}
-                className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
-              >
-                {savingServiceResource
-                  ? "Guardando..."
-                  : "Guardar recursos del servicio"}
-              </button>
-            </div>
           </Card>
         </div>
       )}

@@ -23,6 +23,9 @@ export default function ServiciosPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [services, setServices] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [serviceResources, setServiceResources] = useState([]);
+  const [resourceLines, setResourceLines] = useState([]);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [showCategoryOptions, setShowCategoryOptions] = useState(false);
@@ -50,16 +53,35 @@ export default function ServiciosPage() {
     setLoadingServices(true);
     setMessage("");
 
-    const { data, error } = await supabase
-      .from("services")
-      .select("*")
-      .order("category", { ascending: true })
-      .order("name", { ascending: true });
+    const [servicesResult, resourcesResult, serviceResourcesResult] =
+      await Promise.all([
+        supabase
+          .from("services")
+          .select("*")
+          .order("category", { ascending: true })
+          .order("name", { ascending: true }),
+        supabase.from("resources").select("*").order("name"),
+        supabase.from("service_resources").select("*").eq("active", true),
+      ]);
 
-    if (error) {
-      setMessage(`Error al cargar servicios: ${error.message}`);
+    if (servicesResult.error) {
+      setMessage(`Error al cargar servicios: ${servicesResult.error.message}`);
     } else {
-      setServices(data || []);
+      setServices(servicesResult.data || []);
+    }
+
+    if (resourcesResult.error) {
+      setMessage(`Error al cargar recursos: ${resourcesResult.error.message}`);
+    } else {
+      setResources(resourcesResult.data || []);
+    }
+
+    if (serviceResourcesResult.error) {
+      setMessage(
+        `Error al cargar recursos por servicio: ${serviceResourcesResult.error.message}`
+      );
+    } else {
+      setServiceResources(serviceResourcesResult.data || []);
     }
 
     setLoadingServices(false);
@@ -150,6 +172,7 @@ export default function ServiciosPage() {
   const resetForm = () => {
     setForm(emptyForm);
     setEditingServiceId(null);
+    setResourceLines([]);
     setShowCategoryOptions(false);
     setMessage("");
   };
@@ -172,7 +195,96 @@ export default function ServiciosPage() {
       active: service.active !== false,
     });
 
+    setResourceLines(
+      serviceResources
+        .filter((item) => item.service_id === service.id && item.active !== false)
+        .map((item) => ({
+          resource_id: item.resource_id || "",
+          quantity_required: Number(item.quantity_required || 1),
+        }))
+    );
+
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const selectedResourceIds = resourceLines
+    .map((line) => line.resource_id)
+    .filter(Boolean);
+
+  const getResourceName = (resourceId) => {
+    return (
+      resources.find((resource) => resource.id === resourceId)?.name ||
+      "Recurso"
+    );
+  };
+
+  const getServiceResourceSummary = (serviceId) => {
+    return serviceResources
+      .filter((item) => item.service_id === serviceId && item.active !== false)
+      .map((item) => {
+        const resource = resources.find(
+          (resourceItem) => resourceItem.id === item.resource_id
+        );
+
+        return `${resource?.name || "Recurso"} x${Number(
+          item.quantity_required || 1
+        )}`;
+      });
+  };
+
+  const toggleResourceLine = (resourceId) => {
+    setResourceLines((current) => {
+      const exists = current.some((line) => line.resource_id === resourceId);
+
+      if (exists) {
+        return current.filter((line) => line.resource_id !== resourceId);
+      }
+
+      return [
+        ...current,
+        {
+          resource_id: resourceId,
+          quantity_required: 1,
+        },
+      ];
+    });
+  };
+
+  const updateResourceQuantity = (resourceId, quantity) => {
+    setResourceLines((current) =>
+      current.map((line) =>
+        line.resource_id === resourceId
+          ? {
+              ...line,
+              quantity_required: Math.max(1, Number(quantity || 1)),
+            }
+          : line
+      )
+    );
+  };
+
+  const saveServiceResources = async (serviceId) => {
+    const { error: deleteError } = await supabase
+      .from("service_resources")
+      .delete()
+      .eq("service_id", serviceId);
+
+    if (deleteError) return deleteError;
+
+    const rows = resourceLines
+      .filter((line) => line.resource_id)
+      .map((line) => ({
+        service_id: serviceId,
+        resource_id: line.resource_id,
+        quantity_required: Number(line.quantity_required || 1),
+        active: true,
+      }));
+
+    if (rows.length === 0) return null;
+
+    const { error } = await supabase.from("service_resources").insert(rows);
+
+    return error || null;
   };
 
   const handleSave = async () => {
@@ -208,16 +320,40 @@ export default function ServiciosPage() {
       if (error) {
         setMessage(`No se pudo actualizar el servicio: ${error.message}`);
       } else {
+        const resourcesError = await saveServiceResources(editingServiceId);
+
+        if (resourcesError) {
+          setMessage(
+            `El servicio se actualizó, pero no se pudieron guardar sus recursos: ${resourcesError.message}`
+          );
+          setSaving(false);
+          return;
+        }
+
         setMessage("Servicio actualizado correctamente ✨");
         resetForm();
         await loadServices();
       }
     } else {
-      const { error } = await supabase.from("services").insert([serviceData]);
+      const { data: createdService, error } = await supabase
+        .from("services")
+        .insert([serviceData])
+        .select("id")
+        .single();
 
       if (error) {
         setMessage(`No se pudo guardar el servicio: ${error.message}`);
       } else {
+        const resourcesError = await saveServiceResources(createdService.id);
+
+        if (resourcesError) {
+          setMessage(
+            `El servicio se guardó, pero no se pudieron guardar sus recursos: ${resourcesError.message}`
+          );
+          setSaving(false);
+          return;
+        }
+
         setMessage("Servicio registrado correctamente ✨");
         resetForm();
         await loadServices();
@@ -494,6 +630,110 @@ export default function ServiciosPage() {
                 />
               </div>
 
+              <div className="rounded-2xl border border-[#ead2cf] bg-[#fdf8f6] p-5">
+                <div className="mb-4">
+                  <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                    Recursos
+                  </p>
+                  <h3 className="mt-2 text-xl font-light">
+                    Recursos necesarios para este servicio
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-[#6d5a58]">
+                    Selecciona el mobiliario o recurso que este servicio ocupa
+                    durante la cita. Agenda usará esta información para validar
+                    disponibilidad por horario.
+                  </p>
+                </div>
+
+                {resources.length === 0 ? (
+                  <div className="rounded-2xl bg-white p-4 text-sm text-[#8a5f63]">
+                    Primero crea recursos en Mobiliario / Recursos.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {resources.map((resource) => {
+                      const selectedLine = resourceLines.find(
+                        (line) => line.resource_id === resource.id
+                      );
+
+                      return (
+                        <div
+                          key={resource.id}
+                          className={`rounded-2xl border p-4 ${
+                            resource.active === false
+                              ? "border-[#ead2cf] bg-white/70 opacity-70"
+                              : "border-[#ead2cf] bg-white"
+                          }`}
+                        >
+                          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                            <label className="flex items-start gap-3 text-sm text-[#6d5a58]">
+                              <input
+                                type="checkbox"
+                                checked={selectedResourceIds.includes(
+                                  resource.id
+                                )}
+                                onChange={() => toggleResourceLine(resource.id)}
+                              />
+                              <span>
+                                <span className="block font-medium text-[#352829]">
+                                  {resource.name}
+                                </span>
+                                <span>
+                                  Disponibles: {resource.quantity || 0}
+                                  {resource.active === false
+                                    ? " · Inactivo"
+                                    : ""}
+                                </span>
+                                {resource.notes && (
+                                  <span className="mt-1 block text-xs text-[#8a6f6c]">
+                                    {resource.notes}
+                                  </span>
+                                )}
+                              </span>
+                            </label>
+
+                            {selectedLine && (
+                              <div className="w-full md:w-40">
+                                <label className="mb-1 block text-xs text-[#6d5a58]">
+                                  Cantidad requerida
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={selectedLine.quantity_required || 1}
+                                  onChange={(event) =>
+                                    updateResourceQuantity(
+                                      resource.id,
+                                      event.target.value
+                                    )
+                                  }
+                                  className="w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {resourceLines.length > 0 && (
+                  <div className="mt-4 rounded-2xl bg-white p-4 text-sm text-[#6d5a58]">
+                    Seleccionados:{" "}
+                    {resourceLines
+                      .filter((line) => line.resource_id)
+                      .map(
+                        (line) =>
+                          `${getResourceName(line.resource_id)} x${Number(
+                            line.quantity_required || 1
+                          )}`
+                      )
+                      .join(", ")}
+                  </div>
+                )}
+              </div>
+
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
@@ -615,6 +855,15 @@ export default function ServiciosPage() {
                           <p className="mt-3 text-sm leading-6 text-[#6d5a58]">
                             {service.description}
                           </p>
+                        )}
+
+                        {getServiceResourceSummary(service.id).length > 0 && (
+                          <div className="mt-3 rounded-xl bg-white p-3 text-sm text-[#6d5a58]">
+                            <span className="font-medium text-[#352829]">
+                              Recursos:
+                            </span>{" "}
+                            {getServiceResourceSummary(service.id).join(", ")}
+                          </div>
                         )}
                       </div>
 
