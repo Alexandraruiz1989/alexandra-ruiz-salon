@@ -67,6 +67,28 @@ function sumPayments(payments) {
   );
 }
 
+async function getInternalProfileForUser(user) {
+  if (!user) return null;
+
+  const { data: profileById } = await supabase
+    .from("user_profiles")
+    .select("id, auth_user_id, email, full_name, role, active")
+    .eq("auth_user_id", user.id)
+    .maybeSingle();
+
+  if (profileById) return profileById;
+
+  if (!user.email) return null;
+
+  const { data: profileByEmail } = await supabase
+    .from("user_profiles")
+    .select("id, auth_user_id, email, full_name, role, active")
+    .ilike("email", user.email)
+    .maybeSingle();
+
+  return profileByEmail || null;
+}
+
 export default function AdminLoginPage() {
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -79,6 +101,23 @@ export default function AdminLoginPage() {
   useEffect(() => {
     const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
+
+      if (data.session) {
+        const profile = await getInternalProfileForUser(data.session.user);
+
+        if (!profile || profile.active === false) {
+          await supabase.auth.signOut();
+          setMessage(
+            !profile
+              ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
+              : "Tu acceso interno está desactivado."
+          );
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+      }
+
       setSession(data.session || null);
       setLoading(false);
     };
@@ -87,8 +126,26 @@ export default function AdminLoginPage() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, currentSession) => {
-      setSession(currentSession || null);
+    } = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
+      if (!currentSession) {
+        setSession(null);
+        return;
+      }
+
+      const profile = await getInternalProfileForUser(currentSession.user);
+
+      if (!profile || profile.active === false) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setMessage(
+          !profile
+            ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
+            : "Tu acceso interno está desactivado."
+        );
+        return;
+      }
+
+      setSession(currentSession);
     });
 
     return () => subscription.unsubscribe();
@@ -118,6 +175,20 @@ export default function AdminLoginPage() {
 
     if (error) {
       setMessage(`No se pudo iniciar sesión: ${error.message}`);
+      setLoginLoading(false);
+      return;
+    }
+
+    const profile = await getInternalProfileForUser(data.session?.user);
+
+    if (!profile || profile.active === false) {
+      await supabase.auth.signOut();
+      setMessage(
+        !profile
+          ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
+          : "Tu acceso interno está desactivado."
+      );
+      setSession(null);
       setLoginLoading(false);
       return;
     }

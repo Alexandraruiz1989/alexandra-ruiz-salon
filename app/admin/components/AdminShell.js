@@ -118,6 +118,12 @@ export default function AdminShell({
       .maybeSingle();
 
     if (!error && data) {
+      if (data.active === false) {
+        await supabase.auth.signOut();
+        window.location.href = "/admin";
+        return;
+      }
+
       setCurrentProfile(data);
       setLoadingProfile(false);
       return;
@@ -130,18 +136,19 @@ export default function AdminShell({
       .maybeSingle();
 
     if (!emailError && profileByEmail) {
+      if (profileByEmail.active === false) {
+        await supabase.auth.signOut();
+        window.location.href = "/admin";
+        return;
+      }
+
       setCurrentProfile(profileByEmail);
       setLoadingProfile(false);
       return;
     }
 
-    setCurrentProfile({
-      email: user.email,
-      full_name: user.email,
-      role: "tecnica",
-      active: true,
-    });
-
+    await supabase.auth.signOut();
+    window.location.href = "/cliente/login";
     setLoadingProfile(false);
   };
 
