@@ -483,6 +483,47 @@ function ViewButtons({ activeSection, setActiveSection }) {
 const timeOptions = generateTimeOptions();
 const timeSlots = generateTimeSlots();
 
+async function triggerPushForNotificationIds(notificationIds = []) {
+  const ids = [...new Set((notificationIds || []).filter(Boolean))];
+
+  if (ids.length === 0) return { error: null };
+
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (!token) {
+    return { error: { message: "Tu sesión expiró. Vuelve a iniciar sesión." } };
+  }
+
+  try {
+    const response = await fetch("/api/push/notify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        notification_ids: ids,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return {
+        error: {
+          message:
+            result.error ||
+            "La notificación interna se creó, pero no se pudo enviar push.",
+        },
+      };
+    }
+
+    return { error: null, result };
+  } catch (error) {
+    return { error };
+  }
+}
+
 export default function AgendaPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -2133,8 +2174,18 @@ const notifyAppointmentStaff = async ({
     is_read: false,
   }));
 
-  const { error } = await supabase.from("notifications").insert(rows);
-  return error || null;
+  const { data, error } = await supabase
+    .from("notifications")
+    .insert(rows)
+    .select("id");
+
+  if (error) return error;
+
+  const pushResult = await triggerPushForNotificationIds(
+    (data || []).map((notification) => notification.id)
+  );
+
+  return pushResult.error || null;
 };
 
 const handleSubmit = async () => {
@@ -2393,7 +2444,7 @@ if (shouldNotifyAppointment) {
   });
 
   if (notificationError) {
-    notificationWarning = ` La cita se guardó, pero no se pudo crear notificación interna: ${notificationError.message}`;
+    notificationWarning = ` La cita se guardó, pero no se pudo enviar notificación push: ${notificationError.message}`;
   }
 }
     setSelectedDate(form.appointment_date);
@@ -5055,6 +5106,7 @@ const saveAttendanceStatus = async () => {
   }
 
   onAppointmentUpdated?.(appointment.id, payload);
+  let attendancePushWarning = "";
   const staffIds = [
     ...new Set(
       (appointment.appointment_services || [])
@@ -5064,21 +5116,37 @@ const saveAttendanceStatus = async () => {
   ];
 
   if (staffIds.length > 0) {
-    await supabase.from("notifications").insert(
-      staffIds.map((staffId) => ({
-        staff_id: staffId,
-        title: "Estado de cita actualizado",
-        message: `La cita de ${
-          appointment.clients?.full_name || "Clienta"
-        } cambió a ${getAttendanceOption(selectedStatus).label}.`,
-        notification_type: "cita_estado",
-        related_table: "appointments",
-        related_id: appointment.id,
-        is_read: false,
-      }))
-    );
+    const { data: attendanceNotifications, error: attendanceNotificationError } =
+      await supabase
+        .from("notifications")
+        .insert(
+          staffIds.map((staffId) => ({
+            staff_id: staffId,
+            title: "Estado de cita actualizado",
+            message: `La cita de ${
+              appointment.clients?.full_name || "Clienta"
+            } cambió a ${getAttendanceOption(selectedStatus).label}.`,
+            notification_type: "cita_estado",
+            related_table: "appointments",
+            related_id: appointment.id,
+            is_read: false,
+          }))
+        )
+        .select("id");
+
+    if (!attendanceNotificationError) {
+      const pushResult = await triggerPushForNotificationIds(
+        (attendanceNotifications || []).map((notification) => notification.id)
+      );
+
+      if (pushResult.error) {
+        attendancePushWarning = ` No se pudo enviar push: ${pushResult.error.message}`;
+      }
+    }
   }
-  setAttendanceMessage("Estado de asistencia actualizado correctamente ✨");
+  setAttendanceMessage(
+    `Estado de asistencia actualizado correctamente ✨${attendancePushWarning}`
+  );
   setSavingAttendance(false);
 };
 

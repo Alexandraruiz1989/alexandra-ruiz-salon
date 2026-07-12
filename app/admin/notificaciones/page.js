@@ -9,10 +9,17 @@ function getMessageType(message) {
   const isError =
     text.includes("no se pudo") ||
     text.includes("error") ||
-    text.includes("obligatorio");
+    text.includes("obligatorio") ||
+    text.includes("denegado") ||
+    text.includes("no compatible") ||
+    text.includes("no permite") ||
+    text.includes("faltan");
 
   const isSuccess =
     text.includes("correctamente") ||
+    text.includes("activada") ||
+    text.includes("activadas") ||
+    text.includes("enviada") ||
     text.includes("leída") ||
     text.includes("leídas") ||
     text.includes("eliminada");
@@ -47,6 +54,21 @@ function formatDateTime(value) {
   });
 }
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = `${base64String}${padding}`
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
 export default function NotificacionesPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -58,6 +80,13 @@ export default function NotificacionesPage() {
   const [statusFilter, setStatusFilter] = useState("no_leidas");
   const [staffFilter, setStaffFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
+  const [pushSupported, setPushSupported] = useState(null);
+  const [pushConfigured, setPushConfigured] = useState(false);
+  const [pushPublicKey, setPushPublicKey] = useState("");
+  const [pushPermission, setPushPermission] = useState("default");
+  const [pushActive, setPushActive] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushMessage, setPushMessage] = useState("");
 
   useEffect(() => {
     const start = async () => {
@@ -70,10 +99,184 @@ export default function NotificacionesPage() {
 
       setLoadingSession(false);
       await loadData();
+      await initializePushState();
     };
 
     start();
   }, []);
+
+  const initializePushState = async () => {
+    if (typeof window === "undefined") return;
+
+    const isSupported =
+      "serviceWorker" in navigator &&
+      "PushManager" in window &&
+      "Notification" in window;
+
+    setPushSupported(isSupported);
+
+    if (!isSupported) {
+      setPushMessage(
+        "Este dispositivo o navegador no permite notificaciones push. Puedes revisar tus notificaciones dentro del sistema."
+      );
+      return;
+    }
+
+    setPushPermission(Notification.permission);
+
+    try {
+      const keyResponse = await fetch("/api/push/public-key");
+      const keyResult = await keyResponse.json();
+
+      setPushConfigured(Boolean(keyResult.configured && keyResult.publicKey));
+      setPushPublicKey(keyResult.publicKey || "");
+
+      const registration = await navigator.serviceWorker.ready;
+      const existingSubscription =
+        await registration.pushManager.getSubscription();
+
+      setPushActive(Boolean(existingSubscription));
+
+      if (!keyResult.configured) {
+        setPushMessage(
+          "Faltan llaves VAPID en el servidor. Agrega VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY y VAPID_SUBJECT para activar push."
+        );
+      }
+    } catch (error) {
+      console.error("No se pudo revisar estado push", error);
+      setPushMessage(
+        "No se pudo revisar el estado de notificaciones del dispositivo."
+      );
+    }
+  };
+
+  const getSessionAccessToken = async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token || "";
+  };
+
+  const activatePushNotifications = async () => {
+    setPushLoading(true);
+    setPushMessage("");
+
+    try {
+      if (!pushSupported) {
+        setPushMessage(
+          "Este dispositivo o navegador no permite notificaciones push. Puedes revisar tus notificaciones dentro del sistema."
+        );
+        return;
+      }
+
+      if (!pushConfigured || !pushPublicKey) {
+        setPushMessage(
+          "Faltan llaves VAPID en el servidor. Configúralas antes de activar notificaciones push."
+        );
+        return;
+      }
+
+      if (Notification.permission === "denied") {
+        setPushPermission("denied");
+        setPushMessage(
+          "El permiso de notificaciones está denegado en este dispositivo. Actívalo desde la configuración del navegador."
+        );
+        return;
+      }
+
+      const permission = await Notification.requestPermission();
+      setPushPermission(permission);
+
+      if (permission !== "granted") {
+        setPushMessage(
+          "No se activaron las notificaciones porque el permiso no fue concedido."
+        );
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(pushPublicKey),
+        });
+      }
+
+      const token = await getSessionAccessToken();
+
+      if (!token) {
+        setPushMessage("Tu sesión expiró. Vuelve a iniciar sesión.");
+        return;
+      }
+
+      const response = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          user_agent: navigator.userAgent,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result.error || "No se pudo registrar este dispositivo."
+        );
+      }
+
+      setPushActive(true);
+      setPushMessage("Notificaciones del dispositivo activadas correctamente ✨");
+    } catch (error) {
+      console.error("No se pudo activar push", error);
+      setPushMessage(
+        `No se pudo activar notificaciones push: ${error.message}`
+      );
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const sendTestPush = async () => {
+    setPushLoading(true);
+    setPushMessage("");
+
+    try {
+      const token = await getSessionAccessToken();
+
+      if (!token) {
+        setPushMessage("Tu sesión expiró. Vuelve a iniciar sesión.");
+        return;
+      }
+
+      const response = await fetch("/api/push/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result.error || "No se pudo enviar la notificación de prueba."
+        );
+      }
+
+      setPushMessage("Notificación de prueba enviada correctamente ✨");
+    } catch (error) {
+      console.error("No se pudo enviar push de prueba", error);
+      setPushMessage(
+        `No se pudo enviar notificación de prueba: ${error.message}`
+      );
+    } finally {
+      setPushLoading(false);
+    }
+  };
 
   const loadData = async () => {
     setLoadingData(true);
@@ -136,6 +339,10 @@ export default function NotificacionesPage() {
           result.tasks += 1;
         }
 
+        if (String(notification.notification_type || "").startsWith("cita_")) {
+          result.appointments += 1;
+        }
+
         return result;
       },
       {
@@ -143,6 +350,7 @@ export default function NotificacionesPage() {
         unread: 0,
         read: 0,
         tasks: 0,
+        appointments: 0,
       }
     );
   }, [notifications]);
@@ -238,6 +446,20 @@ export default function NotificacionesPage() {
     window.location.href = "/admin";
   };
 
+  const pushStatusLabel =
+    pushSupported === false
+      ? "No compatible"
+      : pushActive
+      ? "Activadas"
+      : pushPermission === "denied"
+      ? "Permiso denegado"
+      : "Desactivadas";
+  const pushStatusClass = pushActive
+    ? "bg-green-50 text-green-700"
+    : pushPermission === "denied" || pushSupported === false
+    ? "bg-red-50 text-red-700"
+    : "bg-yellow-50 text-yellow-700";
+
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#fdf8f6] px-6 py-10 text-[#352829]">
@@ -275,6 +497,66 @@ export default function NotificacionesPage() {
               Cerrar sesión
             </button>
           </div>
+        </div>
+
+        <div className="mb-8 rounded-[2rem] border border-[#ecd8d4] bg-white p-6 shadow-[0_20px_60px_rgba(189,123,131,0.08)]">
+          <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
+                Push móvil
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <h2 className="text-2xl font-light">
+                  Notificaciones del dispositivo
+                </h2>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${pushStatusClass}`}
+                >
+                  {pushStatusLabel}
+                </span>
+              </div>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6d5a58]">
+                Activa este dispositivo para recibir avisos del sistema aunque
+                no tengas abierta la página. En iPhone funciona cuando la app
+                está instalada en pantalla de inicio.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={activatePushNotifications}
+                disabled={
+                  pushLoading ||
+                  pushSupported === false ||
+                  pushPermission === "denied" ||
+                  !pushConfigured
+                }
+                className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {pushLoading ? "Procesando..." : "Activar notificaciones"}
+              </button>
+
+              <button
+                type="button"
+                onClick={sendTestPush}
+                disabled={pushLoading || !pushActive}
+                className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Enviar prueba
+              </button>
+            </div>
+          </div>
+
+          {pushMessage && (
+            <div
+              className={`mt-5 rounded-2xl px-5 py-4 text-sm font-medium ${getToastStyle(
+                pushMessage
+              )}`}
+            >
+              {pushMessage}
+            </div>
+          )}
         </div>
 
         <div className="mb-8 grid gap-4 md:grid-cols-4">
@@ -381,6 +663,9 @@ export default function NotificacionesPage() {
             >
               <option value="">Todos los tipos</option>
               <option value="tarea">Tareas</option>
+              <option value="cita_nueva">Nueva cita</option>
+              <option value="cita_actualizada">Cita actualizada</option>
+              <option value="cita_estado">Estado de cita</option>
             </select>
           </div>
 

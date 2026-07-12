@@ -115,6 +115,47 @@ function getPriorityBadgeClass(priority) {
   return "bg-green-50 text-green-700";
 }
 
+async function triggerPushForNotificationIds(notificationIds = []) {
+  const ids = [...new Set((notificationIds || []).filter(Boolean))];
+
+  if (ids.length === 0) return { error: null };
+
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (!token) {
+    return { error: { message: "Tu sesión expiró. Vuelve a iniciar sesión." } };
+  }
+
+  try {
+    const response = await fetch("/api/push/notify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        notification_ids: ids,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return {
+        error: {
+          message:
+            result.error ||
+            "La notificación interna se creó, pero no se pudo enviar push.",
+        },
+      };
+    }
+
+    return { error: null, result };
+  } catch (error) {
+    return { error };
+  }
+}
+
 export default function TareasPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -191,7 +232,16 @@ export default function TareasPage() {
       is_read: false,
     };
 
-    return await supabase.from("notifications").insert([notificationData]);
+    const { data, error } = await supabase
+      .from("notifications")
+      .insert([notificationData])
+      .select("id");
+
+    if (error) return { error };
+
+    return await triggerPushForNotificationIds(
+      (data || []).map((notification) => notification.id)
+    );
   };
 
   const filteredTasks = useMemo(() => {
@@ -350,7 +400,7 @@ export default function TareasPage() {
 
     if (notificationResult.error) {
       setMessage(
-        `Tarea creada correctamente, pero no se pudo crear la notificación: ${notificationResult.error.message}`
+        `Tarea creada correctamente, pero no se pudo enviar la notificación push: ${notificationResult.error.message}`
       );
       setSaving(false);
       return;
@@ -358,7 +408,7 @@ export default function TareasPage() {
 
     setMessage(
       createdTask.staff_id
-        ? "Tarea creada correctamente y notificación interna generada ✨"
+        ? "Tarea creada correctamente y notificación generada ✨"
         : "Tarea creada correctamente ✨"
     );
 
