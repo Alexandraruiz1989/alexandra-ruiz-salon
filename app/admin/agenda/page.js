@@ -1128,7 +1128,7 @@ const saveQuickClient = async () => {
   };
 
   const normalizedCurrentRole = normalizeRole(currentRole);
-  const canForceAgenda = ["admin", "encargada", "caja"].includes(
+  const canForceAgenda = ["admin", "encargada"].includes(
     normalizedCurrentRole
   );
 
@@ -3048,6 +3048,7 @@ if (adminNotificationResult.error) {
           saving={saving}
           acrylicWarning={acrylicWarning}
           loadingAcrylicWarning={loadingAcrylicWarning}
+          canForceAgenda={canForceAgenda}
           timeOptions={timeOptions}
           handleFormChange={handleFormChange}
           openQuickClientModal={openQuickClientModal}
@@ -3202,6 +3203,7 @@ function NewAppointmentSection({
   saving,
   acrylicWarning,
   loadingAcrylicWarning,
+  canForceAgenda,
   timeOptions,
   handleFormChange,
   openQuickClientModal,
@@ -4123,7 +4125,7 @@ const shouldShowNoClientFound =
             />
             {canForceAgenda
               ? "Forzar cita fuera de horario, disponibilidad o recursos"
-              : "Solo admin/encargada/caja pueden forzar citas"}
+              : "Solo admin/encargada pueden forzar citas"}
           </label>
 
           <div>
