@@ -5,6 +5,7 @@ import { useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { portalFetch } from "../components/portalApi";
 import { PortalMessage } from "../components/ClientPortalShell";
+import { getClientEmailRedirectUrl } from "../components/clientAuthRedirect";
 
 export default function ClienteRegistroPage() {
   const [form, setForm] = useState({
@@ -19,6 +20,7 @@ export default function ClienteRegistroPage() {
   const [tone, setTone] = useState("info");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [debugRedirect, setDebugRedirect] = useState("");
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -73,14 +75,15 @@ export default function ClienteRegistroPage() {
       return;
     }
 
-    const siteUrl =
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      (typeof window !== "undefined"
-        ? window.location.origin
-        : "https://www.alexandraruizsalon.com");
-    const cleanSiteUrl = String(siteUrl).replace(/\/$/, "");
-    const emailRedirectTo = `${cleanSiteUrl}/cliente/login?confirmed=1`;
+    const emailRedirectTo = getClientEmailRedirectUrl();
+
+    console.info("[cliente/registro] clientEmailRedirectTo", {
+      clientEmailRedirectTo: emailRedirectTo,
+    });
+
+    if (process.env.NODE_ENV !== "production") {
+      setDebugRedirect(emailRedirectTo);
+    }
 
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -238,6 +241,12 @@ export default function ClienteRegistroPage() {
             </div>
 
             <PortalMessage message={message} tone={tone} />
+
+            {process.env.NODE_ENV !== "production" && debugRedirect && (
+              <div className="rounded-2xl border border-[#ead8d4] bg-[#fff8f6] p-3 text-xs leading-5 text-[#765d5f]">
+                Debug redirect de confirmación: {debugRedirect}
+              </div>
+            )}
 
             <button
               type="submit"
