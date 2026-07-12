@@ -18,6 +18,8 @@ const emptyDashboard = {
   message: "",
 };
 
+const validInternalRoles = ["admin", "encargada", "tecnica", "caja", "product_owner"];
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -89,6 +91,14 @@ async function getInternalProfileForUser(user) {
   return profileByEmail || null;
 }
 
+function hasValidInternalAccess(profile) {
+  return (
+    profile &&
+    profile.active !== false &&
+    validInternalRoles.includes(String(profile.role || "").toLowerCase())
+  );
+}
+
 export default function AdminLoginPage() {
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -105,12 +115,12 @@ export default function AdminLoginPage() {
       if (data.session) {
         const profile = await getInternalProfileForUser(data.session.user);
 
-        if (!profile || profile.active === false) {
+        if (!hasValidInternalAccess(profile)) {
           await supabase.auth.signOut();
           setMessage(
             !profile
               ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
-              : "Tu acceso interno está desactivado."
+              : "Tu acceso interno no está activo o no tiene un rol válido."
           );
           setSession(null);
           setLoading(false);
@@ -134,13 +144,13 @@ export default function AdminLoginPage() {
 
       const profile = await getInternalProfileForUser(currentSession.user);
 
-      if (!profile || profile.active === false) {
+      if (!hasValidInternalAccess(profile)) {
         await supabase.auth.signOut();
         setSession(null);
         setMessage(
           !profile
             ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
-            : "Tu acceso interno está desactivado."
+            : "Tu acceso interno no está activo o no tiene un rol válido."
         );
         return;
       }
@@ -181,12 +191,12 @@ export default function AdminLoginPage() {
 
     const profile = await getInternalProfileForUser(data.session?.user);
 
-    if (!profile || profile.active === false) {
+    if (!hasValidInternalAccess(profile)) {
       await supabase.auth.signOut();
       setMessage(
         !profile
           ? "Este acceso es solo para el equipo interno. Si eres clienta, entra desde el portal de clientas."
-          : "Tu acceso interno está desactivado."
+          : "Tu acceso interno no está activo o no tiene un rol válido."
       );
       setSession(null);
       setLoginLoading(false);

@@ -11,11 +11,24 @@ export default function ClienteLoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState("info");
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     const checkSession = async () => {
       const session = await getPortalSession();
-      if (session) window.location.href = "/cliente/agenda";
+      if (session) {
+        window.location.href = "/cliente/agenda";
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+
+      if (params.get("confirmed") === "1") {
+        setTone("success");
+        setMessage(
+          "Tu correo fue confirmado. Ya puedes iniciar sesión para agendar tu cita."
+        );
+      }
     };
 
     checkSession();
@@ -84,14 +97,23 @@ export default function ClienteLoginPage() {
               <label className="mb-2 block text-sm text-[#765d5f]">
                 Contraseña
               </label>
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleChange}
-                required
-                className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
-              />
+              <div className="flex rounded-2xl border border-[#ead8d4] bg-[#fff8f6] focus-within:border-[#bd7b83]">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  name="password"
+                  value={form.password}
+                  onChange={handleChange}
+                  required
+                  className="min-w-0 flex-1 rounded-l-2xl bg-transparent px-4 py-3 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  className="shrink-0 px-4 text-sm text-[#bd7b83]"
+                >
+                  {showPassword ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
             </div>
 
             <PortalMessage message={message} tone={tone} />

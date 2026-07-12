@@ -12,10 +12,13 @@ export default function ClienteRegistroPage() {
     phone: "",
     email: "",
     password: "",
+    confirm_password: "",
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState("info");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -30,23 +33,64 @@ export default function ClienteRegistroPage() {
     const fullName = form.full_name.trim();
     const phone = form.phone.trim();
     const email = form.email.trim().toLowerCase();
+    const password = form.password;
+    const confirmPassword = form.confirm_password;
 
-    if (!fullName || !phone || !email || form.password.length < 6) {
+    if (!fullName || !phone || !email) {
       setTone("error");
       setMessage(
-        "Completa nombre, teléfono, correo y una contraseña de al menos 6 caracteres."
+        "Completa tu nombre, teléfono y correo para crear tu cuenta."
       );
       setLoading(false);
       return;
     }
 
+    if (!password) {
+      setTone("error");
+      setMessage("Escribe una contraseña.");
+      setLoading(false);
+      return;
+    }
+
+    if (!confirmPassword) {
+      setTone("error");
+      setMessage("Confirma tu contraseña.");
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setTone("error");
+      setMessage("La contraseña debe tener al menos 6 caracteres.");
+      setLoading(false);
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setTone("error");
+      setMessage("Las contraseñas no coinciden.");
+      setLoading(false);
+      return;
+    }
+
+    const siteUrl =
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (typeof window !== "undefined"
+        ? window.location.origin
+        : "https://www.alexandraruizsalon.com");
+    const cleanSiteUrl = String(siteUrl).replace(/\/$/, "");
+    const emailRedirectTo = `${cleanSiteUrl}/cliente/login?confirmed=1`;
+
     const { data, error } = await supabase.auth.signUp({
       email,
-      password: form.password,
+      password,
       options: {
+        emailRedirectTo,
         data: {
           full_name: fullName,
           phone,
+          role: "client",
           user_type: "clienta",
         },
       },
@@ -62,7 +106,7 @@ export default function ClienteRegistroPage() {
     if (!data.session) {
       setTone("success");
       setMessage(
-        "Cuenta creada. Si Supabase tiene confirmación por correo activa, revisa tu email para confirmar y después inicia sesión."
+        "Te enviamos un correo para confirmar tu cuenta. Revisa tu bandeja de entrada o spam. Después de confirmar, podrás entrar al portal para agendar."
       );
       setLoading(false);
       return;
@@ -78,7 +122,12 @@ export default function ClienteRegistroPage() {
         }),
       });
 
-      window.location.href = "/cliente/agenda";
+      await supabase.auth.signOut();
+      setTone("success");
+      setMessage(
+        "Te enviamos un correo para confirmar tu cuenta. Revisa tu bandeja de entrada o spam. Después de confirmar, podrás entrar al portal para agendar."
+      );
+      setLoading(false);
     } catch (profileError) {
       setTone("error");
       setMessage(profileError.message);
@@ -99,7 +148,7 @@ export default function ClienteRegistroPage() {
             existente usando tu correo o teléfono.
           </p>
 
-          <form onSubmit={handleSubmit} className="mt-7 space-y-4">
+          <form onSubmit={handleSubmit} className="mt-7 space-y-4" noValidate>
             <div>
               <label className="mb-2 block text-sm text-[#765d5f]">
                 Nombre completo
@@ -144,15 +193,48 @@ export default function ClienteRegistroPage() {
               <label className="mb-2 block text-sm text-[#765d5f]">
                 Contraseña
               </label>
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleChange}
-                required
-                minLength={6}
-                className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
-              />
+              <div className="flex rounded-2xl border border-[#ead8d4] bg-[#fff8f6] focus-within:border-[#bd7b83]">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  name="password"
+                  value={form.password}
+                  onChange={handleChange}
+                  required
+                  minLength={6}
+                  className="min-w-0 flex-1 rounded-l-2xl bg-transparent px-4 py-3 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  className="shrink-0 px-4 text-sm text-[#bd7b83]"
+                >
+                  {showPassword ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#765d5f]">
+                Confirmar contraseña
+              </label>
+              <div className="flex rounded-2xl border border-[#ead8d4] bg-[#fff8f6] focus-within:border-[#bd7b83]">
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  name="confirm_password"
+                  value={form.confirm_password}
+                  onChange={handleChange}
+                  required
+                  minLength={6}
+                  className="min-w-0 flex-1 rounded-l-2xl bg-transparent px-4 py-3 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((current) => !current)}
+                  className="shrink-0 px-4 text-sm text-[#bd7b83]"
+                >
+                  {showConfirmPassword ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
             </div>
 
             <PortalMessage message={message} tone={tone} />

@@ -71,6 +71,19 @@ const roleLabels = {
   product_owner: "Dueña productos",
 };
 
+function normalizeRole(value) {
+  return String(value || "").toLowerCase();
+}
+
+function hasValidInternalAccess(profile) {
+  const role = normalizeRole(profile?.role);
+  return Boolean(
+    profile &&
+      profile.active !== false &&
+      Object.prototype.hasOwnProperty.call(roleModulePermissions, role)
+  );
+}
+
 export default function AdminShell({
   title = "Panel administrativo",
   subtitle = "",
@@ -118,13 +131,13 @@ export default function AdminShell({
       .maybeSingle();
 
     if (!error && data) {
-      if (data.active === false) {
+      if (!hasValidInternalAccess(data)) {
         await supabase.auth.signOut();
         window.location.href = "/admin";
         return;
       }
 
-      setCurrentProfile(data);
+      setCurrentProfile({ ...data, role: normalizeRole(data.role) });
       setLoadingProfile(false);
       return;
     }
@@ -136,13 +149,16 @@ export default function AdminShell({
       .maybeSingle();
 
     if (!emailError && profileByEmail) {
-      if (profileByEmail.active === false) {
+      if (!hasValidInternalAccess(profileByEmail)) {
         await supabase.auth.signOut();
         window.location.href = "/admin";
         return;
       }
 
-      setCurrentProfile(profileByEmail);
+      setCurrentProfile({
+        ...profileByEmail,
+        role: normalizeRole(profileByEmail.role),
+      });
       setLoadingProfile(false);
       return;
     }
@@ -168,7 +184,7 @@ export default function AdminShell({
     window.location.href = "/admin";
   };
 
-  const profileRole = currentProfile?.role || "tecnica";
+  const profileRole = normalizeRole(currentProfile?.role) || "tecnica";
   const allowedModules =
     roleModulePermissions[profileRole] || roleModulePermissions.tecnica;
 
