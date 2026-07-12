@@ -6,6 +6,7 @@ import { supabase } from "../../lib/supabaseClient";
 
 const menuItems = [
   { key: "comisiones", label: "Comisiones" },
+  { key: "asistencia", label: "Asistencia" },
   { key: "ajustes", label: "Faltas / Retardos / Vacaciones" },
   { key: "sueldos", label: "Sueldos semanales" },
   { key: "imprimible", label: "Recibo imprimible" },
@@ -68,6 +69,22 @@ function getSalaryForPeriod(weeklySalary, startDate, endDate) {
 function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
+
+function formatTime(value) {
+  if (!value) return "-";
+  return String(value).slice(0, 5);
+}
+
+const attendanceLabels = {
+  pendiente: "Pendiente",
+  confirmada: "Confirmadas",
+  confirmada_llamada: "Confirmadas por llamada",
+  confirmada_mensaje: "Confirmadas por mensaje",
+  asistio: "Asistieron",
+  llego_retrasada: "Llegadas tarde",
+  cancelo: "Cancelaciones",
+  no_asistio: "No asistencias",
+};
 
 function Card({ children, className = "" }) {
   return (
@@ -155,6 +172,7 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
   const [payrollSettings, setPayrollSettings] = useState([]);
   const [paymentStaffTotals, setPaymentStaffTotals] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
+  const [attendanceAppointments, setAttendanceAppointments] = useState([]);
 
   const [salaryDrafts, setSalaryDrafts] = useState({});
   const [adjustmentForm, setAdjustmentForm] = useState({
@@ -239,7 +257,13 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
     setLoadingData(true);
     setMessage("");
 
-    const [staffResult, settingsResult, totalsResult, adjustmentsResult] =
+    const [
+      staffResult,
+      settingsResult,
+      totalsResult,
+      adjustmentsResult,
+      attendanceResult,
+    ] =
       await Promise.all([
         supabase.from("staff").select("*").order("full_name"),
 
@@ -279,6 +303,26 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
           .gte("adjustment_date", startDate)
           .lte("adjustment_date", endDate)
           .order("adjustment_date", { ascending: false }),
+
+        supabase
+          .from("appointments")
+          .select(
+            `
+            *,
+            clients (*),
+            appointment_services (
+              id,
+              staff (
+                id,
+                full_name
+              )
+            )
+          `
+          )
+          .gte("appointment_date", startDate)
+          .lte("appointment_date", endDate)
+          .order("appointment_date", { ascending: false })
+          .order("start_time", { ascending: false }),
       ]);
 
     if (staffResult.error) {
@@ -314,6 +358,14 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
       );
     } else {
       setAdjustments(adjustmentsResult.data || []);
+    }
+
+    if (attendanceResult.error) {
+      setMessage(
+        `No se pudo cargar reporte de asistencia: ${attendanceResult.error.message}`
+      );
+    } else {
+      setAttendanceAppointments(attendanceResult.data || []);
     }
 
     setLoadingData(false);
@@ -594,6 +646,37 @@ periodDays: getDaysBetween(startDate, endDate),
     );
   }, [reportRows]);
 
+  const attendanceReport = useMemo(() => {
+    const statusCounts = {};
+    const lateByStaff = {};
+
+    attendanceAppointments.forEach((appointment) => {
+      const status = String(appointment.attendance_status || "pendiente").toLowerCase();
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+
+      if (status === "llego_retrasada") {
+        const services = appointment.appointment_services || [];
+        const staffName =
+          services[0]?.staff?.full_name || "Sin técnica registrada";
+        const minutes = Number(appointment.arrived_late_minutes || 0);
+
+        if (!lateByStaff[staffName]) {
+          lateByStaff[staffName] = { staffName, count: 0, minutes: 0 };
+        }
+
+        lateByStaff[staffName].count += 1;
+        lateByStaff[staffName].minutes += minutes;
+      }
+    });
+
+    return {
+      statusCounts,
+      lateByStaff: Object.values(lateByStaff).sort(
+        (a, b) => b.minutes - a.minutes
+      ),
+    };
+  }, [attendanceAppointments]);
+
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
@@ -851,6 +934,115 @@ periodDays: getDaysBetween(startDate, endDate),
                   </tr>
                 </tbody>
               </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeSection === "asistencia" && (
+        <Card>
+          <SectionHeader
+            eyebrow="Asistencia"
+            title="Confirmaciones, cancelaciones y retrasos"
+            description="Resumen operativo de asistencia por el periodo seleccionado."
+          />
+
+          {loadingData ? (
+            <p className="text-sm text-[#68777c]">Cargando asistencia...</p>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-4">
+                {Object.entries(attendanceLabels).map(([status, label]) => (
+                  <div key={status} className="rounded-2xl bg-[#f7f9fa] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-[#bd7b83]">
+                      {label}
+                    </p>
+                    <p className="mt-3 text-3xl font-light">
+                      {attendanceReport.statusCounts[status] || 0}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="rounded-2xl bg-[#f7f9fa] p-5">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+                    Retrasos por técnica
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    {attendanceReport.lateByStaff.length === 0 ? (
+                      <p className="text-sm text-[#68777c]">
+                        No hay retrasos registrados en este periodo.
+                      </p>
+                    ) : (
+                      attendanceReport.lateByStaff.map((row) => (
+                        <div
+                          key={row.staffName}
+                          className="rounded-2xl bg-white px-4 py-3 text-sm"
+                        >
+                          <p className="font-medium text-[#263238]">
+                            {row.staffName}
+                          </p>
+                          <p className="text-[#68777c]">
+                            {row.count} cita{row.count === 1 ? "" : "s"} ·{" "}
+                            {row.minutes} min acumulados
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-[#f7f9fa] p-5">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+                    Historial del periodo
+                  </p>
+                  <div className="mt-4 max-h-[520px] space-y-3 overflow-y-auto pr-1">
+                    {attendanceAppointments.length === 0 ? (
+                      <p className="text-sm text-[#68777c]">
+                        No hay citas en este periodo.
+                      </p>
+                    ) : (
+                      attendanceAppointments.slice(0, 30).map((appointment) => {
+                        const status = String(
+                          appointment.attendance_status || "pendiente"
+                        ).toLowerCase();
+
+                        return (
+                          <div
+                            key={appointment.id}
+                            className="rounded-2xl bg-white px-4 py-3 text-sm"
+                          >
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="font-medium text-[#263238]">
+                                  {appointment.clients?.client_number
+                                    ? `${appointment.clients.client_number} · `
+                                    : ""}
+                                  {appointment.clients?.full_name || "Clienta"}
+                                </p>
+                                <p className="text-[#68777c]">
+                                  {appointment.appointment_date} ·{" "}
+                                  {formatTime(appointment.start_time)}
+                                </p>
+                                {appointment.attendance_notes && (
+                                  <p className="mt-2 text-[#68777c]">
+                                    {appointment.attendance_notes}
+                                  </p>
+                                )}
+                              </div>
+
+                              <span className="rounded-full bg-[#fff6fb] px-3 py-1 text-xs text-[#8a5f63]">
+                                {attendanceLabels[status] || "Pendiente"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </Card>

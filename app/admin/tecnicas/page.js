@@ -157,6 +157,84 @@ function formatTime(time) {
   return time.slice(0, 5);
 }
 
+function addMinutesToTime(time, minutes) {
+  if (!time) return "";
+
+  const [hours, mins] = String(time).slice(0, 5).split(":").map(Number);
+  const date = new Date();
+  date.setHours(hours || 0);
+  date.setMinutes((mins || 0) + Number(minutes || 0));
+
+  return `${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes()
+  ).padStart(2, "0")}`;
+}
+
+function addDaysToISO(dateString, days) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function getDatesBetween(startDate, endDate) {
+  if (!startDate || !endDate) return [];
+
+  const dates = [];
+  let cursor = startDate;
+
+  while (cursor <= endDate) {
+    dates.push(cursor);
+    cursor = addDaysToISO(cursor, 1);
+  }
+
+  return dates;
+}
+
+function getScheduleForDate(staffId, dateString, schedules = []) {
+  const day = new Date(`${dateString}T00:00:00`).getDay();
+
+  return schedules.find(
+    (schedule) =>
+      schedule.staff_id === staffId &&
+      Number(schedule.day_of_week) === Number(day)
+  );
+}
+
+function getIncidenceBlockRange(incidence, dateString, schedules = []) {
+  const eventType = String(incidence.event_type || "").toLowerCase();
+
+  if (incidence.status === "cancelada" || eventType === "descanso_trabajado") {
+    return null;
+  }
+
+  const schedule = getScheduleForDate(incidence.staff_id, dateString, schedules);
+  const scheduleStart = schedule?.start_time || "08:00";
+  const scheduleEnd = schedule?.end_time || "21:00";
+  const minutes = Number(incidence.minutes_late || 0);
+
+  if (eventType === "retardo" && minutes > 0) {
+    return {
+      start_time: scheduleStart,
+      end_time: addMinutesToTime(scheduleStart, minutes),
+      is_all_day: false,
+    };
+  }
+
+  if (eventType === "salida_temprano" && minutes > 0) {
+    return {
+      start_time: addMinutesToTime(scheduleEnd, -minutes),
+      end_time: scheduleEnd,
+      is_all_day: false,
+    };
+  }
+
+  return {
+    start_time: scheduleStart,
+    end_time: scheduleEnd,
+    is_all_day: true,
+  };
+}
+
 function getDayLabel(value) {
   return days.find((day) => Number(day.value) === Number(value))?.label || "";
 }
@@ -1072,6 +1150,58 @@ export default function TecnicasPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const syncIncidenceBlocks = async (incidenceId, incidenceData) => {
+    if (!incidenceId) return { error: null };
+
+    const { error: deleteBlocksError } = await supabase
+      .from("staff_time_blocks")
+      .delete()
+      .eq("source_type", "staff_incidence")
+      .eq("source_id", incidenceId);
+
+    if (deleteBlocksError) {
+      return { error: deleteBlocksError };
+    }
+
+    if (incidenceData.status === "cancelada") {
+      return { error: null };
+    }
+
+    const rows = getDatesBetween(
+      incidenceData.start_date,
+      incidenceData.end_date
+    )
+      .map((date) => {
+        const range = getIncidenceBlockRange(incidenceData, date, schedules);
+
+        if (!range || range.start_time >= range.end_time) return null;
+
+        return {
+          staff_id: incidenceData.staff_id,
+          block_date: date,
+          start_time: range.start_time,
+          end_time: range.end_time,
+          block_type: incidenceData.event_type || "incidencia",
+          title:
+            incidenceData.reason ||
+            getIncidenceLabel(incidenceData.event_type),
+          notes: incidenceData.notes || null,
+          is_all_day: range.is_all_day,
+          source_type: "staff_incidence",
+          source_id: incidenceId,
+        };
+      })
+      .filter(Boolean);
+
+    if (rows.length === 0) return { error: null };
+
+    const { error: insertBlocksError } = await supabase
+      .from("staff_time_blocks")
+      .insert(rows);
+
+    return { error: insertBlocksError };
+  };
+
   const handleSaveIncidence = async () => {
     setSavingIncidence(true);
     clearMessagesExcept("incidence");
@@ -1121,16 +1251,27 @@ export default function TecnicasPage() {
         return;
       }
 
+      const { error: blocksError } = await syncIncidenceBlocks(
+        editingIncidenceId,
+        incidenceData
+      );
+
       await loadData();
       resetIncidenceForm();
-      setIncidenceMessage("Incidencia actualizada correctamente ✨");
+      setIncidenceMessage(
+        blocksError
+          ? `Incidencia actualizada, pero no se pudieron sincronizar bloqueos de agenda. Ejecuta el SQL actualizado. Detalle: ${blocksError.message}`
+          : "Incidencia actualizada correctamente y agenda bloqueada ✨"
+      );
       setSavingIncidence(false);
       return;
     }
 
-    const { error } = await supabase
+    const { data: createdIncidence, error } = await supabase
       .from("staff_vacations")
-      .insert([incidenceData]);
+      .insert([incidenceData])
+      .select("id")
+      .single();
 
     if (error) {
       setIncidenceMessage(
@@ -1140,15 +1281,30 @@ export default function TecnicasPage() {
       return;
     }
 
+    const { error: blocksError } = await syncIncidenceBlocks(
+      createdIncidence?.id,
+      incidenceData
+    );
+
     await loadData();
     resetIncidenceForm();
-    setIncidenceMessage("Incidencia registrada correctamente ✨");
+    setIncidenceMessage(
+      blocksError
+        ? `Incidencia registrada, pero no se pudieron crear bloqueos de agenda. Ejecuta el SQL actualizado. Detalle: ${blocksError.message}`
+        : "Incidencia registrada correctamente y agenda bloqueada ✨"
+    );
     setSavingIncidence(false);
   };
 
   const deleteIncidence = async (incidence) => {
     clearMessagesExcept("list");
     setListMessage("Eliminando incidencia...");
+
+    await supabase
+      .from("staff_time_blocks")
+      .delete()
+      .eq("source_type", "staff_incidence")
+      .eq("source_id", incidence.id);
 
     const { error } = await supabase
       .from("staff_vacations")
@@ -2041,6 +2197,12 @@ export default function TecnicasPage() {
               }
               description="Registra vacaciones, permisos, faltas, retardos, descansos trabajados u otros movimientos."
             />
+
+            <div className="mb-5 rounded-2xl bg-[#fff6fb] p-4 text-sm leading-6 text-[#68777c]">
+              Las incidencias activas bloquean automáticamente la agenda de la
+              colaboradora. Faltas, permisos, vacaciones e incapacidades bloquean
+              la jornada; retardos y salidas temprano usan los minutos capturados.
+            </div>
 
             <div className="space-y-4">
               <div>

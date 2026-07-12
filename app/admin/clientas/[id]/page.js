@@ -27,6 +27,39 @@ function formatDate(value) {
   });
 }
 
+const attendanceLabels = {
+  pendiente: "Pendiente",
+  confirmada: "Confirmó",
+  confirmada_llamada: "Confirmó por llamada",
+  confirmada_mensaje: "Confirmó por mensaje",
+  asistio: "Asistió",
+  llego_retrasada: "Llegó retrasada",
+  cancelo: "Canceló",
+  no_asistio: "No asistió",
+};
+
+function getAttendanceLabel(status) {
+  return attendanceLabels[String(status || "pendiente").toLowerCase()] || "Pendiente";
+}
+
+function getAttendanceBadgeClass(status) {
+  const normalized = String(status || "pendiente").toLowerCase();
+
+  if (normalized.includes("confirmada") || normalized === "asistio") {
+    return "bg-green-50 text-green-700";
+  }
+
+  if (normalized === "llego_retrasada") {
+    return "bg-red-50 text-red-700";
+  }
+
+  if (normalized === "cancelo" || normalized === "no_asistio") {
+    return "bg-red-100 text-red-800";
+  }
+
+  return "bg-yellow-50 text-yellow-700";
+}
+
 function Card({ children, className = "" }) {
   return (
     <div className={`rounded-[1.5rem] bg-white p-6 shadow-sm ${className}`}>
@@ -260,7 +293,8 @@ export default function ClientHistoryPage() {
               description="Información general registrada en el sistema."
             />
 
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-5">
+              <InfoBox label="Número" value={client.client_number || "-"} />
               <InfoBox label="WhatsApp" value={client.phone || "-"} />
               <InfoBox label="Correo" value={client.email || "-"} />
               <InfoBox label="Cumpleaños" value={client.birthday || "-"} />
@@ -335,6 +369,11 @@ export default function ClientHistoryPage() {
                 <div className="space-y-4">
                   {appointments.map((appointment) => {
                     const services = appointment.appointment_services || [];
+                    const payment = payments.find(
+                      (item) => item.appointment_id === appointment.id
+                    );
+                    const attendanceStatus =
+                      appointment.attendance_status || "pendiente";
 
                     return (
                       <div
@@ -343,9 +382,23 @@ export default function ClientHistoryPage() {
                       >
                         <div className="flex flex-col justify-between gap-4 md:flex-row">
                           <div>
-                            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                              {appointment.status || "agendada"}
-                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <span className="rounded-full bg-[#f7eeee] px-3 py-1 text-xs font-medium text-[#8a5f63]">
+                                {appointment.status || "agendada"}
+                              </span>
+                              <span
+                                className={`rounded-full px-3 py-1 text-xs font-medium ${getAttendanceBadgeClass(
+                                  attendanceStatus
+                                )}`}
+                              >
+                                {getAttendanceLabel(attendanceStatus)}
+                              </span>
+                              {payment && (
+                                <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
+                                  Pagada
+                                </span>
+                              )}
+                            </div>
                             <h3 className="mt-2 text-xl font-light">
                               {formatDate(appointment.appointment_date)}
                             </h3>
@@ -407,11 +460,31 @@ export default function ClientHistoryPage() {
                         {appointment.notes && (
                           <div className="mt-4 rounded-2xl bg-[#fff6fb] p-4">
                             <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-                              Notas de la cita
+                              Observaciones internas
                             </p>
                             <p className="mt-2 text-sm text-[#68777c]">
                               {appointment.notes}
                             </p>
+                          </div>
+                        )}
+
+                        {(appointment.attendance_notes ||
+                          Number(appointment.arrived_late_minutes || 0) > 0) && (
+                          <div className="mt-4 rounded-2xl bg-[#f7f9fa] p-4">
+                            <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                              Seguimiento de asistencia
+                            </p>
+                            {Number(appointment.arrived_late_minutes || 0) > 0 && (
+                              <p className="mt-2 text-sm text-[#68777c]">
+                                Retraso registrado:{" "}
+                                {appointment.arrived_late_minutes} min
+                              </p>
+                            )}
+                            {appointment.attendance_notes && (
+                              <p className="mt-2 text-sm text-[#68777c]">
+                                {appointment.attendance_notes}
+                              </p>
+                            )}
                           </div>
                         )}
 

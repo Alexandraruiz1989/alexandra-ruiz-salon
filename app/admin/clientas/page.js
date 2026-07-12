@@ -147,7 +147,8 @@ export default function ClientasPage() {
       return (
         client.full_name?.toLowerCase().includes(term) ||
         client.phone?.toLowerCase().includes(term) ||
-        client.email?.toLowerCase().includes(term)
+        client.email?.toLowerCase().includes(term) ||
+        client.client_number?.toLowerCase().includes(term)
       );
     });
   }, [clients, search]);
@@ -360,7 +361,7 @@ export default function ClientasPage() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="mt-6 w-full rounded-2xl border border-[#ead2cf] bg-[#fcf7f6] px-4 py-3 outline-none"
-              placeholder="Buscar por nombre, teléfono o correo..."
+              placeholder="Buscar por número, nombre, teléfono o correo..."
             />
 
             <div className="mt-6 space-y-4">
@@ -382,7 +383,11 @@ export default function ClientasPage() {
                           {client.full_name}
                         </h3>
 
-                        <p className="mt-2 text-sm text-[#6d5a58]">
+                        <p className="mt-2 inline-flex rounded-full bg-white px-3 py-1 text-xs font-medium text-[#bd7b83]">
+                          {client.client_number || "Sin número asignado"}
+                        </p>
+
+                        <p className="mt-3 text-sm text-[#6d5a58]">
                           WhatsApp: {client.phone}
                         </p>
 

@@ -14,6 +14,17 @@ const agendaMenuItems = [
   { key: "disponibilidad", label: "Buscar disponibilidad" },
 ];
 
+const attendanceOptions = [
+  { value: "pendiente", label: "Pendiente", source: null },
+  { value: "confirmada", label: "Confirmó", source: "general" },
+  { value: "confirmada_llamada", label: "Confirmó por llamada", source: "llamada" },
+  { value: "confirmada_mensaje", label: "Confirmó por mensaje", source: "mensaje" },
+  { value: "asistio", label: "Asistió", source: "presencial" },
+  { value: "llego_retrasada", label: "Llegó retrasada", source: "presencial" },
+  { value: "cancelo", label: "Canceló", source: "manual" },
+  { value: "no_asistio", label: "No asistió", source: "manual" },
+];
+
 const emptyServiceLine = {
   service_id: "",
   service_search: "",
@@ -104,6 +115,54 @@ function formatMoney(value) {
 function formatTime(time) {
   if (!time) return "";
   return time.slice(0, 5);
+}
+
+function getAttendanceOption(status) {
+  const normalized = String(status || "pendiente").toLowerCase();
+  return (
+    attendanceOptions.find((option) => option.value === normalized) ||
+    attendanceOptions[0]
+  );
+}
+
+function getAttendanceAccentClass(status) {
+  const normalized = String(status || "pendiente").toLowerCase();
+
+  if (normalized.includes("confirmada") || normalized === "asistio") {
+    return "border-l-green-400";
+  }
+
+  if (normalized === "llego_retrasada") {
+    return "border-l-green-400";
+  }
+
+  if (normalized === "cancelo") {
+    return "border-l-red-500";
+  }
+
+  if (normalized === "no_asistio") {
+    return "border-l-red-900";
+  }
+
+  return "border-l-yellow-300";
+}
+
+function getAttendanceBadgeClass(status) {
+  const normalized = String(status || "pendiente").toLowerCase();
+
+  if (normalized.includes("confirmada") || normalized === "asistio") {
+    return "bg-green-50 text-green-700";
+  }
+
+  if (normalized === "llego_retrasada") {
+    return "bg-red-50 text-red-700";
+  }
+
+  if (normalized === "cancelo" || normalized === "no_asistio") {
+    return "bg-red-100 text-red-800";
+  }
+
+  return "bg-yellow-50 text-yellow-700";
 }
 
 function normalizeServiceText(text) {
@@ -638,10 +697,7 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
         .select(
           `
           *,
-          clients (
-            full_name,
-            phone
-          ),
+          clients (*),
           appointment_services (
             id,
             service_id,
@@ -709,10 +765,7 @@ const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
         .select(
           `
           *,
-          clients (
-            full_name,
-            phone
-          ),
+          clients (*),
           appointment_services (
             id,
             service_id,
@@ -1376,6 +1429,18 @@ const getPaymentForAppointment = (appointmentId) => {
 
   return payments.find((payment) => payment.appointment_id === appointmentId);
 };
+
+const handleAppointmentLocalUpdate = (appointmentId, changes) => {
+  if (!appointmentId) return;
+
+  const applyChanges = (appointment) =>
+    appointment?.id === appointmentId ? { ...appointment, ...changes } : appointment;
+
+  setAppointments((current) => current.map(applyChanges));
+  setRangeAppointments((current) => current.map(applyChanges));
+  setSelectedAppointment((current) => applyChanges(current));
+};
+
   const openEditAppointment = (appointment) => {
     if (!appointment) return;
 
@@ -2007,6 +2072,10 @@ const handleSubmit = async () => {
       notes: form.notes.trim() || null,
     };
 
+    if (!editingAppointmentId) {
+      appointmentData.attendance_status = "pendiente";
+    }
+
     let appointment = null;
     const wasEditing = Boolean(editingAppointmentId);
     let designImageWarning = "";
@@ -2397,6 +2466,7 @@ await createAppointmentFollowups(appointment);
           appointment={selectedAppointment}
           onClose={() => setSelectedAppointment(null)}
           onEdit={() => openEditAppointment(selectedAppointment)}
+          onAppointmentUpdated={handleAppointmentLocalUpdate}
         />
       )}
       {showQuickClientModal && (
@@ -2455,7 +2525,9 @@ function NewAppointmentSection({
 
   const [clientSearch, setClientSearch] = useState(
     selectedClient
-      ? `${selectedClient.full_name || "Sin nombre"}${
+      ? `${selectedClient.client_number ? `${selectedClient.client_number} · ` : ""}${
+          selectedClient.full_name || "Sin nombre"
+        }${
           selectedClient.phone ? ` - ${selectedClient.phone}` : ""
         }`
       : ""
@@ -2477,7 +2549,9 @@ function NewAppointmentSection({
     }
 
     setClientSearch(
-      `${selectedClient.full_name || "Sin nombre"}${
+      `${selectedClient.client_number ? `${selectedClient.client_number} · ` : ""}${
+        selectedClient.full_name || "Sin nombre"
+      }${
         selectedClient.phone ? ` - ${selectedClient.phone}` : ""
       }`
     );
@@ -2494,7 +2568,9 @@ function NewAppointmentSection({
     });
 
     setClientSearch(
-      `${client.full_name || "Sin nombre"}${
+      `${client.client_number ? `${client.client_number} · ` : ""}${
+        client.full_name || "Sin nombre"
+      }${
         client.phone ? ` - ${client.phone}` : ""
       }`
     );
@@ -2509,11 +2585,13 @@ function NewAppointmentSection({
   const name = String(client.full_name || "").toLowerCase();
   const phone = String(client.phone || "").toLowerCase();
   const email = String(client.email || "").toLowerCase();
+  const clientNumber = String(client.client_number || "").toLowerCase();
 
   return (
     name.includes(search) ||
     phone.includes(search) ||
-    email.includes(search)
+    email.includes(search) ||
+    clientNumber.includes(search)
   );
 });
 
@@ -2560,7 +2638,7 @@ const shouldShowNoClientFound =
       });
     }}
     onFocus={() => setShowClientResults(true)}
-    placeholder="Buscar por nombre, WhatsApp o correo..."
+    placeholder="Buscar por número, nombre, WhatsApp o correo..."
     className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
   />
 
@@ -2575,6 +2653,7 @@ const shouldShowNoClientFound =
           className="block w-full rounded-xl px-4 py-3 text-left text-sm transition hover:bg-[#f7eeee]"
         >
           <span className="block font-medium text-[#263238]">
+            {client.client_number ? `${client.client_number} · ` : ""}
             {client.full_name || "Sin nombre"}
           </span>
           <span className="text-xs text-[#68777c]">
@@ -2594,7 +2673,9 @@ const shouldShowNoClientFound =
 
   {form.client_id && selectedClient && (
     <p className="mt-2 text-xs text-[#68777c]">
-      Seleccionada: {selectedClient.full_name}{" "}
+      Seleccionada:{" "}
+      {selectedClient.client_number ? `${selectedClient.client_number} · ` : ""}
+      {selectedClient.full_name}{" "}
       {selectedClient.phone ? `· ${selectedClient.phone}` : ""}
     </p>
   )}
@@ -3299,7 +3380,7 @@ const shouldShowNoClientFound =
             value={form.notes}
             onChange={handleFormChange}
             className="min-h-24 w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
-            placeholder="Notas generales de la cita..."
+            placeholder="Observaciones internas: siguiente cita necesita retiro, tiene evento, llegó con desprendimiento, prefiere tonos naturales..."
           />
 
           <label className="flex items-center gap-2 rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
@@ -3593,9 +3674,9 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         event.stopPropagation();
         onOpen(item.appointment);
       }}
-      className={`relative flex h-full min-h-16 cursor-pointer flex-col justify-center rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
-        payment ? "border-l-4 border-green-400 pl-4" : ""
-      }`}
+      className={`relative flex h-full min-h-16 cursor-pointer flex-col justify-center rounded-xl border-l-4 px-3 py-2 text-xs text-white shadow-sm ${getAttendanceAccentClass(
+        item.appointment?.attendance_status
+      )}`}
       style={{
         backgroundColor: item.staff?.color || person?.color || "#bd7b83",
       }}
@@ -3631,10 +3712,19 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         {item.services?.name || "Servicio"}
       </p>
       {!compact && (
-        <p className="mt-1 text-[11px] text-white/85">
-          {person?.full_name || item.staff?.full_name || "Técnica"} ·{" "}
-          {payment ? "Pagada" : "Pendiente de cobro"}
-        </p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <span className="rounded-full bg-white/20 px-2 py-1 text-[10px] text-white">
+            {getAttendanceOption(item.appointment?.attendance_status).label}
+          </span>
+          <span className="rounded-full bg-white/20 px-2 py-1 text-[10px] text-white">
+            {person?.full_name || item.staff?.full_name || "Técnica"}
+          </span>
+          {item.appointment?.attendance_status === "llego_retrasada" && (
+            <span className="rounded-full bg-red-600 px-2 py-1 text-[10px] text-white">
+              Retraso
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -4154,11 +4244,17 @@ function normalizeRole(role) {
   return String(role || "tecnica").trim().toLowerCase();
 }
 
-function AppointmentDetailModal({ appointment, onClose, onEdit }) {
+function AppointmentDetailModal({
+  appointment,
+  onClose,
+  onEdit,
+  onAppointmentUpdated,
+}) {
   const services = appointment.appointment_services || [];
   const appointmentExtras = appointment.appointment_extra_items || [];
   const designImageUrl = appointment.design_image_url || "";
   const clientName = appointment.clients?.full_name || "";
+  const clientNumber = appointment.clients?.client_number || "";
  const clientFirstName = getClientFirstName(clientName);
   const clientPhone = appointment.clients?.phone || "";
   const appointmentTime = formatTime(appointment.start_time);
@@ -4168,6 +4264,22 @@ function AppointmentDetailModal({ appointment, onClose, onEdit }) {
   const [previousAppointment, setPreviousAppointment] = useState(null);
   const [loadingPreviousAppointment, setLoadingPreviousAppointment] =
     useState(true);
+  const [attendanceForm, setAttendanceForm] = useState({
+    attendance_status: appointment.attendance_status || "pendiente",
+    attendance_notes: appointment.attendance_notes || "",
+    arrived_late_minutes: appointment.arrived_late_minutes || "",
+  });
+  const [attendanceMessage, setAttendanceMessage] = useState("");
+  const [savingAttendance, setSavingAttendance] = useState(false);
+
+useEffect(() => {
+  setAttendanceForm({
+    attendance_status: appointment.attendance_status || "pendiente",
+    attendance_notes: appointment.attendance_notes || "",
+    arrived_late_minutes: appointment.arrived_late_minutes || "",
+  });
+  setAttendanceMessage("");
+}, [appointment.id, appointment.attendance_status, appointment.attendance_notes, appointment.arrived_late_minutes]);
 
 useEffect(() => {
   const loadRole = async () => {
@@ -4241,7 +4353,68 @@ useEffect(() => {
 
 const normalizedRole = normalizeRole(currentRole);
 const isAdmin = normalizedRole === "admin";
+const canUpdateAttendance = ["admin", "encargada"].includes(normalizedRole);
 const canUseManualWhatsApp = normalizedRole !== "tecnica";
+const currentAttendanceOption = getAttendanceOption(
+  attendanceForm.attendance_status
+);
+
+const handleAttendanceStatusChange = (value) => {
+  const option = getAttendanceOption(value);
+
+  setAttendanceForm((current) => ({
+    ...current,
+    attendance_status: value,
+    arrived_late_minutes:
+      value === "llego_retrasada" ? current.arrived_late_minutes : "",
+    attendance_source: option.source,
+  }));
+};
+
+const saveAttendanceStatus = async () => {
+  setAttendanceMessage("");
+
+  if (!canUpdateAttendance) {
+    setAttendanceMessage("Solo admin o encargada pueden actualizar asistencia.");
+    return;
+  }
+
+  const selectedStatus = attendanceForm.attendance_status || "pendiente";
+  const option = getAttendanceOption(selectedStatus);
+  const now = new Date().toISOString();
+
+  const payload = {
+    attendance_status: selectedStatus,
+    attendance_source: option.source,
+    attendance_notes: attendanceForm.attendance_notes.trim() || null,
+    arrived_late_minutes:
+      selectedStatus === "llego_retrasada"
+        ? Number(attendanceForm.arrived_late_minutes || 0)
+        : null,
+    confirmed_at: selectedStatus.includes("confirmada") ? now : appointment.confirmed_at || null,
+    cancelled_at: selectedStatus === "cancelo" ? now : null,
+    no_show_at: selectedStatus === "no_asistio" ? now : null,
+  };
+
+  setSavingAttendance(true);
+
+  const { error } = await supabase
+    .from("appointments")
+    .update(payload)
+    .eq("id", appointment.id);
+
+  if (error) {
+    setAttendanceMessage(
+      `No se pudo actualizar asistencia. Ejecuta el SQL de agenda si faltan columnas. Detalle: ${error.message}`
+    );
+    setSavingAttendance(false);
+    return;
+  }
+
+  onAppointmentUpdated?.(appointment.id, payload);
+  setAttendanceMessage("Estado de asistencia actualizado correctamente ✨");
+  setSavingAttendance(false);
+};
 
   const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
 
@@ -4412,6 +4585,131 @@ const deleteAppointment = async () => {
           {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
           {formatTime(appointment.end_time)}
         </p>
+
+        {clientNumber && (
+          <p className="mt-2 inline-flex rounded-full bg-[#f7eeee] px-3 py-1 text-xs font-medium text-[#8a5f63]">
+            Número de clienta: {clientNumber}
+          </p>
+        )}
+
+        <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                Asistencia / seguimiento
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${getAttendanceBadgeClass(
+                    attendanceForm.attendance_status
+                  )}`}
+                >
+                  {currentAttendanceOption.label}
+                </span>
+                {attendanceForm.attendance_status === "llego_retrasada" &&
+                  Number(attendanceForm.arrived_late_minutes || 0) > 0 && (
+                    <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
+                      Retraso: {attendanceForm.arrived_late_minutes} min
+                    </span>
+                  )}
+              </div>
+              {attendanceForm.attendance_notes && (
+                <p className="mt-3 text-sm leading-6 text-[#68777c]">
+                  {attendanceForm.attendance_notes}
+                </p>
+              )}
+            </div>
+
+            {!canUpdateAttendance && (
+              <p className="text-xs text-[#8a969a]">
+                Visible para técnicas. Edición disponible para admin/encargada.
+              </p>
+            )}
+          </div>
+
+          {canUpdateAttendance && (
+            <div className="mt-4 grid gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm text-[#68777c]">
+                    Estado
+                  </label>
+                  <select
+                    value={attendanceForm.attendance_status}
+                    onChange={(event) =>
+                      handleAttendanceStatusChange(event.target.value)
+                    }
+                    className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                  >
+                    {attendanceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {attendanceForm.attendance_status === "llego_retrasada" && (
+                  <div>
+                    <label className="mb-2 block text-sm text-[#68777c]">
+                      Minutos de retraso
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={attendanceForm.arrived_late_minutes}
+                      onChange={(event) =>
+                        setAttendanceForm((current) => ({
+                          ...current,
+                          arrived_late_minutes: event.target.value,
+                        }))
+                      }
+                      className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                      placeholder="Ej. 15"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {["llego_retrasada", "cancelo", "no_asistio"].includes(
+                attendanceForm.attendance_status
+              ) && (
+                <textarea
+                  value={attendanceForm.attendance_notes}
+                  onChange={(event) =>
+                    setAttendanceForm((current) => ({
+                      ...current,
+                      attendance_notes: event.target.value,
+                    }))
+                  }
+                  className="min-h-24 w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
+                  placeholder="Nota interna de asistencia, cancelación o retraso..."
+                />
+              )}
+
+              {attendanceMessage && (
+                <div
+                  className={`rounded-2xl px-4 py-3 text-sm font-medium ${
+                    attendanceMessage.includes("correctamente")
+                      ? "bg-green-600 text-white"
+                      : "bg-red-600 text-white"
+                  }`}
+                >
+                  {attendanceMessage}
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={savingAttendance}
+                onClick={saveAttendanceStatus}
+                className="w-full rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:opacity-60 sm:w-fit"
+              >
+                {savingAttendance ? "Guardando..." : "Guardar asistencia"}
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="mt-6 rounded-2xl bg-[#fff6fb] p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
@@ -4665,7 +4963,7 @@ const deleteAppointment = async () => {
         {appointment.notes && (
           <div className="mt-6 rounded-2xl bg-[#fff6fb] p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-              Notas generales
+              Observaciones internas
             </p>
             <p className="mt-2 text-sm leading-6 text-[#68777c]">
               {appointment.notes}
