@@ -103,8 +103,17 @@ create index if not exists staff_time_blocks_source_idx
 create index if not exists staff_time_blocks_staff_date_idx
   on public.staff_time_blocks (staff_id, block_date, start_time, end_time);
 
+alter table public.staff
+  add column if not exists photo_url text null,
+  add column if not exists google_calendar_email text null;
+
+create index if not exists notifications_staff_unread_idx
+  on public.notifications (staff_id, is_read, created_at desc);
+
 grant select, insert, update, delete on public.staff_time_blocks to authenticated;
 grant select, update on public.appointments to authenticated;
 grant select, insert, update on public.clients to authenticated;
+grant select, update on public.staff to authenticated;
+grant select, insert, update, delete on public.notifications to authenticated;
 grant usage, select on sequence public.clients_client_number_seq to authenticated;
 grant execute on function public.assign_client_number() to authenticated;

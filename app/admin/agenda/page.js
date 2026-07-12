@@ -540,6 +540,10 @@ const [appointmentExtraLines, setAppointmentExtraLines] = useState([]);
 const [designImageFile, setDesignImageFile] = useState(null);
 const [acrylicWarning, setAcrylicWarning] = useState(null);
 const [loadingAcrylicWarning, setLoadingAcrylicWarning] = useState(false);
+const [staffFilter, setStaffFilter] = useState("");
+const [appointmentStatusFilter, setAppointmentStatusFilter] = useState("");
+const [quickSearch, setQuickSearch] = useState("");
+const [appointmentPopover, setAppointmentPopover] = useState(null);
 
   useEffect(() => {
     const start = async () => {
@@ -1421,7 +1425,7 @@ const validAppointmentExtras = useMemo(() => {
   };
 
   const openAppointmentDetail = (appointment) => {
-    setSelectedAppointment(appointment);
+    setAppointmentPopover(appointment);
    
   };
 const getPaymentForAppointment = (appointmentId) => {
@@ -1429,6 +1433,78 @@ const getPaymentForAppointment = (appointmentId) => {
 
   return payments.find((payment) => payment.appointment_id === appointmentId);
 };
+
+const appointmentMatchesFilters = (appointment) => {
+  const servicesForAppointment = appointment.appointment_services || [];
+
+  if (
+    staffFilter &&
+    !servicesForAppointment.some((service) => service.staff_id === staffFilter)
+  ) {
+    return false;
+  }
+
+  if (
+    appointmentStatusFilter &&
+    String(appointment.attendance_status || "pendiente") !== appointmentStatusFilter
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const visibleStaff = useMemo(() => {
+  return staffFilter
+    ? staff.filter((person) => person.id === staffFilter)
+    : staff;
+}, [staff, staffFilter]);
+
+const appointmentSearchPool = useMemo(() => {
+  const map = new Map();
+
+  [...appointments, ...rangeAppointments].forEach((appointment) => {
+    if (appointment?.id) {
+      map.set(appointment.id, appointment);
+    }
+  });
+
+  return Array.from(map.values()).sort((a, b) => {
+    const dateCompare = String(a.appointment_date || "").localeCompare(
+      String(b.appointment_date || "")
+    );
+
+    if (dateCompare !== 0) return dateCompare;
+
+    return String(a.start_time || "").localeCompare(String(b.start_time || ""));
+  });
+}, [appointments, rangeAppointments]);
+
+const quickSearchResults = useMemo(() => {
+  const term = quickSearch.trim().toLowerCase();
+
+  if (term.length < 2) return [];
+
+  return appointmentSearchPool
+    .filter((appointment) => {
+      const servicesText = getAppointmentServicesText(appointment).toLowerCase();
+      const clientName = String(appointment.clients?.full_name || "").toLowerCase();
+      const phone = String(appointment.clients?.phone || "").toLowerCase();
+      const clientNumber = String(
+        appointment.clients?.client_number || ""
+      ).toLowerCase();
+      const date = String(appointment.appointment_date || "").toLowerCase();
+
+      return (
+        clientName.includes(term) ||
+        phone.includes(term) ||
+        clientNumber.includes(term) ||
+        servicesText.includes(term) ||
+        date.includes(term)
+      );
+    })
+    .slice(0, 10);
+}, [appointmentSearchPool, quickSearch]);
 
 const handleAppointmentLocalUpdate = (appointmentId, changes) => {
   if (!appointmentId) return;
@@ -1439,6 +1515,7 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
   setAppointments((current) => current.map(applyChanges));
   setRangeAppointments((current) => current.map(applyChanges));
   setSelectedAppointment((current) => applyChanges(current));
+  setAppointmentPopover((current) => applyChanges(current));
 };
 
   const openEditAppointment = (appointment) => {
@@ -2005,6 +2082,61 @@ const createAppointmentFollowups = async (appointment) => {
   }
 };
 
+const notifyAppointmentStaff = async ({
+  appointment,
+  lines,
+  eventType,
+  previousStaffIds = [],
+}) => {
+  if (!appointment?.id || !eventType) return null;
+
+  const currentStaffIds = [
+    ...new Set((lines || []).map((line) => line.staff_id).filter(Boolean)),
+  ];
+  const targetStaffIds = [
+    ...new Set([...currentStaffIds, ...previousStaffIds].filter(Boolean)),
+  ];
+
+  if (targetStaffIds.length === 0) return null;
+
+  const client = clients.find((item) => item.id === appointment.client_id);
+  const clientName = client?.full_name || "Clienta";
+  const serviceText =
+    (lines || [])
+      .map((line) => getServiceName(line.service_id))
+      .filter(Boolean)
+      .join(", ") || "servicio";
+
+  const titles = {
+    cita_nueva: "Nueva cita asignada",
+    cita_actualizada: "Cita actualizada",
+    cita_estado: "Estado de cita actualizado",
+  };
+
+  const messages = {
+    cita_nueva: `Se agendó una cita para ${clientName} el ${appointment.appointment_date} de ${formatTime(
+      appointment.start_time
+    )} a ${formatTime(appointment.end_time)} · ${serviceText}`,
+    cita_actualizada: `Se actualizó la cita de ${clientName} para el ${appointment.appointment_date} de ${formatTime(
+      appointment.start_time
+    )} a ${formatTime(appointment.end_time)} · ${serviceText}`,
+    cita_estado: `Cambió el estado de la cita de ${clientName} el ${appointment.appointment_date} · ${serviceText}`,
+  };
+
+  const rows = targetStaffIds.map((staffId) => ({
+    staff_id: staffId,
+    title: titles[eventType] || "Movimiento de cita",
+    message: messages[eventType] || messages.cita_actualizada,
+    notification_type: eventType,
+    related_table: "appointments",
+    related_id: appointment.id,
+    is_read: false,
+  }));
+
+  const { error } = await supabase.from("notifications").insert(rows);
+  return error || null;
+};
+
 const handleSubmit = async () => {
     setSaving(true);
     setMessage("");
@@ -2079,6 +2211,26 @@ const handleSubmit = async () => {
     let appointment = null;
     const wasEditing = Boolean(editingAppointmentId);
     let designImageWarning = "";
+    let notificationWarning = "";
+    const previousAppointmentSnapshot = wasEditing
+      ? appointments.find((item) => item.id === editingAppointmentId) ||
+        rangeAppointments.find((item) => item.id === editingAppointmentId)
+      : null;
+    const previousStaffIds = [
+      ...new Set(
+        (previousAppointmentSnapshot?.appointment_services || [])
+          .map((item) => item.staff_id)
+          .filter(Boolean)
+      ),
+    ];
+    const previousSignature = previousAppointmentSnapshot
+      ? [
+          previousAppointmentSnapshot.appointment_date,
+          previousAppointmentSnapshot.start_time,
+          previousAppointmentSnapshot.end_time,
+          previousStaffIds.sort().join(","),
+        ].join("|")
+      : "";
 
     if (editingAppointmentId) {
       const { data: updatedAppointment, error: updateError } = await supabase
@@ -2219,6 +2371,31 @@ if (designImageFile) {
 }
 
 await createAppointmentFollowups(appointment);
+
+const currentStaffSignature = [
+  appointment.appointment_date,
+  appointment.start_time,
+  appointment.end_time,
+  [...new Set(validServiceLines.map((line) => line.staff_id).filter(Boolean))]
+    .sort()
+    .join(","),
+].join("|");
+
+const shouldNotifyAppointment =
+  !wasEditing || !previousSignature || previousSignature !== currentStaffSignature;
+
+if (shouldNotifyAppointment) {
+  const notificationError = await notifyAppointmentStaff({
+    appointment,
+    lines: validServiceLines,
+    eventType: wasEditing ? "cita_actualizada" : "cita_nueva",
+    previousStaffIds: wasEditing ? previousStaffIds : [],
+  });
+
+  if (notificationError) {
+    notificationWarning = ` La cita se guardó, pero no se pudo crear notificación interna: ${notificationError.message}`;
+  }
+}
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
     await loadRangeData(form.appointment_date);
@@ -2229,7 +2406,7 @@ await createAppointmentFollowups(appointment);
         wasEditing
           ? "Cita actualizada correctamente ✨"
           : "Cita registrada correctamente ✨"
-      }${designImageWarning}`
+      }${designImageWarning}${notificationWarning}`
     );
     setSaving(false);
     setActiveSection("diaria");
@@ -2245,6 +2422,8 @@ await createAppointmentFollowups(appointment);
     });
 
     appointments.forEach((appointment) => {
+      if (!appointmentMatchesFilters(appointment)) return;
+
       const servicesForAppointment = appointment.appointment_services || [];
 
       servicesForAppointment.forEach((item) => {
@@ -2261,6 +2440,8 @@ await createAppointmentFollowups(appointment);
     });
 
     timeBlocks.forEach((block) => {
+      if (staffFilter && block.staff_id !== staffFilter) return;
+
       if (!result[block.staff_id]) {
         result[block.staff_id] = [];
       }
@@ -2281,12 +2462,14 @@ await createAppointmentFollowups(appointment);
     });
 
     return result;
-  }, [appointments, staff, timeBlocks]);
+  }, [appointments, staff, timeBlocks, staffFilter, appointmentStatusFilter]);
 
   const appointmentsByDate = useMemo(() => {
     const result = {};
 
     rangeAppointments.forEach((appointment) => {
+      if (!appointmentMatchesFilters(appointment)) return;
+
       const date = appointment.appointment_date;
 
       if (!result[date]) {
@@ -2320,6 +2503,8 @@ await createAppointmentFollowups(appointment);
     });
 
     rangeTimeBlocks.forEach((block) => {
+      if (staffFilter && block.staff_id !== staffFilter) return;
+
       const date = block.block_date;
 
       if (!result[date]) {
@@ -2342,7 +2527,7 @@ await createAppointmentFollowups(appointment);
     });
 
     return result;
-  }, [rangeAppointments, rangeTimeBlocks]);
+  }, [rangeAppointments, rangeTimeBlocks, staffFilter, appointmentStatusFilter]);
 
   if (loadingSession) {
     return (
@@ -2403,50 +2588,70 @@ await createAppointmentFollowups(appointment);
         />
       )}
 
-  {activeSection === "diaria" && (
-        <DailyViewSection
-          selectedDate={selectedDate}
-          setSelectedDate={setSelectedDate}
-          staff={staff}
-          appointmentsByStaff={appointmentsByStaff}
-          loadingData={loadingData}
-          openNewAppointment={openNewAppointment}
-          openAppointmentDetail={openAppointmentDetail}
-          openEditAppointment={openEditAppointment}
-          getPaymentForAppointment={getPaymentForAppointment}
-          activeSection={activeSection}
-          setActiveSection={setActiveSection}
-        />
-      )}
-
-              {activeSection === "semanal" && (
-          <WeeklyViewSection
+      {["diaria", "semanal", "mensual"].includes(activeSection) && (
+        <div className="grid gap-6 xl:grid-cols-[18rem_minmax(0,1fr)]">
+          <AgendaSidePanel
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
-            weekDays={getWeekDays(selectedDate)}
-            appointmentsByDate={appointmentsByDate}
-            openNewAppointment={openNewAppointment}
-            openAppointmentDetail={openAppointmentDetail}
-            openEditAppointment={openEditAppointment}
-            getPaymentForAppointment={getPaymentForAppointment}
-            activeSection={activeSection}
-            setActiveSection={setActiveSection}
+            staff={staff}
+            staffFilter={staffFilter}
+            setStaffFilter={setStaffFilter}
+            appointmentStatusFilter={appointmentStatusFilter}
+            setAppointmentStatusFilter={setAppointmentStatusFilter}
+            quickSearch={quickSearch}
+            setQuickSearch={setQuickSearch}
+            quickSearchResults={quickSearchResults}
+            openAppointmentPreview={openAppointmentDetail}
           />
-        )}
 
-      {activeSection === "mensual" && (
-        <MonthlyViewSection
-          selectedDate={selectedDate}
-          setSelectedDate={setSelectedDate}
-          monthDays={getMonthDays(selectedDate)}
-          appointmentsByDate={appointmentsByDate}
-          openNewAppointment={openNewAppointment}
-          openAppointmentDetail={openAppointmentDetail}
-          openEditAppointment={openEditAppointment}
-          getPaymentForAppointment={getPaymentForAppointment}
-          activeSection={activeSection}
-          setActiveSection={setActiveSection}
-        />
+          <div className="min-w-0">
+            {activeSection === "diaria" && (
+              <DailyViewSection
+                selectedDate={selectedDate}
+                setSelectedDate={setSelectedDate}
+                staff={visibleStaff}
+                appointmentsByStaff={appointmentsByStaff}
+                loadingData={loadingData}
+                openNewAppointment={openNewAppointment}
+                openAppointmentDetail={openAppointmentDetail}
+                openEditAppointment={openEditAppointment}
+                getPaymentForAppointment={getPaymentForAppointment}
+                activeSection={activeSection}
+                setActiveSection={setActiveSection}
+              />
+            )}
+
+            {activeSection === "semanal" && (
+              <WeeklyViewSection
+                selectedDate={selectedDate}
+                setSelectedDate={setSelectedDate}
+                weekDays={getWeekDays(selectedDate)}
+                appointmentsByDate={appointmentsByDate}
+                openNewAppointment={openNewAppointment}
+                openAppointmentDetail={openAppointmentDetail}
+                openEditAppointment={openEditAppointment}
+                getPaymentForAppointment={getPaymentForAppointment}
+                activeSection={activeSection}
+                setActiveSection={setActiveSection}
+              />
+            )}
+
+            {activeSection === "mensual" && (
+              <MonthlyViewSection
+                selectedDate={selectedDate}
+                setSelectedDate={setSelectedDate}
+                monthDays={getMonthDays(selectedDate)}
+                appointmentsByDate={appointmentsByDate}
+                openNewAppointment={openNewAppointment}
+                openAppointmentDetail={openAppointmentDetail}
+                openEditAppointment={openEditAppointment}
+                getPaymentForAppointment={getPaymentForAppointment}
+                activeSection={activeSection}
+                setActiveSection={setActiveSection}
+              />
+            )}
+          </div>
+        </div>
       )}
 
       {activeSection === "disponibilidad" && (
@@ -2458,6 +2663,18 @@ await createAppointmentFollowups(appointment);
           availabilityMessage={availabilityMessage}
           availabilitySuggestions={availabilitySuggestions}
           applyAvailabilitySuggestion={applyAvailabilitySuggestion}
+        />
+      )}
+
+      {appointmentPopover && (
+        <AppointmentPopover
+          appointment={appointmentPopover}
+          payment={getPaymentForAppointment(appointmentPopover.id)}
+          onClose={() => setAppointmentPopover(null)}
+          onOpenDetail={() => {
+            setSelectedAppointment(appointmentPopover);
+            setAppointmentPopover(null);
+          }}
         />
       )}
 
@@ -3652,6 +3869,390 @@ function AvailabilityCard({
   );
 }
 
+function getStaffInitials(person) {
+  return String(person?.full_name || "T")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
+function getStaffPhotoUrl(person) {
+  return (
+    person?.photo_url ||
+    person?.avatar_url ||
+    person?.profile_photo_url ||
+    person?.image_url ||
+    ""
+  );
+}
+
+function StaffAvatar({ person, size = "md" }) {
+  const photoUrl = getStaffPhotoUrl(person);
+  const sizeClass = size === "lg" ? "h-12 w-12" : "h-9 w-9";
+
+  if (photoUrl) {
+    return (
+      <img
+        src={photoUrl}
+        alt={person?.full_name || "Técnica"}
+        className={`${sizeClass} rounded-full object-cover ring-2 ring-white shadow-sm`}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={`${sizeClass} flex shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ring-2 ring-white shadow-sm`}
+      style={{ backgroundColor: person?.color || "#bd7b83" }}
+    >
+      {getStaffInitials(person)}
+    </span>
+  );
+}
+
+function MiniCalendar({ selectedDate, setSelectedDate }) {
+  const monthDays = getMonthDays(selectedDate);
+  const currentDate = new Date(`${selectedDate}T00:00:00`);
+  const title = currentDate.toLocaleDateString("es-MX", {
+    month: "long",
+    year: "numeric",
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setSelectedDate(addDaysToISO(selectedDate, -30))}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f7eeee] text-[#8a5f63]"
+        >
+          ‹
+        </button>
+        <p className="text-sm font-medium capitalize text-[#263238]">{title}</p>
+        <button
+          type="button"
+          onClick={() => setSelectedDate(addDaysToISO(selectedDate, 30))}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f7eeee] text-[#8a5f63]"
+        >
+          ›
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-7 gap-1 text-center text-[10px] uppercase tracking-[0.12em] text-[#8a969a]">
+        {["L", "M", "M", "J", "V", "S", "D"].map((day, index) => (
+          <span key={`${day}-${index}`}>{day}</span>
+        ))}
+      </div>
+
+      <div className="mt-2 grid grid-cols-7 gap-1">
+        {monthDays.map((day) => {
+          const isSelected = day.date === selectedDate;
+
+          return (
+            <button
+              key={day.date}
+              type="button"
+              onClick={() => setSelectedDate(day.date)}
+              className={`flex h-9 items-center justify-center rounded-full text-xs transition ${
+                isSelected
+                  ? "bg-[#bd7b83] text-white"
+                  : day.isCurrentMonth
+                  ? "bg-white text-[#263238] hover:bg-[#f7eeee]"
+                  : "bg-[#f7f9fa] text-[#b0b8bb]"
+              }`}
+            >
+              {Number(day.date.slice(8, 10))}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AgendaSidePanel({
+  selectedDate,
+  setSelectedDate,
+  staff,
+  staffFilter,
+  setStaffFilter,
+  appointmentStatusFilter,
+  setAppointmentStatusFilter,
+  quickSearch,
+  setQuickSearch,
+  quickSearchResults,
+  openAppointmentPreview,
+}) {
+  return (
+    <aside className="h-fit rounded-[1.5rem] bg-white p-5 shadow-sm xl:sticky xl:top-28">
+      <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+        Agenda Pro
+      </p>
+
+      <div className="mt-5 rounded-2xl bg-[#f7f9fa] p-4">
+        <MiniCalendar selectedDate={selectedDate} setSelectedDate={setSelectedDate} />
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <div>
+          <label className="mb-2 block text-sm text-[#68777c]">
+            Técnica / profesional
+          </label>
+          <select
+            value={staffFilter}
+            onChange={(event) => setStaffFilter(event.target.value)}
+            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+          >
+            <option value="">Todas</option>
+            {staff.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.full_name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-2 block text-sm text-[#68777c]">
+            Estado de asistencia
+          </label>
+          <select
+            value={appointmentStatusFilter}
+            onChange={(event) => setAppointmentStatusFilter(event.target.value)}
+            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+          >
+            <option value="">Todos</option>
+            {attendanceOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-2 block text-sm text-[#68777c]">
+            Búsqueda rápida
+          </label>
+          <input
+            value={quickSearch}
+            onChange={(event) => setQuickSearch(event.target.value)}
+            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+            placeholder="Clienta, teléfono, CL-0001, servicio..."
+          />
+
+          {quickSearch.trim().length >= 2 && (
+            <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+              {quickSearchResults.length === 0 ? (
+                <p className="rounded-2xl bg-[#fff6fb] p-3 text-xs text-[#8a5f63]">
+                  No encontré citas en el rango visible.
+                </p>
+              ) : (
+                quickSearchResults.map((appointment) => (
+                  <button
+                    key={appointment.id}
+                    type="button"
+                    onClick={() => openAppointmentPreview(appointment)}
+                    className="w-full rounded-2xl bg-[#f7f9fa] p-3 text-left text-xs transition hover:bg-[#f7eeee]"
+                  >
+                    <span className="block font-medium text-[#263238]">
+                      {appointment.clients?.client_number
+                        ? `${appointment.clients.client_number} · `
+                        : ""}
+                      {appointment.clients?.full_name || "Clienta"}
+                    </span>
+                    <span className="mt-1 block text-[#68777c]">
+                      {appointment.appointment_date} ·{" "}
+                      {formatTime(appointment.start_time)} ·{" "}
+                      {getAppointmentServicesText(appointment)}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function buildGoogleCalendarUrl(appointment) {
+  const start = `${appointment.appointment_date}T${formatTime(
+    appointment.start_time
+  )}:00`;
+  const end = `${appointment.appointment_date}T${formatTime(
+    appointment.end_time || appointment.start_time
+  )}:00`;
+  const formatCalendarDate = (value) =>
+    new Date(value).toISOString().replace(/[-:]|\.\d{3}/g, "");
+
+  const text = `Cita Alexandra Ruiz Salón · ${
+    appointment.clients?.full_name || "Clienta"
+  }`;
+  const details = [
+    `Servicios: ${getAppointmentServicesText(appointment)}`,
+    appointment.clients?.phone ? `Teléfono: ${appointment.clients.phone}` : "",
+    appointment.notes ? `Observaciones: ${appointment.notes}` : "",
+    "Recordatorio sugerido: 15 minutos antes.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text,
+    dates: `${formatCalendarDate(start)}/${formatCalendarDate(end)}`,
+    details,
+    location: "Alexandra Ruiz Salón",
+  });
+
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function AppointmentPopover({ appointment, payment, onClose, onOpenDetail }) {
+  const servicesText = getAppointmentServicesText(appointment);
+  const phone = appointment.clients?.phone || "";
+  const whatsappUrl = phone
+    ? `https://wa.me/${cleanPhoneForWhatsApp(phone)}`
+    : "";
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-end justify-center bg-black/20 p-3 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-[1.5rem] bg-white p-5 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+              Resumen de cita
+            </p>
+            <h3 className="mt-2 text-2xl font-light text-[#263238]">
+              {appointment.clients?.full_name || "Clienta"}
+            </h3>
+            {appointment.clients?.client_number && (
+              <p className="mt-1 text-xs text-[#8a969a]">
+                {appointment.clients.client_number}
+              </p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#f7f9fa] text-[#68777c]"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 text-sm text-[#68777c] sm:grid-cols-2">
+          <div className="rounded-2xl bg-[#f7f9fa] p-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-[#bd7b83]">
+              Fecha y hora
+            </p>
+            <p className="mt-1 text-[#263238]">
+              {appointment.appointment_date} · {formatTime(appointment.start_time)} -{" "}
+              {formatTime(appointment.end_time)}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#f7f9fa] p-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-[#bd7b83]">
+              Técnica
+            </p>
+            <p className="mt-1 text-[#263238]">
+              {(appointment.appointment_services || [])
+                .map((service) => service.staff?.full_name)
+                .filter(Boolean)
+                .filter((name, index, list) => list.indexOf(name) === index)
+                .join(", ") || "Sin técnica"}
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#f7f9fa] p-3 sm:col-span-2">
+            <p className="text-xs uppercase tracking-[0.18em] text-[#bd7b83]">
+              Servicios
+            </p>
+            <p className="mt-1 text-[#263238]">{servicesText}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${getAttendanceBadgeClass(
+              appointment.attendance_status
+            )}`}
+          >
+            {getAttendanceOption(appointment.attendance_status).label}
+          </span>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              payment ? "bg-green-50 text-green-700" : "bg-yellow-50 text-yellow-700"
+            }`}
+          >
+            {payment ? `$ Pagada · ${formatMoney(payment.total_amount)}` : "$ Pendiente"}
+          </span>
+          {phone && (
+            <span className="rounded-full bg-[#f7eeee] px-3 py-1 text-xs text-[#8a5f63]">
+              {phone}
+            </span>
+          )}
+        </div>
+
+        {appointment.notes && (
+          <p className="mt-4 rounded-2xl bg-[#fff6fb] p-3 text-sm leading-6 text-[#68777c]">
+            {appointment.notes}
+          </p>
+        )}
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={onOpenDetail}
+            className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90"
+          >
+            Abrir cita
+          </button>
+
+          <a
+            href={`/admin/cobros?appointmentId=${appointment.id}`}
+            className="rounded-full border border-green-600 px-5 py-3 text-center text-sm text-green-700 transition hover:bg-green-600 hover:text-white"
+          >
+            Cobrar / ir a cobro
+          </a>
+
+          {whatsappUrl && (
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-full border border-[#25D366] px-5 py-3 text-center text-sm text-[#128C4A] transition hover:bg-[#25D366] hover:text-white"
+            >
+              WhatsApp
+            </a>
+          )}
+
+          <a
+            href={buildGoogleCalendarUrl(appointment)}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-full border border-[#bd7b83] px-5 py-3 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+          >
+            Google Calendar
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = false }) {
   if (item.isBlock) {
     return (
@@ -3808,120 +4409,162 @@ function DailyViewSection({
           No hay técnicas activas registradas.
         </div>
       ) : (
-        <div className="overflow-auto rounded-2xl border border-[#dde3e6]">
-          <table className="min-w-[950px] w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-[#f7f9fa]">
-                <th className="sticky left-0 z-10 border-b border-r border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-left font-medium">
-                  Hora
-                </th>
-
-                {staff.map((person) => (
-                  <th
-                    key={person.id}
-                    className="border-b border-r border-[#dde3e6] px-4 py-3 text-left font-medium"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="h-3 w-3 rounded-full"
-                        style={{ backgroundColor: person.color || "#bd7b83" }}
-                      />
-                      {person.full_name}
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              {timeSlots.map((slot) => (
-                <tr key={slot} className="hover:bg-[#fbf7f6]">
-                  <td className="sticky left-0 z-10 border-b border-r border-[#dde3e6] bg-white px-4 py-3 font-medium text-[#68777c]">
-                    {slot}
-                  </td>
-
-                  {staff.map((person) => {
-                    const staffItems = appointmentsByStaff[person.id] || [];
-                    const startingItems = staffItems.filter((item) =>
-                      itemStartsInSlot(item, slot)
-                    );
-                    const continuingItems = staffItems.filter((item) =>
-                      itemContinuesThroughSlot(item, slot)
-                    );
-                    const shouldRenderContinuedAtFirstSlot =
-                      slot === timeSlots[0] &&
-                      startingItems.length === 0 &&
-                      continuingItems.length > 0;
-                    const visibleItems =
-                      startingItems.length > 0
-                        ? startingItems
-                        : shouldRenderContinuedAtFirstSlot
-                        ? continuingItems
-                        : [];
-
-                    if (continuingItems.length > 0 && visibleItems.length === 0) {
-                      return null;
-                    }
-
-                    const maxRowSpan =
-                      visibleItems.length > 0
-                        ? Math.max(
-                            1,
-                            ...visibleItems.map((item) =>
-                              getItemSlotSpan(item, slot)
-                            )
-                          )
-                        : 1;
-
-                    return (
-                      <td
-                        key={`${person.id}-${slot}`}
-                        rowSpan={maxRowSpan}
-                        onClick={() => {
-                          if (visibleItems.length === 0) {
-                            openNewAppointment({
-                              date: selectedDate,
-                              staffId: person.id,
-                              startTime: slot,
-                            });
-                          }
-                        }}
-                        className={`h-20 min-w-56 border-b border-r border-[#dde3e6] px-3 py-2 align-top ${
-                          visibleItems.length === 0
-                            ? "cursor-pointer bg-white hover:bg-[#fff6fb]"
-                            : "bg-white"
-                        }`}
-                      >
-                        {visibleItems.length === 0 ? (
-                          <span className="text-xs text-[#b0b8bb]">
-                            Libre · clic para agendar
-                          </span>
-                        ) : (
-                          <div className="flex h-full flex-col gap-2">
-                            {visibleItems.map((item) => (
-                              <AppointmentCard
-                                key={item.id}
-                                item={item}
-                                person={person}
-                                payment={getPaymentForAppointment(
-                                  item.appointment?.id
-                                )}
-                                onOpen={openAppointmentDetail}
-                                onEdit={openEditAppointment}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DailyCalendarGrid
+          selectedDate={selectedDate}
+          staff={staff}
+          appointmentsByStaff={appointmentsByStaff}
+          openNewAppointment={openNewAppointment}
+          openAppointmentDetail={openAppointmentDetail}
+          openEditAppointment={openEditAppointment}
+          getPaymentForAppointment={getPaymentForAppointment}
+        />
       )}
     </Card>
+  );
+}
+
+function DailyCalendarGrid({
+  selectedDate,
+  staff,
+  appointmentsByStaff,
+  openNewAppointment,
+  openAppointmentDetail,
+  openEditAppointment,
+  getPaymentForAppointment,
+}) {
+  const slotHeight = 72;
+  const firstSlotMinutes = timeToMinutes(timeSlots[0]) || 0;
+  const gridHeight = timeSlots.length * slotHeight;
+  const templateColumns = `88px repeat(${staff.length}, minmax(240px, 1fr))`;
+  const minWidth = Math.max(960, 88 + staff.length * 240);
+
+  const getItemPosition = (item) => {
+    const start = timeToMinutes(item.start_time);
+    const end = timeToMinutes(item.end_time);
+
+    if (start === null || end === null) {
+      return { top: 0, height: slotHeight };
+    }
+
+    const top = Math.max(0, ((start - firstSlotMinutes) / 30) * slotHeight);
+    const height = Math.max(44, ((end - start) / 30) * slotHeight - 8);
+
+    return { top, height };
+  };
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-[#dde3e6] bg-white">
+      <div style={{ minWidth }}>
+        <div
+          className="grid border-b border-[#dde3e6] bg-[#f7f9fa]"
+          style={{ gridTemplateColumns: templateColumns }}
+        >
+          <div className="sticky left-0 z-30 border-r border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-sm font-medium text-[#68777c]">
+            Hora
+          </div>
+
+          {staff.map((person) => (
+            <div
+              key={person.id}
+              className="border-r border-[#dde3e6] px-4 py-3 last:border-r-0"
+            >
+              <div className="flex items-center gap-3">
+                <StaffAvatar person={person} size="lg" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-[#263238]">
+                    {person.full_name}
+                  </p>
+                  <p className="text-xs text-[#8a969a]">Profesional</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: templateColumns }}
+        >
+          <div
+            className="sticky left-0 z-20 border-r border-[#dde3e6] bg-white"
+            style={{ height: gridHeight }}
+          >
+            {timeSlots.map((slot) => (
+              <div
+                key={slot}
+                className="border-b border-[#edf0f2] px-4 py-2 text-xs font-medium text-[#68777c]"
+                style={{ height: slotHeight }}
+              >
+                {slot}
+              </div>
+            ))}
+          </div>
+
+          {staff.map((person) => {
+            const staffItems = (appointmentsByStaff[person.id] || []).filter(
+              (item) => item.start_time && item.end_time
+            );
+
+            return (
+              <div
+                key={person.id}
+                className="relative border-r border-[#dde3e6] bg-white last:border-r-0"
+                style={{ height: gridHeight }}
+              >
+                {timeSlots.map((slot, index) => (
+                  <button
+                    key={`${person.id}-${slot}`}
+                    type="button"
+                    onClick={() =>
+                      openNewAppointment({
+                        date: selectedDate,
+                        staffId: person.id,
+                        startTime: slot,
+                      })
+                    }
+                    className="absolute left-0 right-0 border-b border-[#edf0f2] text-left transition hover:bg-[#fff6fb]"
+                    style={{
+                      top: index * slotHeight,
+                      height: slotHeight,
+                    }}
+                    title={`Agendar con ${person.full_name} a las ${slot}`}
+                  >
+                    <span className="sr-only">
+                      Agendar con {person.full_name} a las {slot}
+                    </span>
+                  </button>
+                ))}
+
+                {staffItems.map((item) => {
+                  const position = getItemPosition(item);
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="absolute z-10"
+                      style={{
+                        top: position.top,
+                        height: position.height,
+                        left: 8,
+                        right: 8,
+                      }}
+                    >
+                      <AppointmentCard
+                        item={item}
+                        person={person}
+                        payment={getPaymentForAppointment(item.appointment?.id)}
+                        onOpen={openAppointmentDetail}
+                        onEdit={openEditAppointment}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -4412,6 +5055,29 @@ const saveAttendanceStatus = async () => {
   }
 
   onAppointmentUpdated?.(appointment.id, payload);
+  const staffIds = [
+    ...new Set(
+      (appointment.appointment_services || [])
+        .map((service) => service.staff_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  if (staffIds.length > 0) {
+    await supabase.from("notifications").insert(
+      staffIds.map((staffId) => ({
+        staff_id: staffId,
+        title: "Estado de cita actualizado",
+        message: `La cita de ${
+          appointment.clients?.full_name || "Clienta"
+        } cambió a ${getAttendanceOption(selectedStatus).label}.`,
+        notification_type: "cita_estado",
+        related_table: "appointments",
+        related_id: appointment.id,
+        is_read: false,
+      }))
+    );
+  }
   setAttendanceMessage("Estado de asistencia actualizado correctamente ✨");
   setSavingAttendance(false);
 };

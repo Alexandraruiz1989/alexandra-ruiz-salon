@@ -245,6 +245,16 @@ function getIncidenceLabel(value) {
   );
 }
 
+function getIncidenceStatusLabel(value) {
+  const labels = {
+    programada: "Programada",
+    tomada: "Aplicada / registrada",
+    cancelada: "Cancelada",
+  };
+
+  return labels[value] || value || "Sin estado";
+}
+
 function calculateYearsWorked(hireDate) {
   if (!hireDate) return 0;
 
@@ -2254,9 +2264,13 @@ export default function TecnicasPage() {
                     className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
                   >
                     <option value="programada">Programada</option>
-                    <option value="tomada">Tomada</option>
+                    <option value="tomada">Aplicada / registrada</option>
                     <option value="cancelada">Cancelada</option>
                   </select>
+                  <p className="mt-2 text-xs leading-5 text-[#8a969a]">
+                    Programada: incidencia futura. Aplicada/registrada: ya ocurrió
+                    o ya fue tomada en cuenta.
+                  </p>
                 </div>
               </div>
 
@@ -2423,7 +2437,7 @@ export default function TecnicasPage() {
                           {incidence.minutes_late > 0
                             ? ` · ${incidence.minutes_late} min retardo`
                             : ""}{" "}
-                          · {incidence.status}
+                          · {getIncidenceStatusLabel(incidence.status)}
                         </p>
 
                         {incidence.reason && (
