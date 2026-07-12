@@ -22,6 +22,7 @@ const roleModulePermissions = {
     "bot",
     "notificaciones",
     "accesos",
+    "calculadora",
   ],
   encargada: [
     "inicio",
@@ -38,6 +39,7 @@ const roleModulePermissions = {
     "seguimientos",
     "bot",
     "notificaciones",
+    "calculadora",
   ],
   tecnica: [
     "inicio",
@@ -46,6 +48,7 @@ const roleModulePermissions = {
     "cobros",
     "seguimientos",
     "notificaciones",
+    "calculadora",
   ],
   caja: [
     "inicio",
@@ -55,8 +58,9 @@ const roleModulePermissions = {
     "caja",
     "tienda",
     "notificaciones",
+    "calculadora",
   ],
-  product_owner: ["tienda"],
+  product_owner: ["tienda", "reportes"],
 };
 
 const roleLabels = {
@@ -162,13 +166,14 @@ export default function AdminShell({
     roleModulePermissions[profileRole] || roleModulePermissions.tecnica;
 
   const mainModules = [
-    { label: "Inicio", href: "/admin/agenda", key: "inicio" },
+    { label: "Inicio", href: "/admin", key: "inicio" },
     { label: "Clientas", href: "/admin/clientas", key: "clientas" },
     { label: "Servicios", href: "/admin/servicios", key: "servicios" },
     { label: "Agenda", href: "/admin/agenda", key: "agenda" },
     { label: "Cobros", href: "/admin/cobros", key: "cobros" },
     { label: "Caja chica", href: "/admin/caja", key: "caja" },
     { label: "Tienda", href: "/admin/tienda", key: "tienda" },
+    { label: "Calculadora", href: "/admin/calculadora", key: "calculadora" },
     { label: "Extras / Decoraciones", href: "/admin/extras", key: "extras" },
     { label: "Reportes", href: "/admin/reportes", key: "reportes" },
     { label: "Técnicas / Personal", href: "/admin/tecnicas", key: "tecnicas" },
@@ -296,9 +301,9 @@ export default function AdminShell({
   }
 
   return (
-    <main className="min-h-screen bg-[#eef1f3] text-[#263238]">
-      <div className="flex min-h-screen">
-        <aside className="hidden w-72 shrink-0 border-r border-[#dde3e6] bg-white p-6 lg:block">
+    <main className="min-h-screen overflow-x-hidden bg-[#eef1f3] text-[#263238]">
+      <div className="flex min-h-screen w-full min-w-0">
+        <aside className="hidden h-screen w-72 shrink-0 overflow-y-auto border-r border-[#dde3e6] bg-white p-6 lg:sticky lg:top-0 lg:block">
           <div className="mb-8">
             <p className="text-xs uppercase tracking-[0.3em] text-[#bd7b83]">
               Alexandra Ruiz
@@ -321,8 +326,7 @@ export default function AdminShell({
                 key={item.key}
                 href={item.href}
                 className={`flex items-center justify-between rounded-2xl px-4 py-3 text-sm transition ${
-                  activeModule === item.key ||
-                  (activeModule === "agenda" && item.key === "inicio")
+                  activeModule === item.key
                     ? "bg-[#bd7b83] text-white"
                     : "text-[#536166] hover:bg-[#f7eeee]"
                 }`}
@@ -381,10 +385,10 @@ export default function AdminShell({
           </nav>
         </aside>
 
-        <section className="flex-1">
+        <section className="min-w-0 flex-1">
           <header className="sticky top-0 z-30 border-b border-[#dde3e6] bg-white/95 px-4 py-4 backdrop-blur md:px-8">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
+            <div className="flex min-w-0 flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.28em] text-[#bd7b83]">
                   Panel administrativo
                 </p>
@@ -403,11 +407,11 @@ export default function AdminShell({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:justify-end">
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(true)}
-                  className="rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 lg:hidden"
+                  className="w-full rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 sm:w-auto lg:hidden"
                 >
                   ☰ Menú
                 </button>
@@ -415,7 +419,7 @@ export default function AdminShell({
                 {allowedModules.includes("agenda") && (
                   <a
                     href="/admin/agenda"
-                    className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                    className="w-full rounded-full border border-[#bd7b83] px-5 py-3 text-center text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:w-auto"
                   >
                     Agenda
                   </a>
@@ -443,7 +447,7 @@ export default function AdminShell({
 
                 <button
                   onClick={handleLogout}
-                  className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                  className="w-full rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:w-auto"
                 >
                   Cerrar sesión
                 </button>
@@ -470,13 +474,21 @@ export default function AdminShell({
             )}
           </header>
 
-          <div className="p-4 md:p-8">{children}</div>
+          <div className="w-full max-w-full min-w-0 overflow-x-hidden p-4 md:p-8">
+            {children}
+          </div>
         </section>
       </div>
 
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-[999] bg-black/35 lg:hidden">
-          <div className="absolute right-0 top-0 flex h-full w-[86%] max-w-sm flex-col bg-white shadow-2xl">
+        <div
+          className="fixed inset-0 z-[999] bg-black/35 lg:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          <div
+            className="absolute right-0 top-0 flex h-full w-[86%] max-w-sm flex-col bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="border-b border-[#dde3e6] p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -505,9 +517,9 @@ export default function AdminShell({
                   <a
                     key={item.key}
                     href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
                     className={`flex items-center justify-between rounded-2xl px-4 py-3 text-sm transition ${
-                      activeModule === item.key ||
-                      (activeModule === "agenda" && item.key === "inicio")
+                      activeModule === item.key
                         ? "bg-[#bd7b83] text-white"
                         : "bg-[#f7f9fa] text-[#536166]"
                     }`}

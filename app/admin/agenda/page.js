@@ -2225,13 +2225,28 @@ await createAppointmentFollowups(appointment);
       }
 
       const servicesForAppointment = appointment.appointment_services || [];
+      const orderedServices = [...servicesForAppointment].sort((a, b) =>
+        String(a.start_time || "").localeCompare(String(b.start_time || ""))
+      );
+      const firstService = orderedServices[0];
+      const lastService = [...orderedServices].sort((a, b) =>
+        String(b.end_time || "").localeCompare(String(a.end_time || ""))
+      )[0];
 
-      servicesForAppointment.forEach((item) => {
-        result[date].push({
-          ...item,
-          appointment,
-          isBlock: false,
-        });
+      result[date].push({
+        id: `appointment-${appointment.id}`,
+        appointment,
+        isBlock: false,
+        start_time: appointment.start_time || firstService?.start_time,
+        end_time:
+          lastService?.end_time ||
+          appointment.end_time ||
+          appointment.start_time ||
+          firstService?.end_time,
+        services: {
+          name: getAppointmentServicesText(appointment),
+        },
+        staff: firstService?.staff,
       });
     });
 
@@ -3560,7 +3575,7 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
   if (item.isBlock) {
     return (
       <div
-        className={`rounded-xl border px-3 py-2 text-xs ${getBlockCardClass(
+        className={`flex h-full min-h-16 flex-col justify-center rounded-xl border px-3 py-2 text-xs ${getBlockCardClass(
           item.block
         )}`}
       >
@@ -3578,7 +3593,7 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
         event.stopPropagation();
         onOpen(item.appointment);
       }}
-      className={`relative cursor-pointer rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
+      className={`relative flex h-full min-h-16 cursor-pointer flex-col justify-center rounded-xl px-3 py-2 text-xs text-white shadow-sm ${
         payment ? "border-l-4 border-green-400 pl-4" : ""
       }`}
       style={{
@@ -3615,8 +3630,42 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
       <p className={compact ? "truncate" : ""}>
         {item.services?.name || "Servicio"}
       </p>
+      {!compact && (
+        <p className="mt-1 text-[11px] text-white/85">
+          {person?.full_name || item.staff?.full_name || "Técnica"} ·{" "}
+          {payment ? "Pagada" : "Pendiente de cobro"}
+        </p>
+      )}
     </div>
   );
+}
+
+function itemStartsInSlot(item, slot) {
+  const start = timeToMinutes(item.start_time);
+  const slotStart = timeToMinutes(slot);
+
+  if (start === null || slotStart === null) return false;
+
+  return start >= slotStart && start < slotStart + 30;
+}
+
+function itemContinuesThroughSlot(item, slot) {
+  const start = timeToMinutes(item.start_time);
+  const end = timeToMinutes(item.end_time);
+  const slotStart = timeToMinutes(slot);
+
+  if (start === null || end === null || slotStart === null) return false;
+
+  return start < slotStart && end > slotStart;
+}
+
+function getItemSlotSpan(item, slot) {
+  const end = timeToMinutes(item.end_time);
+  const slotStart = timeToMinutes(slot);
+
+  if (end === null || slotStart === null || end <= slotStart) return 1;
+
+  return Math.max(1, Math.ceil((end - slotStart) / 30));
 }
 
 function DailyViewSection({
@@ -3702,21 +3751,44 @@ function DailyViewSection({
                   </td>
 
                   {staff.map((person) => {
-                    const items = (appointmentsByStaff[person.id] || []).filter(
-                      (item) =>
-                        timesOverlap(
-                          slot,
-                          addMinutesToTime(slot, 30),
-                          item.start_time,
-                          item.end_time
-                        )
+                    const staffItems = appointmentsByStaff[person.id] || [];
+                    const startingItems = staffItems.filter((item) =>
+                      itemStartsInSlot(item, slot)
                     );
+                    const continuingItems = staffItems.filter((item) =>
+                      itemContinuesThroughSlot(item, slot)
+                    );
+                    const shouldRenderContinuedAtFirstSlot =
+                      slot === timeSlots[0] &&
+                      startingItems.length === 0 &&
+                      continuingItems.length > 0;
+                    const visibleItems =
+                      startingItems.length > 0
+                        ? startingItems
+                        : shouldRenderContinuedAtFirstSlot
+                        ? continuingItems
+                        : [];
+
+                    if (continuingItems.length > 0 && visibleItems.length === 0) {
+                      return null;
+                    }
+
+                    const maxRowSpan =
+                      visibleItems.length > 0
+                        ? Math.max(
+                            1,
+                            ...visibleItems.map((item) =>
+                              getItemSlotSpan(item, slot)
+                            )
+                          )
+                        : 1;
 
                     return (
                       <td
                         key={`${person.id}-${slot}`}
+                        rowSpan={maxRowSpan}
                         onClick={() => {
-                          if (items.length === 0) {
+                          if (visibleItems.length === 0) {
                             openNewAppointment({
                               date: selectedDate,
                               staffId: person.id,
@@ -3725,18 +3797,18 @@ function DailyViewSection({
                           }
                         }}
                         className={`h-20 min-w-56 border-b border-r border-[#dde3e6] px-3 py-2 align-top ${
-                          items.length === 0
+                          visibleItems.length === 0
                             ? "cursor-pointer bg-white hover:bg-[#fff6fb]"
                             : "bg-white"
                         }`}
                       >
-                        {items.length === 0 ? (
+                        {visibleItems.length === 0 ? (
                           <span className="text-xs text-[#b0b8bb]">
                             Libre · clic para agendar
                           </span>
                         ) : (
-                          <div className="space-y-2">
-                            {items.map((item) => (
+                          <div className="flex h-full flex-col gap-2">
+                            {visibleItems.map((item) => (
                               <AppointmentCard
                                 key={item.id}
                                 item={item}

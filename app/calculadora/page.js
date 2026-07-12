@@ -98,6 +98,7 @@ export default function CalculadoraPage() {
   const [setSelected, setSetSelected] = useState([]);
   const [removalSelected, setRemovalSelected] = useState([]);
   const [notes, setNotes] = useState("");
+  const [copyMessage, setCopyMessage] = useState("");
 
   const toggleExtra = (extra, list, setList) => {
     const exists = list.find((item) => item.name === extra.name);
@@ -215,8 +216,13 @@ ${notes || "Sin notas"}
 Total estimado: $${total}`;
 
   const copySummary = async () => {
-    await navigator.clipboard.writeText(summary);
-    alert("Cotización copiada ✨");
+    try {
+      await navigator.clipboard.writeText(summary);
+      setCopyMessage("Cotización copiada correctamente ✨");
+    } catch (error) {
+      console.error("No se pudo copiar la cotización", error);
+      setCopyMessage("No se pudo copiar automáticamente. Puedes seleccionar el resumen y copiarlo manualmente.");
+    }
   };
 
   const resetCalculator = () => {
@@ -229,7 +235,7 @@ Total estimado: $${total}`;
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-[#fcf7f6] via-[#f9f1ef] to-[#fdf8f6] px-4 py-8 text-[#352829] md:px-8">
+    <main className="min-h-screen overflow-x-hidden bg-gradient-to-b from-[#fcf7f6] via-[#f9f1ef] to-[#fdf8f6] px-4 py-8 text-[#352829] md:px-8">
       <section className="mx-auto max-w-7xl">
         <div className="mb-8 rounded-[2rem] border border-[#ecd8d4] bg-white/80 p-6 shadow-[0_20px_60px_rgba(189,123,131,0.08)] backdrop-blur">
           <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
@@ -247,10 +253,10 @@ Total estimado: $${total}`;
             </div>
 
             <a
-              href="/"
+              href="/admin"
               className="rounded-full border border-[#bd7b83] px-6 py-3 text-center text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
             >
-              Volver a la web
+              Volver al sistema
             </a>
           </div>
         </div>
@@ -411,6 +417,12 @@ Total estimado: $${total}`;
             </div>
 
             <div className="mt-6 grid gap-3">
+              {copyMessage && (
+                <div className="rounded-2xl bg-[#f7eeee] px-4 py-3 text-sm text-[#8a5f63]">
+                  {copyMessage}
+                </div>
+              )}
+
               <button
                 onClick={copySummary}
                 className="rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90"

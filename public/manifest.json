@@ -1,8 +1,8 @@
 {
   "name": "Alexandra Ruiz Salón",
   "short_name": "AR Salón",
-  "description": "Calculadora de servicios y diseños de Alexandra Ruiz Salón",
-  "start_url": "/calculadora",
+  "description": "Sistema interno de Alexandra Ruiz Salón",
+  "start_url": "/admin",
   "scope": "/",
   "display": "standalone",
   "background_color": "#fdf8f6",
