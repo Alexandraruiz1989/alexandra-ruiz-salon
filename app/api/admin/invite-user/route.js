@@ -58,12 +58,12 @@ export async function POST(request) {
       },
     });
 
-    const origin =
-      request.headers.get("origin") ||
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      "https://www.alexandraruizsalon.com/crear-password";
+    const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  "https://www.alexandraruizsalon.com";
 
-   const redirectTo = `${origin}/crear-password`;
+   const redirectTo = `${siteUrl.replace(/\/$/, "")}/crear-password`;
 
     const { data: inviteData, error: inviteError } =
       await adminSupabase.auth.admin.inviteUserByEmail(email, {
