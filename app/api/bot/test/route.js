@@ -1,15 +1,47 @@
 ﻿import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  createAdminClient,
+  getSessionProfile,
+  normalizeRole,
+} from "../../../lib/pushServer";
 import OpenAI from "openai";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const openaiApiKey = process.env.OPENAI_API_KEY;
 const openaiModel = process.env.OPENAI_MODEL || "gpt-5.6-luna";
 const aiEnabled = process.env.BOT_AI_ENABLED !== "false";
 const AI_RULES_FALLBACK_MESSAGE =
   "IA no conectada. El bot está funcionando con reglas básicas.";
 let openaiClient = null;
+
+function accessErrorResponse(status) {
+  return NextResponse.json(
+    {
+      ok: false,
+      error:
+        status === 401
+          ? "Tu sesión expiró. Vuelve a iniciar sesión."
+          : "No tienes permiso para usar el probador del bot.",
+    },
+    { status }
+  );
+}
+
+async function authorizeAdminRequest(request) {
+  const supabase = createAdminClient();
+  const session = await getSessionProfile(request, supabase);
+
+  if (session.error) {
+    return {
+      response: accessErrorResponse(session.status === 401 ? 401 : 403),
+    };
+  }
+
+  if (normalizeRole(session.profile?.role) !== "admin") {
+    return { response: accessErrorResponse(403) };
+  }
+
+  return { supabase, session };
+}
 
 const SALON_TIME_ZONE = "America/Mexico_City";
 const SALON_NAME = "Alexandra Ruiz Salón";
@@ -128,6 +160,7 @@ function sanitizeBotReply(reply) {
     .replace(/Alexandra Ruiz Sal[oó]n Spa/gi, SALON_NAME)
     .replace(/Alexandra Ruiz Salon Spa/gi, "Alexandra Ruiz Salon")
     .replace(/Alexandra Ruiz Sal[oó]n\s+&\s+Spa/gi, SALON_NAME)
+    .replace(/(?:💕|✨|🔗|🖼️)/gu, "")
     .trim();
 }
 
@@ -1990,6 +2023,37 @@ function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
   }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nAnticipo requerido: $${depositAmount}.\nEse anticipo se descuenta del total a pagar el día de tu cita.`;
 }
 
+function buildAppointmentPreview({ fullName, phone, birthday, services, slot, notes }) {
+  const depositAmount = services.length * 100;
+  const estimatedTotal = getEstimatedTotal(services);
+
+  return {
+    client: {
+      full_name: fullName,
+      phone: onlyDigits(phone),
+      birthday: birthday || null,
+    },
+    services: services.map((service) => ({
+      id: service.id,
+      name: service.name,
+      price: Number(service.base_price || 0),
+      duration_minutes: Number(service.duration_minutes || 0),
+      cleanup_minutes: Number(service.cleanup_minutes || 0),
+    })),
+    slot: {
+      date: slot.date,
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+      staff_id: slot.staff_id,
+      staff_name: slot.staff_name,
+    },
+    estimated_total: estimatedTotal,
+    deposit_amount: depositAmount,
+    notes: notes || "",
+    status: "pending_review",
+  };
+}
+
 function mediaText(asset, fallback = "") {
   if (!asset || asset.active === false) return fallback;
 
@@ -2638,6 +2702,7 @@ Reglas de estilo:
 - Responde en español mexicano, con tono cálido, profesional, claro y elegante.
 - No uses "hermosa" por defecto.
 - No uses ni menciones "${SALON_NAME} Spa"; el nombre correcto es "${SALON_NAME}".
+- No uses emojis decorativos.
 - No muestres etiquetas internas, nombres de intents, fuentes técnicas ni debug.
 - Sé breve y útil. Si falta un dato, pregunta solo lo necesario.
 
@@ -3410,36 +3475,48 @@ async function createAppointmentWithPayment({
   };
 }
 
-export async function GET() {
-  const configured = isOpenAIConfigured();
+export async function GET(request) {
+  try {
+    const authorization = await authorizeAdminRequest(request);
 
-  return NextResponse.json({
-    ok: true,
-    aiConfigured: configured,
-    aiProvider: configured ? "openai" : "rules",
-    model: configured ? openaiModel : null,
-    message: configured
-      ? `IA conectada en servidor con ${openaiModel}.`
-      : AI_RULES_FALLBACK_MESSAGE,
-  });
+    if (authorization.response) return authorization.response;
+
+    const configured = isOpenAIConfigured();
+
+    return NextResponse.json({
+      ok: true,
+      aiConfigured: configured,
+      aiProvider: configured ? "openai" : "rules",
+      model: configured ? openaiModel : null,
+      message: configured
+        ? `IA conectada en servidor con ${openaiModel}.`
+        : AI_RULES_FALLBACK_MESSAGE,
+    });
+  } catch (error) {
+    console.error("Bot test status error:", error);
+    return NextResponse.json(
+      { ok: false, error: "No se pudo revisar el estado del bot." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(request) {
   try {
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        { error: "Faltan variables de Supabase." },
-        { status: 500 }
-      );
-    }
+    const authorization = await authorizeAdminRequest(request);
+
+    if (authorization.response) return authorization.response;
+
+    const supabase = authorization.supabase;
 
     const body = await request.json();
     const incomingMessage = String(body.message || "").trim();
     const clientNameFromTest = String(body.clientName || "").trim();
     const clientPhoneFromTest = String(body.clientPhone || "test").trim();
+    const allowRealWrite = body.allowRealWrite === true;
+    const allowInactiveTest = body.allowInactiveTest === true;
     // reset conversation final clean
     if (body.resetConversation === true || body.reset === true) {
-      const supabase = createClient(supabaseUrl, serviceRoleKey);
       const rawPhone = String(clientPhoneFromTest || "test").trim();
       const digitsOnly = rawPhone.replace(/\D/g, "");
       const last10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
@@ -3472,8 +3549,9 @@ export async function POST(request) {
       }
 
       if (conversationDeleteError) {
+        console.error("Bot test reset error:", conversationDeleteError);
         return NextResponse.json(
-          { error: `No se pudo reiniciar la conversacion: ${conversationDeleteError.message}` },
+          { error: "No se pudo reiniciar la conversación." },
           { status: 500 }
         );
       }
@@ -3481,8 +3559,8 @@ export async function POST(request) {
       return NextResponse.json({
         ok: true,
         reset: true,
-        reply: "Conversacion reiniciada. Ya no tomare en cuenta el contexto anterior.",
-        phoneVariants,
+        reply:
+          "Conversación reiniciada. Ya no tomaré en cuenta el contexto anterior.",
       });
     }
 
@@ -3492,8 +3570,6 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const conversation = await getConversation(supabase, clientPhoneFromTest);
     const existingContext = conversation?.conversation_context || {};
@@ -3604,6 +3680,23 @@ export async function POST(request) {
     }
 
     const settings = settingsResult.data;
+
+    if (settings?.active === false && !allowInactiveTest) {
+      return NextResponse.json({
+        ok: true,
+        reply:
+          "El bot está desactivado. Puedes atender esta conversación manualmente.",
+        message:
+          "El bot está desactivado. Puedes atender esta conversación manualmente.",
+        bot_disabled: true,
+        botInactive: true,
+        intent: "human_handoff",
+        matchedSource: "bot_settings_inactive",
+        step: "humano",
+        dryRun: !allowRealWrite,
+      });
+    }
+
     const menuOptions = menuResult.data || [];
     const faqs = faqResult.data || [];
     const knowledgeItems = [
@@ -3687,6 +3780,7 @@ export async function POST(request) {
 
     let reply = "";
     let matchedSource = "fallback";
+    let appointmentPreview = null;
 
     let nextContext = {
       ...context,
@@ -3959,6 +4053,35 @@ export async function POST(request) {
         matchedSource = "missing_booking_data";
         nextStep = null;
       } else {
+        appointmentPreview = buildAppointmentPreview({
+          fullName,
+          phone,
+          birthday: nextContext.client_birthday,
+          services: selectedServices,
+          slot: selectedSlot,
+          notes: nextContext.booking_notes || "",
+        });
+
+        if (!allowRealWrite) {
+          nextContext.appointment_preview = appointmentPreview;
+          delete nextContext.created_appointment_id;
+          delete nextContext.created_payment_id;
+
+          const servicesText = selectedServices
+            .map((service) => service.name)
+            .join(" + ");
+          const notesText = nextContext.booking_notes
+            ? `\nNota: ${nextContext.booking_notes}`
+            : "";
+
+          reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}${notesText}\nFecha: ${formatDate(
+            selectedSlot.date
+          )}\nHora: ${formatTime12(selectedSlot.start_time)}\nTécnica: ${
+            selectedSlot.staff_name
+          }\nAnticipo estimado: $${appointmentPreview.deposit_amount}.\n\nNo se creó ninguna cita, cliente ni pago real.`;
+          matchedSource = "appointment_preview";
+          nextStep = "preview_cita";
+        } else {
         const client = await upsertClient({
           supabase,
           fullName,
@@ -3976,6 +4099,7 @@ export async function POST(request) {
 
         nextContext.created_appointment_id = created.appointment.id;
         nextContext.created_payment_id = created.payment.id;
+        delete nextContext.appointment_preview;
 
         const servicesText = selectedServices
           .map((service) => service.name)
@@ -4010,6 +4134,7 @@ export async function POST(request) {
 
         matchedSource = "appointment_created_with_payment";
         nextStep = "esperando_comprobante";
+        }
       }
     }
 
@@ -4498,14 +4623,16 @@ export async function POST(request) {
       }
     );
 
-    const appointmentRequestSaved = await saveAppointmentRequest(supabase, {
-      conversationId: savedConversation.id,
-      clientPhone: clientPhoneFromTest,
-      clientName: clientNameFromTest,
-      context: nextContext,
-      ai,
-      incomingMessage,
-    });
+    const appointmentRequestSaved = allowRealWrite
+      ? await saveAppointmentRequest(supabase, {
+          conversationId: savedConversation.id,
+          clientPhone: clientPhoneFromTest,
+          clientName: clientNameFromTest,
+          context: nextContext,
+          ai,
+          incomingMessage,
+        })
+      : null;
 
     await saveBotMessages(
       supabase,
@@ -4528,13 +4655,17 @@ export async function POST(request) {
       matchedSource,
       ai,
       step: nextStep,
+      dryRun: !allowRealWrite,
+      realWriteEnabled: allowRealWrite,
+      appointmentPreview,
       appointmentRequestSaved: Boolean(appointmentRequestSaved),
     });
   } catch (error) {
+    console.error("Bot test request error:", error);
     return NextResponse.json(
       {
         ok: false,
-        error: error.message || "Error inesperado al probar el bot.",
+        error: "No se pudo completar la prueba del bot.",
       },
       { status: 500 }
     );

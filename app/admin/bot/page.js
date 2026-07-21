@@ -64,6 +64,20 @@ const quickReplies = [
   },
 ];
 
+async function getBotRequestHeaders({ json = false } = {}) {
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
+  if (!accessToken) {
+    throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+  }
+
+  return {
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    Authorization: `Bearer ${accessToken}`,
+  };
+}
+
 function formatDateTime(value) {
   if (!value) return "Sin fecha";
 
@@ -207,6 +221,7 @@ export default function BotPage() {
   const [testMessage, setTestMessage] = useState("");
   const [testLoading, setTestLoading] = useState(false);
   const [testChatMessages, setTestChatMessages] = useState([]);
+  const [testWithoutRealWrites, setTestWithoutRealWrites] = useState(true);
   const testChatScrollRef = useRef(null);
 
   useEffect(() => {
@@ -224,6 +239,8 @@ export default function BotPage() {
     };
 
     start();
+    // La carga inicial debe ejecutarse una sola vez después de validar la sesión.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -246,35 +263,10 @@ useEffect(() => {
 }, [testChatMessages, testLoading]);
 
   useEffect(() => {
-    if (activeSection !== "conversaciones") return;
-
-    if (!selectedConversationId && conversations.length > 0) {
-      setSelectedConversationId(conversations[0].id);
-      return;
-    }
-
-    if (
-      selectedConversationId &&
-      conversations.length > 0 &&
-      !conversations.some((conversation) => conversation.id === selectedConversationId)
-    ) {
-      setSelectedConversationId(conversations[0].id);
-    }
-  }, [activeSection, conversations, selectedConversationId]);
-
-  useEffect(() => {
     if (activeSection !== "conversaciones" || !selectedConversationId) return;
 
     loadConversationMessages(selectedConversationId);
   }, [activeSection, selectedConversationId]);
-
-  useEffect(() => {
-    const selected = conversations.find(
-      (conversation) => conversation.id === selectedConversationId
-    );
-
-    setAssignedTo(selected?.assigned_to || "");
-  }, [conversations, selectedConversationId]);
 
   useEffect(() => {
     if (!conversationScrollRef.current) return;
@@ -285,7 +277,7 @@ useEffect(() => {
     });
   }, [conversationMessages, selectedConversationId]);
 
-  const loadData = async () => {
+  async function loadData() {
     setLoadingData(true);
     setMessage("");
 
@@ -372,19 +364,33 @@ useEffect(() => {
         )
       );
     } else {
-      setConversations(conversationsResult.data || []);
+      const loadedConversations = conversationsResult.data || [];
+      const selectedConversation =
+        loadedConversations.find(
+          (conversation) => conversation.id === selectedConversationId
+        ) || loadedConversations[0] || null;
+
+      setConversations(loadedConversations);
+      setSelectedConversationId(selectedConversation?.id || null);
+      setAssignedTo(selectedConversation?.assigned_to || "");
     }
 
     setLoadingData(false);
-  };
+  }
 
-  const loadAiStatus = async () => {
+  async function loadAiStatus() {
     try {
-      const response = await fetch("/api/bot/test", { method: "GET" });
+      const headers = await getBotRequestHeaders();
+      const response = await fetch("/api/bot/test", { method: "GET", headers });
       const data = await response.json();
 
       if (response.ok) {
         setAiStatus(data);
+      } else {
+        setAiStatus({
+          aiConfigured: false,
+          message: data.error || "No se pudo revisar el estado del bot.",
+        });
       }
     } catch (error) {
       setAiStatus({
@@ -393,9 +399,9 @@ useEffect(() => {
           "IA no conectada. El bot está funcionando con reglas básicas.",
       });
     }
-  };
+  }
 
-  const loadConversationMessages = async (conversationId) => {
+  async function loadConversationMessages(conversationId) {
     if (!conversationId) return;
 
     setLoadingConversationMessages(true);
@@ -414,7 +420,7 @@ useEffect(() => {
     }
 
     setLoadingConversationMessages(false);
-  };
+  }
 
   const updateConversationControl = async (conversation, enabled) => {
     if (!conversation?.id) return;
@@ -890,15 +896,16 @@ useEffect(() => {
     setTestLoading(true);
 
     try {
+      const headers = await getBotRequestHeaders({ json: true });
       const response = await fetch("/api/bot/test", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           message: cleanMessage,
           clientName: testClientName.trim(),
           clientPhone: testClientPhone.trim() || "test",
+          allowRealWrite: !testWithoutRealWrites,
+          allowInactiveTest: true,
         }),
       });
 
@@ -961,15 +968,16 @@ useEffect(() => {
     setTestLoading(true);
 
     try {
+      const headers = await getBotRequestHeaders({ json: true });
       const response = await fetch("/api/bot/test", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           resetConversation: true,
           clientName: testClientName.trim(),
           clientPhone: testClientPhone.trim() || "test",
+          allowRealWrite: false,
+          allowInactiveTest: true,
         }),
       });
 
@@ -1474,6 +1482,33 @@ useEffect(() => {
                 placeholder="9991112233"
               />
 
+              <label className="flex items-start gap-3 rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] p-4">
+                <input
+                  type="checkbox"
+                  checked={testWithoutRealWrites}
+                  onChange={(event) =>
+                    setTestWithoutRealWrites(event.target.checked)
+                  }
+                  className="mt-1 h-4 w-4 accent-[#bd7b83]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-[#263238]">
+                    Modo prueba sin guardar citas reales
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-[#68777c]">
+                    Activado por defecto. Permite revisar la conversación y la
+                    propuesta de cita sin crear clientes, citas ni pagos.
+                  </span>
+                </span>
+              </label>
+
+              {!testWithoutRealWrites && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
+                  Guardado real activado. Las pruebas pueden crear clientes,
+                  citas y pagos pendientes en la agenda.
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={resetTestChat}
@@ -1696,7 +1731,10 @@ useEffect(() => {
                     <button
                       type="button"
                       key={conversation.id}
-                      onClick={() => setSelectedConversationId(conversation.id)}
+                      onClick={() => {
+                        setSelectedConversationId(conversation.id);
+                        setAssignedTo(conversation.assigned_to || "");
+                      }}
                       className={`w-full min-w-0 border-b border-[#edf0f1] px-4 py-4 text-left transition hover:bg-[#f7f9fa] ${
                         isSelected ? "bg-[#f9eef0]" : "bg-white"
                       }`}
