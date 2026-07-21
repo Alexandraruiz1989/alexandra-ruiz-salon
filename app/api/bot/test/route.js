@@ -46,6 +46,9 @@ async function authorizeAdminRequest(request) {
 
 const SALON_TIME_ZONE = "America/Mexico_City";
 const SALON_NAME = "Alexandra Ruiz Salón";
+const APPOINTMENT_DEPOSIT_AMOUNT = 100;
+const APPOINTMENT_DEPOSIT_MESSAGE =
+  "Te comento que las citas se agendan con un anticipo de $100, que se descontará de tu total a pagar.";
 const EXCLUDED_STAFF_FOR_BOT = ["junuen ruiz"];
 const STAFF_LEAD_TIME_MINUTES = {
   "laura canul": 20,
@@ -376,6 +379,8 @@ function parseTimePreference(rawText) {
   // - Ya transferí el anticipo.
   const text = normalizeText(rawText);
   const explicit = parseExplicitTime(text);
+  const wantsEarliest =
+    text.includes("lo mas temprano") || text.includes("lo más temprano");
 
   if (text.includes("antes de las") && explicit !== null) {
     return { mode: "before", minutes: null, maximumMinutes: explicit };
@@ -387,12 +392,20 @@ function parseTimePreference(rawText) {
 
   if (explicit !== null) return { mode: "exact", minutes: explicit };
 
-  if (text.includes("lo mas temprano") || text.includes("lo más temprano")) {
-    return { mode: "earliest", minutes: null };
+  if (text.includes("noche")) {
+    return {
+      mode: wantsEarliest ? "earliest" : "night",
+      minutes: 18 * 60 + 31,
+      maximumMinutes: null,
+    };
   }
 
-  if (text.includes("tarde") || text.includes("noche")) {
-    return { mode: "afternoon", minutes: 12 * 60 };
+  if (text.includes("tarde")) {
+    return {
+      mode: wantsEarliest ? "earliest" : "afternoon",
+      minutes: 12 * 60,
+      maximumMinutes: 18 * 60 + 31,
+    };
   }
 
   if (
@@ -402,7 +415,15 @@ function parseTimePreference(rawText) {
     text.includes("por la manana") ||
     text.includes("temprano")
   ) {
-    return { mode: "morning", minutes: null, maximumMinutes: 12 * 60 };
+    return {
+      mode: wantsEarliest ? "earliest" : "morning",
+      minutes: 8 * 60,
+      maximumMinutes: 12 * 60,
+    };
+  }
+
+  if (wantsEarliest) {
+    return { mode: "earliest", minutes: null, maximumMinutes: null };
   }
 
   return { mode: "any", minutes: null, maximumMinutes: null };
@@ -425,6 +446,18 @@ function asksLocation(text) {
 function asksBusinessHours(text) {
   const t = normalizeText(text);
   return t.includes("horario") || t.includes("a que hora abren") || t.includes("a qué hora abren") || t.includes("a que hora cierran") || t.includes("a qué hora cierran");
+}
+
+function asksAvailability(text) {
+  const value = normalizeText(text);
+
+  return (
+    value.includes("tienen espacio") ||
+    value.includes("hay espacio") ||
+    value.includes("tienen disponibilidad") ||
+    value.includes("hay disponibilidad") ||
+    value.includes("pueden atender")
+  );
 }
 
 function asksPaymentProof(text) {
@@ -993,6 +1026,10 @@ function buildContextualServiceInquiryReply({
   }
 
   if (text.includes("escultural")) {
+    const esculturalService = (services || []).find((service) => {
+      const serviceText = normalizeServiceText(service);
+      return serviceText.includes("escultural") && isServiceBookable(service);
+    });
     const priceText = `$${getEsculturalesAcrylicPrice(services)}`;
 
     if (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) {
@@ -1000,6 +1037,7 @@ function buildContextualServiceInquiryReply({
         reply: `Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. El largo extra tiene costo adicional de +$50 y el diseño se cotiza según lo que elijas.\n\n¿Te gustaría agendarlas?`,
         topic: "extensiones",
         serviceFocus: "esculturales",
+        selectedService: esculturalService,
       };
     }
 
@@ -1007,6 +1045,7 @@ function buildContextualServiceInquiryReply({
       reply: `Sí, manejamos uñas esculturales. Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. Si deseas largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendarlas?`,
       topic: "extensiones",
       serviceFocus: "esculturales",
+      selectedService: esculturalService,
     };
   }
 
@@ -1303,6 +1342,33 @@ function isServiceBookable(service) {
   if (isDesignOrExtraService(service)) return false;
   if (text.includes("uña para pie") || text.includes("una para pie") || text.includes("reconstruccion estetica de una para pie")) return false;
   return true;
+}
+
+function isPublicBotService(service) {
+  if (!service || service.bot_active === false) return false;
+
+  const name = normalizeText(service.name);
+
+  // Este servicio permanece disponible para la agenda interna, pero nunca se
+  // muestra ni se selecciona desde conversaciones de clientas.
+  if (
+    name.includes("relleno") &&
+    name.includes("acril") &&
+    name.includes("cliente frecuente")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function asksAcrylicFillReview(message) {
+  const text = normalizeText(message);
+
+  return (
+    text.includes("relleno") &&
+    (text.includes("acril") || text.includes("uñas acril") || text.includes("unas acril"))
+  );
 }
 
 function normalizeServiceText(service) {
@@ -1704,11 +1770,33 @@ function detectsSecondPersonRequest(message) {
     text.includes("otra cita") ||
     text.includes("dos personas") ||
     text.includes("para dos") ||
+    text.includes("somos dos") ||
+    text.includes("para mi mama y para mi") ||
+    text.includes("para mi y mi mama") ||
     text.includes("para mi mama") ||
     text.includes("para mi mamá") ||
     text.includes("para mi hija") ||
     text.includes("para mi hermana") ||
     text.includes("para mi amiga")
+  );
+}
+
+function detectsTwoPersonGelHandsRequest(message) {
+  const text = normalizeText(message);
+  const explicitlyTwo =
+    text.includes("dos personas") ||
+    text.includes("para dos") ||
+    text.includes("somos dos") ||
+    ((text.includes("mi mama") || text.includes("mi mamá")) &&
+      (text.includes("y para mi") ||
+        text.includes("y para mí") ||
+        text.includes("y yo") ||
+        text.includes("las dos")));
+
+  return (
+    explicitlyTwo &&
+    mentionsGelishTopic(text) &&
+    !mentionsPedicureTopic(text)
   );
 }
 
@@ -1723,6 +1811,23 @@ function detectsMultiPersonGelPedicureRequest(message) {
 }
 
 function getInitialMultiPersonRequests(message) {
+  if (detectsTwoPersonGelHandsRequest(message)) {
+    return [
+      {
+        key: "person_1",
+        label: "Primera persona",
+        service_query: "gelish manos",
+        status: "needs_arrangement",
+      },
+      {
+        key: "person_2",
+        label: "Segunda persona",
+        service_query: "gelish manos",
+        status: "needs_arrangement",
+      },
+    ];
+  }
+
   if (!detectsMultiPersonGelPedicureRequest(message)) return [];
 
   return [
@@ -1877,19 +1982,26 @@ function buildSelectedServicePricesMessage(services) {
 
 function detectStaffPreference(text, staff) {
   const t = normalizeText(text);
+  const tokens = t.split(/\s+/).filter(Boolean);
+  const selectsAvailableOption =
+    tokens.includes("4") &&
+    tokens.every((token) => token === "4" || token === "opcion" || token === "la");
 
   if (!t) return null;
 
   if (
+    selectsAvailableOption ||
     t.includes("disponible") ||
     t.includes("cualquiera") ||
     t.includes("cualquier") ||
     t.includes("chica") ||
     t.includes("colaboradora") ||
     t.includes("quien sea") ||
+    t.includes("quien tenga espacio") ||
     t.includes("sin preferencia") ||
+    t.includes("prim") ||
     t.includes("primera vez") ||
-    t === "4"
+    t.includes("la disponible")
   ) {
     return {
       mode: "available_priority",
@@ -1980,9 +2092,22 @@ function getEstimatedTotal(services) {
   }, 0);
 }
 
+function getTimeRangeLabel(timeMode) {
+  if (timeMode === "morning") return "por la mañana";
+  if (timeMode === "afternoon") return "por la tarde";
+  if (timeMode === "night") return "por la noche";
+  if (timeMode === "before") return "antes de la hora indicada";
+  return "";
+}
+
 function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffName = "") {
   const servicesText = selectedServices.map((service) => service.name).join(" + ");
   const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
+  const rangeLabel = getTimeRangeLabel(slots?.timeMode);
+
+  if (slots?.availabilityError) {
+    return "No pude revisar la disponibilidad en este momento. Puedo intentarlo de nuevo o ayudarte a revisar otro día.";
+  }
 
   if (slots?.exactUnavailable) {
     const requestedTime = formatTime12(slots.requestedStartTime);
@@ -2004,9 +2129,13 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
   }
 
   if (!slots || slots.length === 0) {
+    if (rangeLabel) {
+      return `${rangeLabel.charAt(0).toUpperCase() + rangeLabel.slice(1)} no encontré espacios disponibles para ${servicesText}${staffText}. Puedo revisar otro rango u otro día.`;
+    }
+
     return `Por el momento no encontré espacios disponibles para ${servicesText}${staffText} el ${formatDate(
       dateString
-    )}. 💕 Puedes decirme otro día, otro horario o elegir la colaboradora disponible para revisar más opciones.`;
+    )}. Puedes decirme otro día, otro horario o elegir la colaboradora disponible para revisar más opciones.`;
   }
 
   const optionsText = slots
@@ -2016,12 +2145,32 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
     )
     .join("\n");
 
-  return `Tengo estos espacios disponibles para ${servicesText} el ${formatDate(
-    dateString
-  )}:\n\n${optionsText}\n\nResponde con el número de la opción que prefieras.`;
+  const rangeText = rangeLabel ? ` ${rangeLabel}` : "";
+
+  return `Para el ${formatDate(dateString)}${rangeText} encontré estos espacios para ${servicesText}:\n\n${optionsText}\n\n¿Cuál prefieres?`;
+}
+
+function isTwoPersonGelHandsRequests(requests = []) {
+  return (
+    requests.length === 2 &&
+    requests.every(
+      (request) => normalizeText(request.service_query) === "gelish manos"
+    )
+  );
+}
+
+function buildTwoPersonGelHandsReply() {
+  return "Claro, serían 2 citas de gel en manos. ¿Les gustaría venir juntas en horarios seguidos o solo revisar espacios disponibles para ambas?";
 }
 
 function getAvailabilityFeedback(slots) {
+  if (slots?.availabilityError) {
+    return {
+      reason: "No fue posible revisar la disponibilidad en este momento.",
+      alternatives: [],
+    };
+  }
+
   if (slots?.exactUnavailable) {
     return {
       reason: `La hora solicitada (${formatTime12(
@@ -2049,11 +2198,11 @@ function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
     slot.date
   )}\nHora: ${formatTime12(slot.start_time)}\nColaboradora: ${
     slot.staff_name
-  }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nAnticipo requerido: $${depositAmount}.\nEse anticipo se descuenta del total a pagar el día de tu cita.`;
+  }\n\n${APPOINTMENT_DEPOSIT_MESSAGE}\nAnticipo requerido: $${depositAmount}.`;
 }
 
 function buildAppointmentPreview({ fullName, phone, birthday, services, slot, notes }) {
-  const depositAmount = services.length * 100;
+  const depositAmount = APPOINTMENT_DEPOSIT_AMOUNT;
   const estimatedTotal = getEstimatedTotal(services);
 
   return {
@@ -2081,6 +2230,13 @@ function buildAppointmentPreview({ fullName, phone, birthday, services, slot, no
     notes: notes || "",
     status: "pending_review",
   };
+}
+
+function takeDepositMessage(context) {
+  if (context.deposit_message_sent) return "";
+
+  context.deposit_message_sent = true;
+  return APPOINTMENT_DEPOSIT_MESSAGE;
 }
 
 function mediaText(asset, fallback = "") {
@@ -2981,6 +3137,8 @@ Contexto:
 - Si dice "pedi" o "pedicure" de forma general, significa categoría pedicure; NO elijas varios servicios exactos. Usa services_requested: ["pedicure"] para que el bot muestre opciones y pida elegir una.
 - Si dice "también quiero", "agrega", "también", quiere sumar un servicio a lo ya elegido.
 - Si dice "ya pagué", "ya transferí", "te mando comprobante", la intención es comprobante de anticipo.
+- No redactes avisos ni recordatorios de anticipo. La ruta los agrega una sola vez cuando prepara o registra la cita.
+- Si context.deposit_message_sent es true, no vuelvas a mencionar la política de anticipo.
 - Si dice "Ale", se refiere a Alexandra Ruiz.
 - Si dice "cualquier chica", "la que esté disponible", "es mi primera vez", no tiene técnica de preferencia.
 - Si menciona largo #3, largo 3 o largo extra, guárdalo en notes, no lo trates como número de opción.
@@ -3034,7 +3192,7 @@ Reglas:
   try {
     const raw = await createOpenAITextResponse({
       instructions: systemPrompt,
-      input: `Contexto previo:\n${JSON.stringify(
+      input: `Devuelve únicamente un objeto JSON válido con la estructura indicada.\n\nContexto previo:\n${JSON.stringify(
         context || {},
         null,
         2
@@ -3333,17 +3491,22 @@ async function loadSafeBotSlots({
   preferredStaffId,
   requestedStartTime = "",
 }) {
-  const result = await getSafeAvailability({
-    adminSupabase: supabase,
-    date: dateString,
-    serviceIds: selectedServices.map((service) => service.id),
-    preferredStaffId:
-      preferredStaffMode === "specific" ? preferredStaffId || "" : "",
-    requestedStartTime,
-    limit: 240,
-  });
+  try {
+    const result = await getSafeAvailability({
+      adminSupabase: supabase,
+      date: dateString,
+      serviceIds: selectedServices.map((service) => service.id),
+      preferredStaffId:
+        preferredStaffMode === "specific" ? preferredStaffId || "" : "",
+      requestedStartTime,
+      limit: 240,
+    });
 
-  return normalizeSafeSlots(result.slots, dateString);
+    return normalizeSafeSlots(result.slots, dateString);
+  } catch (error) {
+    console.error("Bot safe availability error:", error);
+    return addSlotMetadata([], { availabilityError: true });
+  }
 }
 
 async function getAvailableSlots({
@@ -3371,6 +3534,13 @@ async function getAvailableSlots({
       preferredStaffId,
       requestedStartTime,
     });
+    if (exactCandidates.availabilityError) {
+      return addSlotMetadata([], {
+        availabilityError: true,
+        requestedStartTime,
+        timeMode,
+      });
+    }
     const exactSlots = applyBotAvailabilityRules({
       slots: exactCandidates,
       dateString,
@@ -3395,6 +3565,13 @@ async function getAvailableSlots({
       preferredStaffMode,
       preferredStaffId,
     });
+    if (allCandidates.availabilityError) {
+      return addSlotMetadata([], {
+        availabilityError: true,
+        requestedStartTime,
+        timeMode,
+      });
+    }
     const nearbySlots = applyBotAvailabilityRules({
       slots: allCandidates,
       dateString,
@@ -3429,6 +3606,9 @@ async function getAvailableSlots({
     preferredStaffMode,
     preferredStaffId,
   });
+  if (safeSlots.availabilityError) {
+    return addSlotMetadata([], { availabilityError: true, timeMode });
+  }
   const filteredSlots = applyBotAvailabilityRules({
     slots: safeSlots,
     dateString,
@@ -3440,10 +3620,17 @@ async function getAvailableSlots({
   const limitedSlots =
     timeMode === "earliest" ? filteredSlots.slice(0, 1) : filteredSlots.slice(0, 8);
 
-  return limitedSlots.map((slot, index) => ({
-    ...slot,
-    option_number: index + 1,
-  }));
+  return addSlotMetadata(
+    limitedSlots.map((slot, index) => ({
+      ...slot,
+      option_number: index + 1,
+    })),
+    {
+      timeMode,
+      minimumStartMinutes,
+      maximumStartMinutes,
+    }
+  );
 }
 
 async function revalidateSelectedSlot({ supabase, selectedServices, selectedSlot }) {
@@ -3514,7 +3701,7 @@ async function createAppointmentWithPayment({
   bookingNotes,
 }) {
   const estimatedTotal = getEstimatedTotal(selectedServices);
-  const depositAmount = selectedServices.length * 100;
+  const depositAmount = APPOINTMENT_DEPOSIT_AMOUNT;
   const now = new Date().toISOString();
 
   const appointmentPayload = {
@@ -3839,9 +4026,8 @@ export async function POST(request) {
       ...(knowledgeResult.data || []),
       ...getDefaultKnowledgeItems(),
     ];
-    const allServices = servicesResult.data || [];
+    const allServices = (servicesResult.data || []).filter(isPublicBotService);
     const services = allServices
-      .filter((service) => service.bot_active !== false)
       .filter(isServiceBookable);
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
@@ -3887,6 +4073,10 @@ export async function POST(request) {
       ai.intent = "payment_proof";
     }
 
+    if (asksAvailability(incomingMessage)) {
+      ai.intent = "book_appointment";
+    }
+
     const requestedDate = parseRequestedDate(
       `${incomingMessage} ${ai.date_text || ""}`
     );
@@ -3904,7 +4094,7 @@ export async function POST(request) {
         );
 
     const selectedServicesFromContext = Array.isArray(context.selected_services)
-      ? context.selected_services
+      ? context.selected_services.filter(isPublicBotService)
       : [];
 
     const bookingNotes = [
@@ -3923,6 +4113,10 @@ export async function POST(request) {
 
     let nextContext = {
       ...context,
+      selected_services: selectedServicesFromContext,
+      pending_service_options: Array.isArray(context.pending_service_options)
+        ? context.pending_service_options.filter(isPublicBotService)
+        : [],
       active_topic:
         detectActiveConversationTopic(incomingMessage, context, recentMessages) ||
         context.active_topic ||
@@ -3979,16 +4173,73 @@ export async function POST(request) {
     }
 
     if (!reply && incomingMultiPersonRequests.length > 0) {
-      const pedicureOptions = getPedicureOptions(services);
+      if (isTwoPersonGelHandsRequests(incomingMultiPersonRequests)) {
+        nextContext.multi_person_booking = {
+          person_count: 2,
+          service_query: "gelish manos",
+          requires_separate_appointments: true,
+          status: "needs_arrangement",
+        };
+        nextContext.selected_services = [];
+        nextContext.pending_service_options = [];
+        nextContext.available_options = [];
+        nextContext.active_topic = "gelish manos para dos personas";
+        nextContext.active_service_focus = "gelish manos";
 
-      nextContext.pending_service_options = pedicureOptions;
-      nextContext.adding_service_mode = false;
-      nextContext.active_topic = "pedicure";
-      nextContext.active_service_focus = "gelish manos y pedicure";
+        reply = buildTwoPersonGelHandsReply();
+        matchedSource = "multi_person_gel_hands";
+        nextStep = "esperando_multipersona_modalidad";
+      } else {
+        const pedicureOptions = getPedicureOptions(services);
 
-      reply = buildMultiPersonGelPedicureReply(services);
-      matchedSource = "multi_person_services";
-      nextStep = "esperando_seleccion_servicios";
+        nextContext.pending_service_options = pedicureOptions;
+        nextContext.adding_service_mode = false;
+        nextContext.active_topic = "pedicure";
+        nextContext.active_service_focus = "gelish manos y pedicure";
+
+        reply = buildMultiPersonGelPedicureReply(services);
+        matchedSource = "multi_person_services";
+        nextStep = "esperando_seleccion_servicios";
+      }
+    }
+
+    if (!reply && nextStep === "esperando_multipersona_modalidad") {
+      const preference = normalizeText(incomingMessage);
+      const together =
+        preference.includes("junta") ||
+        preference.includes("seguido") ||
+        preference.includes("mismo dia");
+      const reviewBoth =
+        preference.includes("ambas") ||
+        preference.includes("para las dos") ||
+        preference.includes("revisar espacio");
+
+      if (together || reviewBoth) {
+        nextContext.multi_person_booking = {
+          ...(nextContext.multi_person_booking || {}),
+          arrangement: together ? "consecutive" : "review_both",
+          status: "needs_names_and_schedule",
+        };
+        reply =
+          "Perfecto. Para preparar las dos solicitudes necesito los nombres de ambas y el día que prefieren. No crearé una sola cita mezclada.";
+        matchedSource = "multi_person_arrangement_selected";
+        nextStep = "esperando_multipersona_datos";
+      } else {
+        reply = buildTwoPersonGelHandsReply();
+        matchedSource = "multi_person_arrangement_retry";
+      }
+    }
+
+    if (!reply && asksAcrylicFillReview(incomingMessage)) {
+      reply =
+        "Para relleno de acrílico lo revisamos según el trabajo que traigas y el tiempo desde tu última aplicación. Te puedo ayudar a preparar la solicitud para que el equipo confirme el servicio correcto.";
+      matchedSource = "acrylic_fill_requires_team_review";
+      nextContext.active_topic = "relleno de acrílico";
+      nextContext.active_service_focus = "relleno de acrílico";
+      nextContext.requires_service_confirmation = true;
+      nextContext.selected_services = [];
+      nextContext.pending_service_options = [];
+      nextStep = "esperando_confirmacion_equipo";
     }
 
     if (!reply && asksGelishRemovalQuestion(incomingMessage)) {
@@ -4193,7 +4444,12 @@ export async function POST(request) {
       const selectedSlot = nextContext.selected_slot;
       const selectedServices = nextContext.selected_services || [];
 
-      if (!selectedSlot || selectedServices.length === 0) {
+      if (nextContext.multi_person_booking?.requires_separate_appointments) {
+        reply =
+          "Para dos personas prepararé solicitudes separadas. Antes necesito confirmar los nombres de ambas y si buscan horarios seguidos.";
+        matchedSource = "multi_person_real_write_blocked";
+        nextStep = "esperando_multipersona_datos";
+      } else if (!selectedSlot || selectedServices.length === 0) {
         reply =
           "Me faltó un dato de la cita para registrarla. Escribe “agendar” y lo revisamos de nuevo, por favor 💕";
 
@@ -4252,11 +4508,14 @@ export async function POST(request) {
               ? `\nNota: ${nextContext.booking_notes}`
               : "";
 
+            const depositMessage = takeDepositMessage(nextContext);
+            const depositText = depositMessage ? `\n\n${depositMessage}` : "";
+
             reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}${notesText}\nFecha: ${formatDate(
               revalidatedSlot.date
             )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
               revalidatedSlot.staff_name
-            }\nAnticipo estimado: $${appointmentPreview.deposit_amount}.\n\nNo se creó ninguna cita, cliente ni pago real.`;
+            }${depositText}\n\nNo se creó ninguna cita, cliente ni pago real.`;
             matchedSource = "appointment_preview";
             nextStep = "preview_cita";
           } else {
@@ -4317,15 +4576,18 @@ export async function POST(request) {
               ? `\nNota: ${nextContext.booking_notes}`
               : "";
 
+            const depositMessage = takeDepositMessage(nextContext);
+            const depositText = depositMessage ? `\n\n${depositMessage}` : "";
+
             reply = `Listo ${getFirstName(
               fullName
             )}. Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}${notesText}\n\nFecha: ${formatDate(
               revalidatedSlot.date
             )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
               revalidatedSlot.staff_name
-            }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nTotal de anticipo requerido: $${
+            }${depositText}\nTotal de anticipo requerido: $${
               created.depositAmount
-            }.\nEse anticipo se descuenta del total a pagar el día de tu cita.\n\n${mediaText(
+            }.\n\n${mediaText(
               getAssetByKey(mediaAssets, "datos_anticipo")
             )}\n\n${mediaText(
               getAssetByKey(mediaAssets, "politicas_salon")
@@ -4438,6 +4700,7 @@ export async function POST(request) {
     ) {
       if (
         serviceQueries.length === 0 &&
+        selectedServicesFromContext.length === 0 &&
         !asksNearestAvailabilityBot(incomingMessage) &&
         (ai.intent === "book_appointment" || nextStep === "esperando_servicios")
       ) {
@@ -4529,21 +4792,29 @@ export async function POST(request) {
               nearest.slots.length > 0
                 ? "esperando_opcion_horario"
                 : "esperando_fecha";
-          } else if (targetStaff && targetDate) {
+          } else if (targetDate) {
+            const targetStaffMode =
+              targetStaff?.mode ||
+              nextContext.preferred_staff_mode ||
+              "available_priority";
+            const targetStaffId =
+              targetStaff?.staffId || nextContext.preferred_staff_id || null;
+            const targetStaffName =
+              targetStaff?.staffName || nextContext.preferred_staff_name || "";
             const slots = await getAvailableSlots({
               supabase,
               selectedServices: mergedServices,
               dateString: targetDate,
-              preferredStaffMode: targetStaff.mode,
-              preferredStaffId: targetStaff.staffId,
+              preferredStaffMode: targetStaffMode,
+              preferredStaffId: targetStaffId,
               minimumStartMinutes: nextContext.minimum_start_minutes,
               maximumStartMinutes: nextContext.maximum_start_minutes,
               timeMode: nextContext.time_mode,
             });
 
-            nextContext.preferred_staff_mode = targetStaff.mode;
-            nextContext.preferred_staff_id = targetStaff.staffId;
-            nextContext.preferred_staff_name = targetStaff.staffName;
+            nextContext.preferred_staff_mode = targetStaffMode;
+            nextContext.preferred_staff_id = targetStaffId;
+            nextContext.preferred_staff_name = targetStaffName;
             nextContext.requested_date = targetDate;
             nextContext.available_options = slots;
             const slotFeedback = getAvailabilityFeedback(slots);
@@ -4554,7 +4825,7 @@ export async function POST(request) {
               slots,
               mergedServices,
               targetDate,
-              targetStaff.mode === "specific" ? targetStaff.staffName : ""
+              targetStaffMode === "specific" ? targetStaffName : ""
             );
 
             matchedSource = "services_staff_date_availability";
@@ -4657,13 +4928,15 @@ export async function POST(request) {
       }
     }
 
+    const availabilityDate =
+      requestedDate ||
+      (hasNewTimePreference ? nextContext.requested_date || null : null);
+
     if (
       !reply &&
-      requestedDate &&
+      availabilityDate &&
       selectedServicesNow.length > 0 &&
-      (nextStep === "esperando_fecha" ||
-        nextStep === "esperando_opcion_horario" ||
-        context.preferred_staff_mode)
+      !nextContext.multi_person_booking?.requires_separate_appointments
     ) {
       const preferredStaffMode =
         nextContext.preferred_staff_mode ||
@@ -4679,7 +4952,7 @@ export async function POST(request) {
       const slots = await getAvailableSlots({
         supabase,
         selectedServices: selectedServicesNow,
-        dateString: requestedDate,
+        dateString: availabilityDate,
         preferredStaffMode,
         preferredStaffId,
         minimumStartMinutes: nextContext.minimum_start_minutes,
@@ -4687,7 +4960,10 @@ export async function POST(request) {
         timeMode: nextContext.time_mode,
       });
 
-      nextContext.requested_date = requestedDate;
+      nextContext.preferred_staff_mode = preferredStaffMode;
+      nextContext.preferred_staff_id = preferredStaffId;
+      nextContext.preferred_staff_name = preferredStaffName;
+      nextContext.requested_date = availabilityDate;
       nextContext.available_options = slots;
       const slotFeedback = getAvailabilityFeedback(slots);
       availabilityReason = slotFeedback.reason;
@@ -4696,7 +4972,7 @@ export async function POST(request) {
       reply = buildSlotsMessage(
         slots,
         selectedServicesNow,
-        requestedDate,
+        availabilityDate,
         preferredStaffMode === "specific" ? preferredStaffName : ""
       );
 
@@ -4877,7 +5153,7 @@ export async function POST(request) {
         deposit_required:
           Array.isArray(nextContext.selected_services) &&
           nextContext.selected_services.length > 0
-            ? nextContext.selected_services.length * 100
+            ? APPOINTMENT_DEPOSIT_AMOUNT
             : null,
         conversation_context: nextContext,
       }
