@@ -4,6 +4,7 @@ import {
   getSessionProfile,
   normalizeRole,
 } from "../../../lib/pushServer";
+import { getAvailability as getSafeAvailability } from "../../../lib/bookingAvailability";
 import OpenAI from "openai";
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -45,7 +46,6 @@ async function authorizeAdminRequest(request) {
 
 const SALON_TIME_ZONE = "America/Mexico_City";
 const SALON_NAME = "Alexandra Ruiz Salón";
-const STAFF_PRIORITY = ["laura canul", "tania mendez", "alexandra ruiz"];
 const EXCLUDED_STAFF_FOR_BOT = ["junuen ruiz"];
 const STAFF_LEAD_TIME_MINUTES = {
   "laura canul": 20,
@@ -246,23 +246,23 @@ function getSalonNowMinutes() {
   return Number(values.hour) * 60 + Number(values.minute);
 }
 
-function overlaps(startA, endA, startB, endB) {
-  const aStart = timeToMinutes(startA);
-  const aEnd = timeToMinutes(endA);
-  const bStart = timeToMinutes(startB);
-  const bEnd = timeToMinutes(endB);
-  if (aStart === null || aEnd === null || bStart === null || bEnd === null) return false;
-  return aStart < bEnd && bStart < aEnd;
-}
-
 function parseRequestedDate(rawText) {
   const text = normalizeText(rawText);
+  const textWithoutMorningPeriod = text.replace(
+    /\b(?:en|por|de) la manana\b/g,
+    ""
+  );
   const today = todayISO();
   if (!text) return null;
 
   if (text.includes("pasado manana") || text.includes("pasado mañana")) return addDaysISO(today, 2);
   if (text.includes("hoy")) return today;
-  if (text.includes("manana") || text.includes("mañana")) return addDaysISO(today, 1);
+  if (
+    textWithoutMorningPeriod.includes("manana") ||
+    textWithoutMorningPeriod.includes("mañana")
+  ) {
+    return addDaysISO(today, 1);
+  }
 
   const weekMatch = text.match(/(?:en|dentro de)\s+(\d+)\s+semana/);
   if (weekMatch) return addDaysISO(today, Number(weekMatch[1]) * 7);
@@ -344,7 +344,7 @@ function parseExplicitTime(rawText) {
   if (!text) return null;
 
   const match =
-    text.match(/(?:a las|alas|para las|despues de las|después de las|desde las|a partir de las)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/) ||
+    text.match(/(?:a las|alas|para las|antes de las|despues de las|después de las|desde las|a partir de las)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/) ||
     text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
 
   if (!match) return null;
@@ -354,21 +354,58 @@ function parseExplicitTime(rawText) {
 
   if (suffix === "pm" && hour < 12) hour += 12;
   if (suffix === "am" && hour === 12) hour = 0;
-  if (!suffix && hour >= 1 && hour <= 8 && !text.includes("mañana") && !text.includes("manana")) hour += 12;
+  const explicitlyMorning =
+    text.includes("de la mañana") ||
+    text.includes("de la manana") ||
+    text.includes("en la mañana") ||
+    text.includes("en la manana") ||
+    text.includes("por la mañana") ||
+    text.includes("por la manana");
+  if (!suffix && hour >= 1 && hour <= 8 && !explicitlyMorning) hour += 12;
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return hour * 60 + minute;
 }
 
 function parseTimePreference(rawText) {
+  // Regresión manual del probador:
+  // - Uñas y pedi mañana antes de las 12 con cualquiera.
+  // - Lifting y ceja el sábado en la tarde.
+  // - Cita con Alexandra a las 4.
+  // - Primera vez con pedicure.
+  // - Lo más temprano para retoque.
+  // - Ya transferí el anticipo.
   const text = normalizeText(rawText);
   const explicit = parseExplicitTime(text);
+
+  if (text.includes("antes de las") && explicit !== null) {
+    return { mode: "before", minutes: null, maximumMinutes: explicit };
+  }
+
   if (text.includes("despues") || text.includes("después") || text.includes("desde") || text.includes("a partir")) {
     if (explicit !== null) return { mode: "after", minutes: explicit };
   }
-  if (explicit !== null) return { mode: "around", minutes: explicit };
-  if (text.includes("tarde") || text.includes("noche")) return { mode: "after", minutes: 15 * 60 };
-  if (text.includes("temprano") || text.includes("mañana") || text.includes("manana")) return { mode: "early", minutes: null };
-  return { mode: "any", minutes: null };
+
+  if (explicit !== null) return { mode: "exact", minutes: explicit };
+
+  if (text.includes("lo mas temprano") || text.includes("lo más temprano")) {
+    return { mode: "earliest", minutes: null };
+  }
+
+  if (text.includes("tarde") || text.includes("noche")) {
+    return { mode: "afternoon", minutes: 12 * 60 };
+  }
+
+  if (
+    text.includes("en la mañana") ||
+    text.includes("en la manana") ||
+    text.includes("por la mañana") ||
+    text.includes("por la manana") ||
+    text.includes("temprano")
+  ) {
+    return { mode: "morning", minutes: null, maximumMinutes: 12 * 60 };
+  }
+
+  return { mode: "any", minutes: null, maximumMinutes: null };
 }
 
 function asksLocation(text) {
@@ -1927,30 +1964,6 @@ function detectStaffPreference(text, staff) {
 
   return null;
 }
-function sortStaffByPriority(staff, mode, preferredStaffId) {
-  const cleanStaff = (staff || []).filter((person) => {
-    const name = normalizeText(person.full_name);
-    return !EXCLUDED_STAFF_FOR_BOT.some((excluded) => name.includes(excluded));
-  });
-
-  if (mode === "specific" && preferredStaffId) {
-    return cleanStaff.filter((person) => person.id === preferredStaffId);
-  }
-
-  return [...cleanStaff].sort((a, b) => {
-    const aName = normalizeText(a.full_name);
-    const bName = normalizeText(b.full_name);
-
-    const aIndex = STAFF_PRIORITY.findIndex((name) => aName.includes(name));
-    const bIndex = STAFF_PRIORITY.findIndex((name) => bName.includes(name));
-
-    const safeA = aIndex === -1 ? 999 : aIndex;
-    const safeB = bIndex === -1 ? 999 : bIndex;
-
-    return safeA - safeB;
-  });
-}
-
 function getLeadTimeForStaff(person) {
   const name = normalizeText(person.full_name);
 
@@ -1961,40 +1974,36 @@ function getLeadTimeForStaff(person) {
   return match ? match[1] : 20;
 }
 
-function getTotalDuration(services) {
-  return (services || []).reduce((total, service) => {
-    const duration = Number(service.duration_minutes || 0);
-    const cleanup = Number(service.cleanup_minutes || 0);
-    return total + (duration || 60) + cleanup;
-  }, 0);
-}
-
 function getEstimatedTotal(services) {
   return (services || []).reduce((total, service) => {
     return total + Number(service.base_price || 0);
   }, 0);
 }
 
-function getScheduleForStaff(staffSchedules, staffId, dateString) {
-  const dayOfWeek = getWeekdayFromISO(dateString);
-
-  const schedule = (staffSchedules || []).find(
-    (item) =>
-      item.staff_id === staffId &&
-      Number(item.day_of_week) === Number(dayOfWeek) &&
-      item.is_active !== false &&
-      item.is_day_off !== true
-  );
-
-  return schedule || null;
-}
-
 function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffName = "") {
   const servicesText = selectedServices.map((service) => service.name).join(" + ");
+  const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
+
+  if (slots?.exactUnavailable) {
+    const requestedTime = formatTime12(slots.requestedStartTime);
+
+    if (slots.length === 0) {
+      return `A las ${requestedTime} no tengo espacio disponible para ${servicesText}${staffText} el ${formatDate(
+        dateString
+      )}. Puedes indicarme otro horario para revisar más opciones.`;
+    }
+
+    const nearbyOptions = slots
+      .map(
+        (slot, index) =>
+          `${index + 1}. ${formatTime12(slot.start_time)} con ${slot.staff_name}`
+      )
+      .join("\n");
+
+    return `A las ${requestedTime} no tengo espacio disponible para ${servicesText}${staffText}, pero puedo ofrecerte estas opciones cercanas:\n\n${nearbyOptions}\n\nResponde con el número de la opción que prefieras.`;
+  }
 
   if (!slots || slots.length === 0) {
-    const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
-
     return `Por el momento no encontré espacios disponibles para ${servicesText}${staffText} el ${formatDate(
       dateString
     )}. 💕 Puedes decirme otro día, otro horario o elegir la colaboradora disponible para revisar más opciones.`;
@@ -2010,6 +2019,26 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
   return `Tengo estos espacios disponibles para ${servicesText} el ${formatDate(
     dateString
   )}:\n\n${optionsText}\n\nResponde con el número de la opción que prefieras.`;
+}
+
+function getAvailabilityFeedback(slots) {
+  if (slots?.exactUnavailable) {
+    return {
+      reason: `La hora solicitada (${formatTime12(
+        slots.requestedStartTime
+      )}) no está disponible.`,
+      alternatives: [...slots],
+    };
+  }
+
+  if (!Array.isArray(slots) || slots.length === 0) {
+    return {
+      reason: "No hay horarios válidos para los datos solicitados.",
+      alternatives: [],
+    };
+  }
+
+  return { reason: null, alternatives: [] };
 }
 
 function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
@@ -3136,8 +3165,11 @@ function asksNearestAvailabilityBot(message) {
     text.includes("mas proxima") ||
     text.includes("mas pronto") ||
     text.includes("lo mas pronto") ||
+    text.includes("lo mas temprano") ||
+    text.includes("mas temprano") ||
     text.includes("lo antes posible") ||
     text.includes("primer espacio") ||
+    text.includes("primer horario") ||
     text.includes("proximo espacio") ||
     text.includes("siguiente espacio") ||
     text.includes("cita mas cercana") ||
@@ -3155,6 +3187,7 @@ async function findNextAvailableSlotsBot({
   preferredStaffMode = "available_priority",
   preferredStaffId = null,
   minimumStartMinutes = null,
+  maximumStartMinutes = null,
   timeMode = "any",
   maxDays = 21,
 }) {
@@ -3168,6 +3201,7 @@ async function findNextAvailableSlotsBot({
       preferredStaffMode,
       preferredStaffId,
       minimumStartMinutes,
+      maximumStartMinutes,
       timeMode,
     });
 
@@ -3228,106 +3262,208 @@ function isFreshServiceRequestBot(message, ai) {
     text.includes("agendar")
   );
 }
+function addSlotMetadata(slots, metadata = {}) {
+  Object.assign(slots, metadata);
+  return slots;
+}
+
+function normalizeSafeSlots(slots, dateString) {
+  return (slots || [])
+    .filter((slot) => {
+      const staffName = normalizeText(slot.staff_name);
+      return !EXCLUDED_STAFF_FOR_BOT.some((excluded) =>
+        staffName.includes(excluded)
+      );
+    })
+    .map((slot) => ({
+      staff_id: slot.staff_id,
+      staff_name: slot.staff_name,
+      date: dateString,
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+    }));
+}
+
+function applyBotAvailabilityRules({
+  slots,
+  dateString,
+  minimumStartMinutes,
+  maximumStartMinutes,
+  applyRequestedRange = true,
+}) {
+  const isToday = dateString === todayISO();
+  const nowMinutes = getSalonNowMinutes();
+
+  return slots.filter((slot) => {
+    const startMinutes = timeToMinutes(slot.start_time);
+    if (startMinutes === null) return false;
+
+    if (isToday) {
+      const leadTime = getLeadTimeForStaff({ full_name: slot.staff_name });
+      if (startMinutes < nowMinutes + leadTime) return false;
+    }
+
+    if (
+      applyRequestedRange &&
+      minimumStartMinutes !== null &&
+      minimumStartMinutes !== undefined &&
+      startMinutes < minimumStartMinutes
+    ) {
+      return false;
+    }
+
+    if (
+      applyRequestedRange &&
+      maximumStartMinutes !== null &&
+      maximumStartMinutes !== undefined &&
+      startMinutes >= maximumStartMinutes
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+async function loadSafeBotSlots({
+  supabase,
+  selectedServices,
+  dateString,
+  preferredStaffMode,
+  preferredStaffId,
+  requestedStartTime = "",
+}) {
+  const result = await getSafeAvailability({
+    adminSupabase: supabase,
+    date: dateString,
+    serviceIds: selectedServices.map((service) => service.id),
+    preferredStaffId:
+      preferredStaffMode === "specific" ? preferredStaffId || "" : "",
+    requestedStartTime,
+    limit: 240,
+  });
+
+  return normalizeSafeSlots(result.slots, dateString);
+}
+
 async function getAvailableSlots({
   supabase,
   selectedServices,
   dateString,
   preferredStaffMode,
   preferredStaffId,
-  minimumStartMinutes,
-  timeMode,
+  minimumStartMinutes = null,
+  maximumStartMinutes = null,
+  timeMode = "any",
 }) {
-  const totalDuration = getTotalDuration(selectedServices);
+  const exactRequested =
+    timeMode === "exact" &&
+    minimumStartMinutes !== null &&
+    minimumStartMinutes !== undefined;
 
-  const [staffResult, busyResult, schedulesResult] = await Promise.all([
-    supabase
-      .from("staff")
-      .select("id, full_name, active")
-      .eq("active", true)
-      .order("full_name"),
-    supabase
-      .from("appointment_services")
-      .select("id, staff_id, service_date, start_time, end_time, status")
-      .eq("service_date", dateString)
-      .not("status", "eq", "cancelada"),
-    supabase.from("staff_schedules").select("*"),
-  ]);
+  if (exactRequested) {
+    const requestedStartTime = minutesToTime(minimumStartMinutes);
+    const exactCandidates = await loadSafeBotSlots({
+      supabase,
+      selectedServices,
+      dateString,
+      preferredStaffMode,
+      preferredStaffId,
+      requestedStartTime,
+    });
+    const exactSlots = applyBotAvailabilityRules({
+      slots: exactCandidates,
+      dateString,
+      minimumStartMinutes,
+      maximumStartMinutes: null,
+      applyRequestedRange: true,
+    })
+      .slice(0, 8)
+      .map((slot, index) => ({ ...slot, option_number: index + 1 }));
 
-  if (staffResult.error) throw staffResult.error;
-  if (busyResult.error) throw busyResult.error;
-  if (schedulesResult.error) throw schedulesResult.error;
-
-  const staff = sortStaffByPriority(
-    staffResult.data || [],
-    preferredStaffMode,
-    preferredStaffId
-  );
-
-  const schedules = schedulesResult.data || [];
-  const busy = busyResult.data || [];
-  const isToday = dateString === todayISO();
-  const nowMinutes = getSalonNowMinutes();
-
-  let slots = [];
-
-  for (const person of staff) {
-    const schedule = getScheduleForStaff(schedules, person.id, dateString);
-
-    if (!schedule) continue;
-
-    const startMinutes = timeToMinutes(schedule.start_time);
-    const endMinutes = timeToMinutes(schedule.end_time);
-
-    if (startMinutes === null || endMinutes === null) continue;
-
-    const leadTime = getLeadTimeForStaff(person);
-    const earliestForStaff = isToday ? nowMinutes + leadTime : startMinutes;
-
-    for (
-      let minute = startMinutes;
-      minute + totalDuration <= endMinutes;
-      minute += 30
-    ) {
-      if (minute < earliestForStaff) continue;
-
-      if (
-        minimumStartMinutes !== null &&
-        minimumStartMinutes !== undefined &&
-        minute < minimumStartMinutes
-      ) {
-        continue;
-      }
-
-      const startTime = minutesToTime(minute);
-      const endTime = minutesToTime(minute + totalDuration);
-
-      const isBusy = busy.some(
-        (item) =>
-          item.staff_id === person.id &&
-          overlaps(startTime, endTime, item.start_time, item.end_time)
-      );
-
-      if (!isBusy) {
-        slots.push({
-          option_number: slots.length + 1,
-          staff_id: person.id,
-          staff_name: person.full_name,
-          date: dateString,
-          start_time: startTime,
-          end_time: endTime,
-        });
-      }
+    if (exactSlots.length > 0) {
+      return addSlotMetadata(exactSlots, {
+        requestedStartTime,
+        exactUnavailable: false,
+      });
     }
+
+    const allCandidates = await loadSafeBotSlots({
+      supabase,
+      selectedServices,
+      dateString,
+      preferredStaffMode,
+      preferredStaffId,
+    });
+    const nearbySlots = applyBotAvailabilityRules({
+      slots: allCandidates,
+      dateString,
+      minimumStartMinutes: null,
+      maximumStartMinutes: null,
+      applyRequestedRange: false,
+    })
+      .sort((a, b) => {
+        const distanceA = Math.abs(
+          timeToMinutes(a.start_time) - minimumStartMinutes
+        );
+        const distanceB = Math.abs(
+          timeToMinutes(b.start_time) - minimumStartMinutes
+        );
+
+        if (distanceA !== distanceB) return distanceA - distanceB;
+        return a.start_time.localeCompare(b.start_time);
+      })
+      .slice(0, 8)
+      .map((slot, index) => ({ ...slot, option_number: index + 1 }));
+
+    return addSlotMetadata(nearbySlots, {
+      requestedStartTime,
+      exactUnavailable: true,
+    });
   }
 
-  if (timeMode === "early") {
-    slots = slots.filter((slot) => timeToMinutes(slot.start_time) <= 13 * 60);
-  }
+  const safeSlots = await loadSafeBotSlots({
+    supabase,
+    selectedServices,
+    dateString,
+    preferredStaffMode,
+    preferredStaffId,
+  });
+  const filteredSlots = applyBotAvailabilityRules({
+    slots: safeSlots,
+    dateString,
+    minimumStartMinutes,
+    maximumStartMinutes,
+    applyRequestedRange: true,
+  });
 
-  return slots.slice(0, 8).map((slot, index) => ({
+  const limitedSlots =
+    timeMode === "earliest" ? filteredSlots.slice(0, 1) : filteredSlots.slice(0, 8);
+
+  return limitedSlots.map((slot, index) => ({
     ...slot,
     option_number: index + 1,
   }));
+}
+
+async function revalidateSelectedSlot({ supabase, selectedServices, selectedSlot }) {
+  const options = await getAvailableSlots({
+    supabase,
+    selectedServices,
+    dateString: selectedSlot.date,
+    preferredStaffMode: "specific",
+    preferredStaffId: selectedSlot.staff_id,
+    minimumStartMinutes: timeToMinutes(selectedSlot.start_time),
+    maximumStartMinutes: null,
+    timeMode: "exact",
+  });
+  const slot = options.find(
+    (option) =>
+      option.staff_id === selectedSlot.staff_id &&
+      option.start_time === selectedSlot.start_time
+  );
+
+  return { slot: slot || null, options };
 }
 
 async function upsertClient({ supabase, fullName, phone, birthday }) {
@@ -3758,6 +3894,7 @@ export async function POST(request) {
     const timePreference = parseTimePreference(
       `${incomingMessage} ${ai.time_text || ""} ${ai.time_preference || ""}`
     );
+    const hasNewTimePreference = timePreference.mode !== "any";
 
     const staffPreference = isServiceQuestion
       ? null
@@ -3781,6 +3918,8 @@ export async function POST(request) {
     let reply = "";
     let matchedSource = "fallback";
     let appointmentPreview = null;
+    let availabilityReason = null;
+    let availabilityAlternatives = [];
 
     let nextContext = {
       ...context,
@@ -3791,8 +3930,16 @@ export async function POST(request) {
       booking_notes: bookingNotes,
       requested_date: requestedDate || context.requested_date || null,
       minimum_start_minutes:
-        timePreference.minutes ?? context.minimum_start_minutes ?? null,
-      time_mode: timePreference.mode || context.time_mode || "any",
+        hasNewTimePreference
+          ? timePreference.minutes ?? null
+          : context.minimum_start_minutes ?? null,
+      maximum_start_minutes:
+        hasNewTimePreference
+          ? timePreference.maximumMinutes ?? null
+          : context.maximum_start_minutes ?? null,
+      time_mode: hasNewTimePreference
+        ? timePreference.mode
+        : context.time_mode || "any",
     };
 
     const incomingMultiPersonRequests =
@@ -4053,87 +4200,150 @@ export async function POST(request) {
         matchedSource = "missing_booking_data";
         nextStep = null;
       } else {
-        appointmentPreview = buildAppointmentPreview({
-          fullName,
-          phone,
-          birthday: nextContext.client_birthday,
-          services: selectedServices,
-          slot: selectedSlot,
-          notes: nextContext.booking_notes || "",
+        const revalidation = await revalidateSelectedSlot({
+          supabase,
+          selectedServices,
+          selectedSlot,
         });
+        const revalidatedOptions = revalidation.options;
+        const revalidatedSlot = revalidation.slot;
 
-        if (!allowRealWrite) {
-          nextContext.appointment_preview = appointmentPreview;
+        if (!revalidatedSlot) {
+          availabilityReason =
+            "El horario seleccionado ya no está disponible.";
+          availabilityAlternatives = revalidatedOptions;
+          nextContext.available_options = revalidatedOptions;
+          delete nextContext.selected_slot;
+          delete nextContext.appointment_preview;
           delete nextContext.created_appointment_id;
           delete nextContext.created_payment_id;
 
-          const servicesText = selectedServices
-            .map((service) => service.name)
-            .join(" + ");
-          const notesText = nextContext.booking_notes
-            ? `\nNota: ${nextContext.booking_notes}`
-            : "";
-
-          reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}${notesText}\nFecha: ${formatDate(
-            selectedSlot.date
-          )}\nHora: ${formatTime12(selectedSlot.start_time)}\nTécnica: ${
+          reply = buildSlotsMessage(
+            revalidatedOptions,
+            selectedServices,
+            selectedSlot.date,
             selectedSlot.staff_name
-          }\nAnticipo estimado: $${appointmentPreview.deposit_amount}.\n\nNo se creó ninguna cita, cliente ni pago real.`;
-          matchedSource = "appointment_preview";
-          nextStep = "preview_cita";
+          );
+          matchedSource = "appointment_slot_revalidation_failed";
+          nextStep =
+            revalidatedOptions.length > 0
+              ? "esperando_opcion_horario"
+              : "esperando_fecha";
         } else {
-        const client = await upsertClient({
-          supabase,
-          fullName,
-          phone,
-          birthday: nextContext.client_birthday,
-        });
+          nextContext.selected_slot = revalidatedSlot;
+          appointmentPreview = buildAppointmentPreview({
+            fullName,
+            phone,
+            birthday: nextContext.client_birthday,
+            services: selectedServices,
+            slot: revalidatedSlot,
+            notes: nextContext.booking_notes || "",
+          });
 
-        const created = await createAppointmentWithPayment({
-          supabase,
-          client,
-          selectedServices,
-          selectedSlot,
-          bookingNotes: nextContext.booking_notes || "",
-        });
+          if (!allowRealWrite) {
+            nextContext.appointment_preview = appointmentPreview;
+            delete nextContext.created_appointment_id;
+            delete nextContext.created_payment_id;
 
-        nextContext.created_appointment_id = created.appointment.id;
-        nextContext.created_payment_id = created.payment.id;
-        delete nextContext.appointment_preview;
+            const servicesText = selectedServices
+              .map((service) => service.name)
+              .join(" + ");
+            const notesText = nextContext.booking_notes
+              ? `\nNota: ${nextContext.booking_notes}`
+              : "";
 
-        const servicesText = selectedServices
-          .map((service) => service.name)
-          .join(" + ");
+            reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}${notesText}\nFecha: ${formatDate(
+              revalidatedSlot.date
+            )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
+              revalidatedSlot.staff_name
+            }\nAnticipo estimado: $${appointmentPreview.deposit_amount}.\n\nNo se creó ninguna cita, cliente ni pago real.`;
+            matchedSource = "appointment_preview";
+            nextStep = "preview_cita";
+          } else {
+            const client = await upsertClient({
+              supabase,
+              fullName,
+              phone,
+              birthday: nextContext.client_birthday,
+            });
 
-        const notesText = nextContext.booking_notes
-          ? `\nNota: ${nextContext.booking_notes}`
-          : "";
+            const finalRevalidation = await revalidateSelectedSlot({
+              supabase,
+              selectedServices,
+              selectedSlot: revalidatedSlot,
+            });
 
-        reply = `Listo ${getFirstName(
-          fullName
-        )} 💕 Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}${notesText}\n\nFecha: ${formatDate(
-          selectedSlot.date
-        )}\nHora: ${formatTime12(selectedSlot.start_time)}\nTécnica: ${
-          selectedSlot.staff_name
-        }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nTotal de anticipo requerido: $${
-          created.depositAmount
-        }.\nEse anticipo se descuenta del total a pagar el día de tu cita.\n\n${mediaText(
-          getAssetByKey(mediaAssets, "datos_anticipo")
-        )}\n\n${mediaText(
-          getAssetByKey(mediaAssets, "politicas_salon")
-        )}\n\n${mediaText(
-          getAssetByKey(mediaAssets, "ubicacion_maps"),
-          buildLocationResponse({
-            settings,
-            faqs,
-            knowledgeItems,
-            mediaAssets,
-            isFirstMessage: false,
-          })
-        )}`;
+            if (!finalRevalidation.slot) {
+              availabilityReason =
+                "El horario seleccionado dejó de estar disponible antes de guardar la cita.";
+              availabilityAlternatives = finalRevalidation.options;
+              appointmentPreview = null;
+              nextContext.available_options = finalRevalidation.options;
+              delete nextContext.selected_slot;
+              delete nextContext.appointment_preview;
+              delete nextContext.created_appointment_id;
+              delete nextContext.created_payment_id;
 
-        matchedSource = "appointment_created_with_payment";
-        nextStep = "esperando_comprobante";
+              reply = buildSlotsMessage(
+                finalRevalidation.options,
+                selectedServices,
+                revalidatedSlot.date,
+                revalidatedSlot.staff_name
+              );
+              matchedSource = "appointment_final_revalidation_failed";
+              nextStep =
+                finalRevalidation.options.length > 0
+                  ? "esperando_opcion_horario"
+                  : "esperando_fecha";
+            } else {
+
+            const created = await createAppointmentWithPayment({
+              supabase,
+              client,
+              selectedServices,
+              selectedSlot: finalRevalidation.slot,
+              bookingNotes: nextContext.booking_notes || "",
+            });
+
+            nextContext.created_appointment_id = created.appointment.id;
+            nextContext.created_payment_id = created.payment.id;
+            delete nextContext.appointment_preview;
+
+            const servicesText = selectedServices
+              .map((service) => service.name)
+              .join(" + ");
+
+            const notesText = nextContext.booking_notes
+              ? `\nNota: ${nextContext.booking_notes}`
+              : "";
+
+            reply = `Listo ${getFirstName(
+              fullName
+            )}. Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}${notesText}\n\nFecha: ${formatDate(
+              revalidatedSlot.date
+            )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
+              revalidatedSlot.staff_name
+            }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nTotal de anticipo requerido: $${
+              created.depositAmount
+            }.\nEse anticipo se descuenta del total a pagar el día de tu cita.\n\n${mediaText(
+              getAssetByKey(mediaAssets, "datos_anticipo")
+            )}\n\n${mediaText(
+              getAssetByKey(mediaAssets, "politicas_salon")
+            )}\n\n${mediaText(
+              getAssetByKey(mediaAssets, "ubicacion_maps"),
+              buildLocationResponse({
+                settings,
+                faqs,
+                knowledgeItems,
+                mediaAssets,
+                isFirstMessage: false,
+              })
+            )}`;
+
+            matchedSource = "appointment_created_with_payment";
+            nextStep = "esperando_comprobante";
+            }
+          }
         }
       }
     }
@@ -4281,7 +4491,45 @@ export async function POST(request) {
           const targetDate = requestedDate || nextContext.requested_date;
           const targetStaff = staffPreference;
 
-          if (targetStaff && targetDate) {
+          if (asksNearestAvailabilityBot(incomingMessage)) {
+            const nearestStaffMode =
+              targetStaff?.mode ||
+              nextContext.preferred_staff_mode ||
+              "available_priority";
+            const nearestStaffId =
+              targetStaff?.staffId || nextContext.preferred_staff_id || null;
+            const nearestStaffName =
+              targetStaff?.staffName || nextContext.preferred_staff_name || "";
+            const nearest = await findNextAvailableSlotsBot({
+              supabase,
+              selectedServices: mergedServices,
+              preferredStaffMode: nearestStaffMode,
+              preferredStaffId: nearestStaffId,
+              minimumStartMinutes: nextContext.minimum_start_minutes,
+              maximumStartMinutes: nextContext.maximum_start_minutes,
+              timeMode: "earliest",
+            });
+
+            nextContext.preferred_staff_mode = nearestStaffMode;
+            nextContext.preferred_staff_id = nearestStaffId;
+            nextContext.preferred_staff_name = nearestStaffName;
+            nextContext.requested_date = nearest.dateString;
+            nextContext.available_options = nearest.slots;
+            const nearestFeedback = getAvailabilityFeedback(nearest.slots);
+            availabilityReason = nearestFeedback.reason;
+            availabilityAlternatives = nearestFeedback.alternatives;
+
+            reply = buildNearestSlotsMessageBot(
+              nearest,
+              mergedServices,
+              nearestStaffMode === "specific" ? nearestStaffName : ""
+            );
+            matchedSource = "nearest_safe_availability";
+            nextStep =
+              nearest.slots.length > 0
+                ? "esperando_opcion_horario"
+                : "esperando_fecha";
+          } else if (targetStaff && targetDate) {
             const slots = await getAvailableSlots({
               supabase,
               selectedServices: mergedServices,
@@ -4289,6 +4537,7 @@ export async function POST(request) {
               preferredStaffMode: targetStaff.mode,
               preferredStaffId: targetStaff.staffId,
               minimumStartMinutes: nextContext.minimum_start_minutes,
+              maximumStartMinutes: nextContext.maximum_start_minutes,
               timeMode: nextContext.time_mode,
             });
 
@@ -4297,6 +4546,9 @@ export async function POST(request) {
             nextContext.preferred_staff_name = targetStaff.staffName;
             nextContext.requested_date = targetDate;
             nextContext.available_options = slots;
+            const slotFeedback = getAvailabilityFeedback(slots);
+            availabilityReason = slotFeedback.reason;
+            availabilityAlternatives = slotFeedback.alternatives;
 
             reply = buildSlotsMessage(
               slots,
@@ -4374,11 +4626,15 @@ export async function POST(request) {
           preferredStaffMode: staffPreference.mode,
           preferredStaffId: staffPreference.staffId,
           minimumStartMinutes: nextContext.minimum_start_minutes,
+          maximumStartMinutes: nextContext.maximum_start_minutes,
           timeMode: nextContext.time_mode,
         });
 
         nextContext.requested_date = targetDate;
         nextContext.available_options = slots;
+        const slotFeedback = getAvailabilityFeedback(slots);
+        availabilityReason = slotFeedback.reason;
+        availabilityAlternatives = slotFeedback.alternatives;
 
         reply = buildSlotsMessage(
           slots,
@@ -4427,11 +4683,15 @@ export async function POST(request) {
         preferredStaffMode,
         preferredStaffId,
         minimumStartMinutes: nextContext.minimum_start_minutes,
+        maximumStartMinutes: nextContext.maximum_start_minutes,
         timeMode: nextContext.time_mode,
       });
 
       nextContext.requested_date = requestedDate;
       nextContext.available_options = slots;
+      const slotFeedback = getAvailabilityFeedback(slots);
+      availabilityReason = slotFeedback.reason;
+      availabilityAlternatives = slotFeedback.alternatives;
 
       reply = buildSlotsMessage(
         slots,
@@ -4623,7 +4883,7 @@ export async function POST(request) {
       }
     );
 
-    const appointmentRequestSaved = allowRealWrite
+    const appointmentRequestSaved = allowRealWrite && !availabilityReason
       ? await saveAppointmentRequest(supabase, {
           conversationId: savedConversation.id,
           clientPhone: clientPhoneFromTest,
@@ -4658,6 +4918,8 @@ export async function POST(request) {
       dryRun: !allowRealWrite,
       realWriteEnabled: allowRealWrite,
       appointmentPreview,
+      availabilityReason,
+      availabilityAlternatives,
       appointmentRequestSaved: Boolean(appointmentRequestSaved),
     });
   } catch (error) {
