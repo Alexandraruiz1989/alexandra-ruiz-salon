@@ -100,6 +100,26 @@ function normalizedService(service, fallbackStaffId = "") {
   };
 }
 
+function normalizedExtra(extra, fallbackStaffId = "") {
+  const quantity = numberOrNull(extra?.quantity) ?? 1;
+  const unitPrice = numberOrNull(
+    extra?.unitPrice ?? extra?.unit_price ?? extra?.price
+  );
+  return {
+    id: cleanAppointmentValue(extra?.id || extra?.extraId || extra?.extra_id),
+    name: cleanAppointmentValue(extra?.name),
+    staffId: cleanAppointmentValue(
+      extra?.staffId || extra?.staff_id || fallbackStaffId
+    ),
+    quantity,
+    unitPrice,
+    totalPrice:
+      unitPrice === null ? null : Number((quantity * unitPrice).toFixed(2)),
+    notes: cleanAppointmentValue(extra?.notes),
+    active: extra?.active !== false,
+  };
+}
+
 function normalizedParticipant(input) {
   const participant =
     input?.participant || input?.participants?.[0] || { id: "person_1" };
@@ -127,10 +147,17 @@ export function normalizeAppointmentWriteContract(input = {}) {
   const services = (input.services || []).map((service) =>
     normalizedService(service, staffId)
   );
+  const extras = (input.extras || []).map((extra) =>
+    normalizedExtra(extra, staffId)
+  );
   const participant = normalizedParticipant(input);
   const expectedPrice =
     numberOrNull(input.expectedPrice) ??
-    services.reduce((sum, service) => sum + Number(service.price || 0), 0);
+    services.reduce((sum, service) => sum + Number(service.price || 0), 0) +
+      extras.reduce(
+        (sum, extra) => sum + Number(extra.totalPrice || 0),
+        0
+      );
   const depositStatus = DEPOSIT_STATUS_SET.has(input.depositStatus)
     ? input.depositStatus
     : "unknown";
@@ -152,6 +179,7 @@ export function normalizeAppointmentWriteContract(input = {}) {
       input.participantCount || input.participants?.length || 1
     ),
     services,
+    extras,
     date: cleanAppointmentValue(input.date || input.appointment_date),
     startTime: cleanAppointmentValue(input.startTime || input.start_time),
     endTime: cleanAppointmentValue(input.endTime || input.end_time),
@@ -190,6 +218,7 @@ export function appointmentContractFingerprint(input) {
     participant: contract.participant,
     participantCount: contract.participantCount,
     services: contract.services,
+    extras: contract.extras,
     date: contract.date,
     startTime: contract.startTime,
     endTime: contract.endTime,
@@ -302,6 +331,20 @@ export function validateAppointmentWriteContract(
       }
       if (service.durationMinutes + service.cleanupMinutes <= 0) {
         errors.push("service_duration_invalid");
+        break;
+      }
+    }
+    for (const extra of contract.extras) {
+      if (
+        contract.source !== "admin" ||
+        !extra.id ||
+        !extra.name ||
+        !extra.active ||
+        extra.quantity <= 0 ||
+        extra.unitPrice === null ||
+        extra.unitPrice < 0
+      ) {
+        errors.push("invalid_extra");
         break;
       }
     }

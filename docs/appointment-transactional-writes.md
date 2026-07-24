@@ -14,6 +14,7 @@ rollback `supabase_appointment_transaction_rollback.sql`. Ninguno se ejecutó.
 | Origen | Ruta o componente | Tablas | Orden actual | Disponibilidad | Duplicados/compensación | RPC | Riesgo actual |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Agenda administrativa | `app/admin/agenda/page.js`, `handleSubmit` usado por vistas diaria, semanal y mensual, disponibilidad y formulario | `appointments`, `appointment_services`, `appointment_extra_items`; después seguimientos y notificaciones | Cita; en edición borra servicios; servicios; extras; imagen; seguimientos; notificaciones | Valida restricciones técnica-servicio, jornada, descanso, bloqueos, traslapes y recursos antes de guardar; admite `force_created` por rol | Botón `saving` evita doble clic local. No hay idempotencia durable ni rollback completo. Una edición puede quedar sin servicios | No | Fallos parciales y carreras con otros procesos |
+| Ruta administrativa futura | `POST /api/admin/appointments/create`, todavía sin uso desde la interfaz | Por RPC: cita, servicios, extras de catálogo y operación idempotente | Una transacción | Relee clienta, servicios, precios, duraciones, técnica, jornada, descanso, bloqueos, traslapes, recursos y extras | Exige sesión y rol de agenda; `force_created` solo para `admin`/`encargada`; falla cerrada sin ambas banderas o sin RPC | Preparado por bandera | Faltan imágenes, seguimientos, notificaciones y edición antes de conectarla |
 | Portal de clientas | `app/cliente/agenda/page.js` y `POST /api/client/appointments` | `appointments`, `appointment_services`; después notificaciones | Reconsulta; cita; servicios; notificaciones | Usa `bookingAvailability.js`: técnica, jornada, descanso, bloqueos, traslapes, recursos y duración acumulada | Vista previa versionada, confirmación final, deduplicación compatible y compensación de la cita si fallan servicios. La garantía entre procesos requiere RPC | Preparado por bandera | El modo compatible aún no es una transacción de base de datos |
 | Bot histórico | `app/api/bot/test/route.backup-before-nearest-early-20260614-172635.js` | Implementación histórica con escrituras directas | Secuencial | Obsoleta | Sin uso activo; no se publica ni importa | No | Archivo histórico con lógica peligrosa; se conserva por restricción de esta fase |
 | Probador del bot | `POST /api/bot/test` | Solo conversación y mensajes de prueba | No escribe agenda | Simulada | No puede habilitar escrituras | No | Ningún riesgo de cita real con la implementación actual |
@@ -60,10 +61,11 @@ independientes. La página escribe directamente con el cliente Supabase del
 navegador. El adaptador `prepareAdminAppointmentContract` ya puede producir el
 contrato compartido y `createAppointmentFromAdmin` selecciona un único escritor.
 
-No se sustituyó todavía el `handleSubmit` productivo. Antes de activar el canal
-administrativo hay que mover su creación a una ruta de servidor autenticada,
-conservar extras, imágenes, edición y `force_created`, y después envolverla con
-el adaptador. La bandera apagada mantiene intacto el flujo actual.
+No se sustituyó el `handleSubmit` productivo. La ruta autenticada
+`POST /api/admin/appointments/create` ya prepara creación transaccional y
+extras de catálogo, pero permanece apagada y sin referencias desde la interfaz.
+Antes de conectarla faltan imágenes, edición, seguimientos y notificaciones. La
+bandera apagada mantiene intacto el flujo actual.
 
 ## Contrato común
 
@@ -78,6 +80,7 @@ el adaptador. La bandera apagada mantiene intacto el flujo actual.
   client,
   participant,
   services,
+  extras,
   date,
   startTime,
   endTime,
@@ -132,8 +135,12 @@ La función:
 - no confía en roles enviados como parámetro;
 - revalida servicios, precio, duración, técnica, jornada, descanso,
   anticipación, bloqueos, traslapes y recursos;
+- para agenda, relee extras desde `service_extras` y los crea en
+  `appointment_extra_items` dentro de la misma transacción;
+- solo permite omitir conflictos con `force_created` cuando el origen firmado
+  por servidor es `admin`; la ruta limita esa opción a `admin` y `encargada`;
 - resuelve la clienta dentro de la transacción;
-- crea cita y todos sus servicios o revierte;
+- crea cita, todos sus servicios y sus extras o revierte;
 - no crea ni consulta pagos;
 - para bot, además valida conversación persistida y `bot_settings.active`.
 
@@ -168,8 +175,8 @@ Solo staging puede confirmar la protección real del motor PostgreSQL.
    la tabla técnica.
 5. Ejecutar pruebas desechables de creación, replay, conflicto, traslape,
    recursos, cambio de precio/duración y fallo a mitad.
-6. Crear la ruta administrativa de servidor y validar extras/edición antes de
-   activar admin.
+6. Probar la ruta administrativa y validar edición, imágenes, seguimientos y
+   notificaciones antes de conectarla a la interfaz.
 7. Activar primero la bandera compartida y un solo canal en staging.
 8. Observar operaciones e idempotencia; después probar carreras entre canales.
 9. Mantener producción apagada hasta aprobación explícita.
@@ -184,8 +191,9 @@ creadas se conservan.
 ## Límites pendientes
 
 - No se ha ejecutado ni validado el RPC contra una base de datos de staging.
-- El escritor administrativo aún vive en el navegador y soporta edición,
-  extras e imágenes fuera del contrato seguro.
+- El escritor administrativo usado por la interfaz aún vive en el navegador.
+  La ruta futura ya conserva extras en creación, pero todavía no conserva
+  edición, imágenes, seguimientos ni notificaciones.
 - El modo compatible del portal no puede garantizar atomicidad entre procesos.
 - La política de anticipos sigue pendiente; la anticipación por técnica debe
   confirmarse contra los nombres reales de staging.

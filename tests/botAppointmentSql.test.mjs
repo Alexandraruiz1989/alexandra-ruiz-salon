@@ -87,13 +87,15 @@ test("SQL 5: no existe ninguna escritura ni lectura de payments", () => {
   assert.doesNotMatch(migration, /\bfrom\s+public\.payments\b/i);
 });
 
-test("SQL 6: cita y servicios se crean dentro de la RPC y se verifican", () => {
+test("SQL 6: cita, servicios y extras se crean dentro de la RPC y se verifican", () => {
   assert.match(migration, /insert into public\.appointments/i);
   assert.match(migration, /insert into public\.appointment_services/i);
+  assert.match(migration, /insert into public\.appointment_extra_items/i);
   assert.match(migration, /v_services_created <> v_service_count/i);
+  assert.match(migration, /v_extras_created <> v_extra_count/i);
   assert.match(
     migration,
-    /raise exception using[\s\S]+bot_appointment_services_count_mismatch/i
+    /raise exception using[\s\S]+appointment_items_count_mismatch/i
   );
   assert.match(migration, /exception\s+when others then/i);
 });
@@ -255,5 +257,39 @@ test("SQL 15: bot_settings solo se exige al origen bot", () => {
   assert.match(
     migration,
     /if v_source = 'bot' then[\s\S]+from public\.bot_conversations[\s\S]+from public\.bot_settings[\s\S]+end if;/i
+  );
+});
+
+test("SQL 16: extras administrativos se revalidan contra el esquema real", () => {
+  assert.match(migration, /p_extras jsonb default '\[\]'::jsonb/i);
+  assert.match(migration, /from public\.service_extras extra/i);
+  assert.match(migration, /coalesce\(v_extra\.price, 0\)/i);
+  assert.match(migration, /public\.appointment_extra_items/i);
+  assert.match(
+    migration,
+    /v_source <> 'admin' and jsonb_array_length\(p_extras\) > 0/i
+  );
+});
+
+test("SQL 17: force_created solo puede omitir conflictos del canal admin", () => {
+  assert.match(
+    migration,
+    /p_force_created[\s\S]+v_source <> 'admin'[\s\S]+force_not_allowed/i
+  );
+  assert.match(
+    migration,
+    /not \(v_source = 'admin' and coalesce\(p_force_created, false\)\)[\s\S]+staff_overlap/i
+  );
+  assert.match(
+    migration,
+    /where not \(\s*v_source = 'admin' and coalesce\(p_force_created, false\)\s*\)[\s\S]+appointment-resource-day:/i
+  );
+});
+
+test("SQL 18: horarios no dependen de columnas locales no demostradas", () => {
+  assert.doesNotMatch(migration, /staff_schedules[\s\S]{0,500}updated_at/i);
+  assert.match(
+    migration,
+    /from public\.staff_schedules schedule[\s\S]+schedule\.day_of_week/i
   );
 });

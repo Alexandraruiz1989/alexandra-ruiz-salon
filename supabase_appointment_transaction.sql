@@ -78,6 +78,7 @@ create or replace function public.create_appointment_transaction(
   p_client_name text default null,
   p_client_phone text default null,
   p_services jsonb default '[]'::jsonb,
+  p_extras jsonb default '[]'::jsonb,
   p_participant_id text default null,
   p_appointment_date date default null,
   p_start_time time without time zone default null,
@@ -106,10 +107,13 @@ declare
   v_staff public.staff%rowtype;
   v_schedule public.staff_schedules%rowtype;
   v_service public.services%rowtype;
+  v_extra public.service_extras%rowtype;
   v_resource public.resources%rowtype;
   v_item jsonb;
+  v_extra_item jsonb;
   v_segment jsonb;
   v_segments jsonb := '[]'::jsonb;
+  v_extra_segments jsonb := '[]'::jsonb;
   v_cursor timestamp without time zone;
   v_segment_end timestamp without time zone;
   v_end_at timestamp without time zone;
@@ -119,6 +123,8 @@ declare
   v_estimated_total numeric := 0;
   v_service_count integer := 0;
   v_services_created integer := 0;
+  v_extra_count integer := 0;
+  v_extras_created integer := 0;
   v_existing_usage integer := 0;
   v_new_usage integer := 0;
   v_appointment_id uuid;
@@ -158,6 +164,22 @@ begin
     );
   end if;
 
+  if
+    jsonb_typeof(p_extras) <> 'array'
+    or (v_source <> 'admin' and jsonb_array_length(p_extras) > 0)
+  then
+    return jsonb_build_object(
+      'status', 'invalid_request',
+      'appointmentId', null,
+      'clientId', null,
+      'idempotencyKey', p_idempotency_key,
+      'isReplay', false,
+      'servicesCreated', 0,
+      'errorCode', 'invalid_extras',
+      'errorMessage', 'Los extras enviados no son válidos para este canal.'
+    );
+  end if;
+
   v_phone_digits := regexp_replace(
     coalesce(p_client_phone, ''),
     '\D',
@@ -180,6 +202,7 @@ begin
     ),
     'participantId', trim(coalesce(p_participant_id, '')),
     'services', p_services,
+    'extras', p_extras,
     'date', p_appointment_date,
     'startTime', p_start_time,
     'expectedEndTime', p_expected_end_time,
@@ -719,7 +742,8 @@ begin
       end if;
 
       if
-        exists (
+        not (v_source = 'admin' and coalesce(p_force_created, false))
+        and exists (
           select 1
           from public.staff_services configured
           where configured.service_id = v_service.id
@@ -802,6 +826,137 @@ begin
       v_cursor := v_segment_end;
     end loop;
 
+    for v_extra_item in
+      select item.value
+      from jsonb_array_elements(p_extras) with ordinality as item(value, position)
+      order by item.position
+    loop
+      if
+        nullif(trim(coalesce(v_extra_item ->> 'extraId', '')), '') is null
+        or (v_extra_item ->> 'extraId') !~
+          '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+        or coalesce(v_extra_item ->> 'quantity', '') !~ '^\d+(\.\d+)?$'
+        or (v_extra_item ->> 'quantity')::numeric <= 0
+        or coalesce(v_extra_item ->> 'unitPrice', '') !~ '^-?\d+(\.\d+)?$'
+        or coalesce(v_extra_item ->> 'totalPrice', '') !~ '^-?\d+(\.\d+)?$'
+      then
+        v_result := jsonb_build_object(
+          'status', 'invalid_request',
+          'appointmentId', null,
+          'clientId', null,
+          'idempotencyKey', trim(p_idempotency_key),
+          'isReplay', false,
+          'servicesCreated', 0,
+          'errorCode', 'invalid_extra',
+          'errorMessage', 'Uno de los extras no es válido.'
+        );
+        update public.appointment_write_operations
+        set
+          status = 'failed',
+          result = v_result,
+          error_code = 'invalid_extra',
+          error_message = 'La asignación de extras no es válida.',
+          updated_at = now()
+        where id = v_operation.id;
+        return v_result;
+      end if;
+
+      select extra.*
+      into v_extra
+      from public.service_extras extra
+      where extra.id = (v_extra_item ->> 'extraId')::uuid
+        and coalesce(extra.active, false) = true;
+
+      if
+        not found
+        or trim(coalesce(v_extra.name, '')) <>
+          trim(coalesce(v_extra_item ->> 'name', ''))
+        or coalesce(v_extra.price, 0) <>
+          (v_extra_item ->> 'unitPrice')::numeric
+        or (v_extra_item ->> 'totalPrice')::numeric <>
+          round(
+            (v_extra_item ->> 'quantity')::numeric *
+              coalesce(v_extra.price, 0),
+            2
+          )
+      then
+        v_result := jsonb_build_object(
+          'status', 'invalid_request',
+          'appointmentId', null,
+          'clientId', null,
+          'idempotencyKey', trim(p_idempotency_key),
+          'isReplay', false,
+          'servicesCreated', 0,
+          'errorCode', 'preview_extra_changed',
+          'errorMessage', 'Un extra cambió; revisa los datos de la cita.'
+        );
+        update public.appointment_write_operations
+        set
+          status = 'failed',
+          result = v_result,
+          error_code = 'preview_extra_changed',
+          error_message = 'El catálogo de extras cambió.',
+          updated_at = now()
+        where id = v_operation.id;
+        return v_result;
+      end if;
+
+      if
+        nullif(trim(coalesce(v_extra_item ->> 'staffId', '')), '') is not null
+        and (
+          (v_extra_item ->> 'staffId') !~
+            '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+          or not exists (
+            select 1
+            from public.staff extra_staff
+            where extra_staff.id = (v_extra_item ->> 'staffId')::uuid
+              and coalesce(extra_staff.active, false) = true
+          )
+        )
+      then
+        v_result := jsonb_build_object(
+          'status', 'invalid_staff',
+          'appointmentId', null,
+          'clientId', null,
+          'idempotencyKey', trim(p_idempotency_key),
+          'isReplay', false,
+          'servicesCreated', 0,
+          'errorCode', 'invalid_extra_staff',
+          'errorMessage', 'La colaboradora asignada al extra no está disponible.'
+        );
+        update public.appointment_write_operations
+        set
+          status = 'failed',
+          result = v_result,
+          error_code = 'invalid_extra_staff',
+          error_message = 'La colaboradora del extra no es válida.',
+          updated_at = now()
+        where id = v_operation.id;
+        return v_result;
+      end if;
+
+      v_extra_segments := v_extra_segments || jsonb_build_array(
+        jsonb_build_object(
+          'extraId', v_extra.id,
+          'name', v_extra.name,
+          'staffId', nullif(trim(coalesce(v_extra_item ->> 'staffId', '')), ''),
+          'quantity', (v_extra_item ->> 'quantity')::numeric,
+          'unitPrice', coalesce(v_extra.price, 0),
+          'totalPrice', round(
+            (v_extra_item ->> 'quantity')::numeric *
+              coalesce(v_extra.price, 0),
+            2
+          ),
+          'notes', nullif(trim(coalesce(v_extra_item ->> 'notes', '')), '')
+        )
+      );
+      v_estimated_total := v_estimated_total + round(
+        (v_extra_item ->> 'quantity')::numeric * coalesce(v_extra.price, 0),
+        2
+      );
+      v_extra_count := v_extra_count + 1;
+    end loop;
+
     v_end_at := v_cursor;
 
     if
@@ -839,19 +994,21 @@ begin
         extract(dow from p_appointment_date)::integer
       and coalesce(schedule.is_active, false) = true
       and coalesce(schedule.is_day_off, false) = false
-    order by schedule.updated_at desc nulls last, schedule.id
     limit 1;
 
     if
-      not found
-      or p_start_time < v_schedule.start_time
-      or p_expected_end_time > v_schedule.end_time
-      or (
-        coalesce(v_schedule.has_break, false) = true
-        and v_schedule.break_start is not null
-        and v_schedule.break_end is not null
-        and p_start_time < v_schedule.break_end
-        and p_expected_end_time > v_schedule.break_start
+      not (v_source = 'admin' and coalesce(p_force_created, false))
+      and (
+        not found
+        or p_start_time < v_schedule.start_time
+        or p_expected_end_time > v_schedule.end_time
+        or (
+          coalesce(v_schedule.has_break, false) = true
+          and v_schedule.break_start is not null
+          and v_schedule.break_end is not null
+          and p_start_time < v_schedule.break_end
+          and p_expected_end_time > v_schedule.break_start
+        )
       )
     then
       v_result := jsonb_build_object(
@@ -883,7 +1040,8 @@ begin
     end;
 
     if
-      p_appointment_date + p_start_time <
+      not (v_source = 'admin' and coalesce(p_force_created, false))
+      and p_appointment_date + p_start_time <
         v_now_local + make_interval(mins => v_lead_time_minutes)
     then
       v_result := jsonb_build_object(
@@ -907,7 +1065,9 @@ begin
       return v_result;
     end if;
 
-    if exists (
+    if
+      not (v_source = 'admin' and coalesce(p_force_created, false))
+      and exists (
       select 1
       from public.staff_time_blocks block
       where block.staff_id = p_staff_id
@@ -936,7 +1096,9 @@ begin
       return v_result;
     end if;
 
-    if exists (
+    if
+      not (v_source = 'admin' and coalesce(p_force_created, false))
+      and exists (
       select 1
       from public.appointment_services existing_service
       join public.appointments existing_appointment
@@ -991,6 +1153,9 @@ begin
       join jsonb_array_elements(v_segments) selected(value)
         on requirement.service_id =
           (selected.value ->> 'serviceId')::uuid
+      where not (
+        v_source = 'admin' and coalesce(p_force_created, false)
+      )
       order by resource.id
     loop
       perform pg_advisory_xact_lock(
@@ -1041,6 +1206,9 @@ begin
          and requirement.service_id =
            (v_segment ->> 'serviceId')::uuid
          and coalesce(requirement.active, false) = true
+        where not (
+          v_source = 'admin' and coalesce(p_force_created, false)
+        )
         order by resource.id
       loop
         select coalesce(sum(requirement.quantity_required), 0)::integer
@@ -1295,6 +1463,33 @@ begin
       v_services_created := v_services_created + 1;
     end loop;
 
+    for v_extra_item in
+      select item.value
+      from jsonb_array_elements(v_extra_segments) item(value)
+    loop
+      insert into public.appointment_extra_items (
+        appointment_id,
+        extra_id,
+        staff_id,
+        name,
+        quantity,
+        unit_price,
+        total_price,
+        notes
+      )
+      values (
+        v_appointment_id,
+        (v_extra_item ->> 'extraId')::uuid,
+        nullif(v_extra_item ->> 'staffId', '')::uuid,
+        v_extra_item ->> 'name',
+        (v_extra_item ->> 'quantity')::numeric,
+        (v_extra_item ->> 'unitPrice')::numeric,
+        (v_extra_item ->> 'totalPrice')::numeric,
+        nullif(v_extra_item ->> 'notes', '')
+      );
+      v_extras_created := v_extras_created + 1;
+    end loop;
+
     if
       v_services_created <> v_service_count
       or (
@@ -1302,10 +1497,16 @@ begin
         from public.appointment_services created_service
         where created_service.appointment_id = v_appointment_id
       ) <> v_service_count
+      or v_extras_created <> v_extra_count
+      or (
+        select count(*)
+        from public.appointment_extra_items created_extra
+        where created_extra.appointment_id = v_appointment_id
+      ) <> v_extra_count
     then
       raise exception using
         errcode = 'P0001',
-        message = 'bot_appointment_services_count_mismatch';
+        message = 'appointment_items_count_mismatch';
     end if;
 
     v_result := jsonb_build_object(
@@ -1376,6 +1577,7 @@ revoke all on function public.create_appointment_transaction(
   text,
   text,
   jsonb,
+  jsonb,
   text,
   date,
   time without time zone,
@@ -1400,6 +1602,7 @@ grant execute on function public.create_appointment_transaction(
   uuid,
   text,
   text,
+  jsonb,
   jsonb,
   text,
   date,
