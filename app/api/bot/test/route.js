@@ -158,13 +158,50 @@ function normalizeText(text) {
     .trim();
 }
 
-function sanitizeBotReply(reply) {
+function removeInternalReplyLines(reply) {
   return String(reply || "")
+    .split("\n")
+    .filter((line) => {
+      const text = normalizeText(line).replace(/^[-*•]\s*/, "");
+
+      return !(
+        text.startsWith("nota:") ||
+        text.startsWith("notas:") ||
+        text.startsWith("nombres:") ||
+        text.startsWith("resumen:") ||
+        text.startsWith("reservas separadas") ||
+        text.startsWith("cita para dos personas:") ||
+        text.startsWith("el mensaje actual selecciona")
+      );
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeBotReply(reply) {
+  return removeInternalReplyLines(reply)
     .replace(/Alexandra Ruiz Sal[oó]n Spa/gi, SALON_NAME)
     .replace(/Alexandra Ruiz Salon Spa/gi, "Alexandra Ruiz Salon")
     .replace(/Alexandra Ruiz Sal[oó]n\s+&\s+Spa/gi, SALON_NAME)
     .replace(/(?:💕|✨|🔗|🖼️)/gu, "")
     .trim();
+}
+
+function startsNewBookingConversation(message) {
+  const text = normalizeText(message);
+  const startsWithGreeting =
+    text.startsWith("hola") ||
+    text.startsWith("buen dia") ||
+    text.startsWith("buenas");
+  const hasNewBookingIntent =
+    text.includes("quiero cita") ||
+    text.includes("quisiera cita") ||
+    text.includes("nueva cita") ||
+    text.includes("quiero agendar") ||
+    text.includes("quisiera agendar");
+
+  return startsWithGreeting && hasNewBookingIntent;
 }
 
 function getFirstName(name) {
@@ -463,6 +500,20 @@ function asksAvailability(text) {
 function asksPaymentProof(text) {
   const t = normalizeText(text);
   return t.includes("ya pague") || t.includes("ya pagué") || t.includes("ya transferi") || t.includes("ya transferí") || t.includes("comprobante") || t.includes("anticipo enviado") || t.includes("te mande el pago") || t.includes("te mandé el pago");
+}
+
+function isAffirmativeReply(text) {
+  const value = normalizeText(text);
+
+  return (
+    value === "si" ||
+    value === "ok" ||
+    value === "okay" ||
+    value === "va" ||
+    value === "claro" ||
+    value === "de acuerdo" ||
+    value === "por favor"
+  );
 }
 
 function asksGreetingOrInfo(text) {
@@ -1828,22 +1879,39 @@ function getInitialMultiPersonRequests(message) {
     ];
   }
 
-  if (!detectsMultiPersonGelPedicureRequest(message)) return [];
+  if (detectsMultiPersonGelPedicureRequest(message)) {
+    return [
+      {
+        key: "clienta",
+        label: "Para ti",
+        person: "clienta",
+        service_query: "gel",
+        status: "needs_service_detail",
+      },
+      {
+        key: "mama",
+        label: "Para tu mamá",
+        person: "mamá",
+        service_query: "pedicure",
+        status: "needs_service_detail",
+      },
+    ];
+  }
+
+  if (!detectsSecondPersonRequest(message)) return [];
 
   return [
     {
-      key: "clienta",
-      label: "Para ti",
-      person: "clienta",
-      service_query: "gel",
-      status: "needs_service_detail",
+      key: "person_1",
+      label: "Primera persona",
+      service_query: "",
+      status: "needs_service",
     },
     {
-      key: "mama",
-      label: "Para tu mamá",
-      person: "mamá",
-      service_query: "pedicure",
-      status: "needs_service_detail",
+      key: "person_2",
+      label: "Segunda persona",
+      service_query: "",
+      status: "needs_service",
     },
   ];
 }
@@ -1906,6 +1974,18 @@ function updateMultiPersonRequestsWithSelectedServices(context, selectedServices
       };
     }
 
+    if (
+      (request?.key === "person_1" || request?.key === "person_2") &&
+      selectedServices.length > 0
+    ) {
+      return {
+        ...request,
+        service_ids: selectedServices.map((service) => service.id),
+        service_names: selectedServices.map((service) => service.name),
+        status: "service_selected",
+      };
+    }
+
     return request;
   });
 }
@@ -1954,19 +2034,28 @@ function extractBookingNotes(message, aiNotes = "") {
   const largo = String(message || "").match(/largo\s*#?\s*(\d+)/i);
 
   if (largo) notes.push(`Solicita largo #${largo[1]}.`);
-  if (aiNotes) notes.push(aiNotes);
+  if (aiNotes && /^solicita largo #?\d+\.?$/i.test(aiNotes.trim())) {
+    notes.push(aiNotes.trim());
+  }
 
   return notes.join(" ").trim();
 }
 
-function buildSelectedServicesMessage(services, notes = "") {
-  const noteText = notes ? `\n\nNota: ${notes}` : "";
+function mergeBookingNotes(existingNotes, newNotes) {
+  const largoNotes = `${existingNotes || ""} ${newNotes || ""}`.match(
+    /Solicita largo #?\d+\./gi
+  );
+  const uniqueNotes = Array.from(new Set(largoNotes || []));
 
+  return uniqueNotes.join(" ");
+}
+
+function buildSelectedServicesMessage(services) {
   return `Perfecto 💕 Revisamos disponibilidad para:\n\n${services
     .map((service) => `• ${service.name}`)
     .join(
       "\n"
-    )}${noteText}\n\n¿Tienes técnica de preferencia?\n\n1. Laura Canul\n2. Tania Mendez\n3. Alexandra Ruiz\n4. La colaboradora disponible`;
+    )}\n\n¿Tienes técnica de preferencia?\n\n1. Laura Canul\n2. Tania Mendez\n3. Alexandra Ruiz\n4. La colaboradora disponible`;
 }
 
 function buildSelectedServicePricesMessage(services) {
@@ -1991,6 +2080,7 @@ function detectStaffPreference(text, staff) {
 
   if (
     selectsAvailableOption ||
+    t === "any" ||
     t.includes("disponible") ||
     t.includes("cualquiera") ||
     t.includes("cualquier") ||
@@ -2159,6 +2249,13 @@ function isTwoPersonGelHandsRequests(requests = []) {
   );
 }
 
+function isGenericTwoPersonRequest(requests = []) {
+  return (
+    requests.length === 2 &&
+    requests.every((request) => !normalizeText(request.service_query))
+  );
+}
+
 function buildTwoPersonGelHandsReply() {
   return "Claro, serían 2 citas de gel en manos. ¿Les gustaría venir juntas en horarios seguidos o solo revisar espacios disponibles para ambas?";
 }
@@ -2190,11 +2287,10 @@ function getAvailabilityFeedback(slots) {
   return { reason: null, alternatives: [] };
 }
 
-function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
+function buildAppointmentSummary({ services, slot, depositAmount }) {
   const servicesText = services.map((service) => `• ${service.name}`).join("\n");
-  const notesText = notes ? `\n\nNota: ${notes}` : "";
 
-  return `Perfecto 💕 Tengo estos datos para tu cita:\n\nServicios:\n${servicesText}${notesText}\n\nFecha: ${formatDate(
+  return `Perfecto 💕 Tengo estos datos para tu cita:\n\nServicios:\n${servicesText}\n\nFecha: ${formatDate(
     slot.date
   )}\nHora: ${formatTime12(slot.start_time)}\nColaboradora: ${
     slot.staff_name
@@ -2621,8 +2717,46 @@ function scoreKnowledgeText(searchText, itemText, keywords = "") {
 function formatRecentMessagesForSearch(messages) {
   return (messages || [])
     .slice(-6)
-    .map((message) => `${message.direction || ""}: ${message.body || ""}`)
+    .map(
+      (message) =>
+        `${message.direction || ""}: ${removeInternalReplyLines(
+          message.body || ""
+        )}`
+    )
+    .filter((line) => !/:\s*$/.test(line))
     .join("\n");
+}
+
+function getConversationContextForAI(context = {}) {
+  const selectedServices = Array.isArray(context.selected_services)
+    ? context.selected_services.map((service) => ({
+        id: service.id,
+        name: service.name,
+      }))
+    : [];
+  const multiPersonBooking = context.multi_person_booking
+    ? {
+        person_count: context.multi_person_booking.person_count,
+        requires_separate_appointments:
+          context.multi_person_booking.requires_separate_appointments === true,
+        arrangement: context.multi_person_booking.arrangement || null,
+        status: context.multi_person_booking.status || null,
+      }
+    : null;
+
+  return {
+    active_topic: context.active_topic || null,
+    active_service_focus: context.active_service_focus || null,
+    selected_services: selectedServices,
+    requested_date: context.requested_date || null,
+    time_mode: context.time_mode || "any",
+    preferred_staff_mode: context.preferred_staff_mode || null,
+    preferred_staff_name: context.preferred_staff_name || null,
+    requires_service_confirmation:
+      context.requires_service_confirmation === true,
+    multi_person_booking: multiPersonBooking,
+    deposit_message_sent: context.deposit_message_sent === true,
+  };
 }
 
 function isContextFollowUp(message) {
@@ -2912,7 +3046,7 @@ ${incomingMessage}
 ${formatRecentMessagesForSearch(recentMessages)}
 
 Contexto interno resumido:
-${truncateForAI(JSON.stringify(context || {}, null, 2), 1600)}
+${truncateForAI(JSON.stringify(getConversationContextForAI(context), null, 2), 1600)}
 
 Interpretación automática:
 ${truncateForAI(JSON.stringify(ai || {}, null, 2), 900)}
@@ -3193,7 +3327,7 @@ Reglas:
     const raw = await createOpenAITextResponse({
       instructions: systemPrompt,
       input: `Devuelve únicamente un objeto JSON válido con la estructura indicada.\n\nContexto previo:\n${JSON.stringify(
-        context || {},
+        getConversationContextForAI(context),
         null,
         2
       )}\n\nMensaje de la clienta:\n${message}`,
@@ -3939,13 +4073,28 @@ export async function POST(request) {
       });
     }
 
-    const recentMessages = await getRecentBotMessages(
+    const storedRecentMessages = await getRecentBotMessages(
       supabase,
       conversation?.id,
       clientPhoneFromTest
     );
+    const resetStateForNewBooking = startsNewBookingConversation(incomingMessage);
+    const conversationStartedAt = resetStateForNewBooking
+      ? new Date().toISOString()
+      : existingContext.conversation_started_at || null;
+    const recentMessages = resetStateForNewBooking
+      ? []
+      : conversationStartedAt
+      ? storedRecentMessages.filter(
+          (message) =>
+            !message.created_at ||
+            new Date(message.created_at).getTime() >=
+              new Date(conversationStartedAt).getTime()
+        )
+      : storedRecentMessages;
     const context = {
-      ...existingContext,
+      ...(resetStateForNewBooking ? {} : existingContext),
+      conversation_started_at: conversationStartedAt,
       recent_messages: recentMessages,
     };
 
@@ -4077,33 +4226,41 @@ export async function POST(request) {
       ai.intent = "book_appointment";
     }
 
+    const bookingStepAtStart = resetStateForNewBooking
+      ? null
+      : conversation?.booking_step || null;
+    const isNumberedOptionReply =
+      isPureNumberSelection(incomingMessage) &&
+      (bookingStepAtStart === "esperando_seleccion_servicios" ||
+        bookingStepAtStart === "esperando_tecnica" ||
+        bookingStepAtStart === "esperando_opcion_horario");
+
     const requestedDate = parseRequestedDate(
       `${incomingMessage} ${ai.date_text || ""}`
     );
 
-    const timePreference = parseTimePreference(
-      `${incomingMessage} ${ai.time_text || ""} ${ai.time_preference || ""}`
-    );
+    const timePreference = isNumberedOptionReply
+      ? { mode: "any", minutes: null, maximumMinutes: null }
+      : parseTimePreference(
+          `${incomingMessage} ${ai.time_text || ""} ${
+            ai.time_preference || ""
+          }`
+        );
     const hasNewTimePreference = timePreference.mode !== "any";
 
     const staffPreference = isServiceQuestion
       ? null
-      : detectStaffPreference(
-          `${incomingMessage} ${ai.staff_preference || ""}`,
-          staff
-        );
+      : detectStaffPreference(incomingMessage, staff) ||
+        detectStaffPreference(ai.staff_preference || "", staff);
 
     const selectedServicesFromContext = Array.isArray(context.selected_services)
       ? context.selected_services.filter(isPublicBotService)
       : [];
 
-    const bookingNotes = [
+    const bookingNotes = mergeBookingNotes(
       context.booking_notes,
-      extractBookingNotes(incomingMessage, ai.notes),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+      extractBookingNotes(incomingMessage)
+    );
 
     let reply = "";
     let matchedSource = "fallback";
@@ -4146,14 +4303,13 @@ export async function POST(request) {
       );
     }
 
-    let nextStep = conversation?.booking_step || null;
+    let nextStep = bookingStepAtStart;
     const pendingOptions = Array.isArray(nextContext.pending_service_options)
       ? nextContext.pending_service_options
       : [];
-    const isFirstMessage = isFirstConversationMessage(
-      conversation,
-      recentMessages
-    );
+    const isFirstMessage =
+      resetStateForNewBooking ||
+      isFirstConversationMessage(conversation, recentMessages);
     const matchedKnowledge = findBestKnowledgeAnswer({
       incomingMessage,
       recentMessages,
@@ -4189,6 +4345,22 @@ export async function POST(request) {
         reply = buildTwoPersonGelHandsReply();
         matchedSource = "multi_person_gel_hands";
         nextStep = "esperando_multipersona_modalidad";
+      } else if (isGenericTwoPersonRequest(incomingMultiPersonRequests)) {
+        nextContext.multi_person_booking = {
+          person_count: 2,
+          requires_separate_appointments: true,
+          status: "needs_service_and_arrangement",
+        };
+        nextContext.selected_services = [];
+        nextContext.pending_service_options = [];
+        nextContext.available_options = [];
+        nextContext.active_topic = "cita para dos personas";
+        nextContext.active_service_focus = null;
+
+        reply =
+          "Claro, serían dos citas. ¿Quieren horarios seguidos? También dime qué servicio desean.";
+        matchedSource = "multi_person_generic";
+        nextStep = "esperando_multipersona_servicio";
       } else {
         const pedicureOptions = getPedicureOptions(services);
 
@@ -4230,9 +4402,35 @@ export async function POST(request) {
       }
     }
 
+    if (
+      !reply &&
+      context.requires_service_confirmation === true &&
+      !asksAcrylicFillReview(incomingMessage)
+    ) {
+      if (
+        nextStep === "esperando_confirmacion_solicitud_relleno" &&
+        isAffirmativeReply(incomingMessage)
+      ) {
+        reply =
+          "Perfecto. Para preparar la solicitud de revisión, dime tu nombre y qué día te gustaría venir.";
+        matchedSource = "acrylic_fill_request_details";
+        nextStep = "esperando_datos_revision_relleno";
+      } else if (isAffirmativeReply(incomingMessage)) {
+        reply =
+          "¿Quieres que prepare la solicitud para que el equipo te confirme el servicio y la disponibilidad?";
+        matchedSource = "acrylic_fill_review_confirmation";
+        nextStep = "esperando_confirmacion_solicitud_relleno";
+      } else {
+        reply =
+          "El relleno de acrílico necesita revisión del equipo. ¿Quieres que prepare la solicitud para confirmar el servicio correcto?";
+        matchedSource = "acrylic_fill_review_pending";
+        nextStep = "esperando_confirmacion_solicitud_relleno";
+      }
+    }
+
     if (!reply && asksAcrylicFillReview(incomingMessage)) {
       reply =
-        "Para relleno de acrílico lo revisamos según el trabajo que traigas y el tiempo desde tu última aplicación. Te puedo ayudar a preparar la solicitud para que el equipo confirme el servicio correcto.";
+        "Para relleno de acrílico lo revisamos según el trabajo que traigas y el tiempo desde tu última aplicación. Puedo pasar tu solicitud al equipo para confirmar el servicio correcto.";
       matchedSource = "acrylic_fill_requires_team_review";
       nextContext.active_topic = "relleno de acrílico";
       nextContext.active_service_focus = "relleno de acrílico";
@@ -4504,14 +4702,10 @@ export async function POST(request) {
             const servicesText = selectedServices
               .map((service) => service.name)
               .join(" + ");
-            const notesText = nextContext.booking_notes
-              ? `\nNota: ${nextContext.booking_notes}`
-              : "";
-
             const depositMessage = takeDepositMessage(nextContext);
             const depositText = depositMessage ? `\n\n${depositMessage}` : "";
 
-            reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}${notesText}\nFecha: ${formatDate(
+            reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}\nFecha: ${formatDate(
               revalidatedSlot.date
             )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
               revalidatedSlot.staff_name
@@ -4572,16 +4766,12 @@ export async function POST(request) {
               .map((service) => service.name)
               .join(" + ");
 
-            const notesText = nextContext.booking_notes
-              ? `\nNota: ${nextContext.booking_notes}`
-              : "";
-
             const depositMessage = takeDepositMessage(nextContext);
             const depositText = depositMessage ? `\n\n${depositMessage}` : "";
 
             reply = `Listo ${getFirstName(
               fullName
-            )}. Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}${notesText}\n\nFecha: ${formatDate(
+            )}. Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}\n\nFecha: ${formatDate(
               revalidatedSlot.date
             )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
               revalidatedSlot.staff_name
@@ -4632,7 +4822,7 @@ export async function POST(request) {
         nextContext.multi_person_requests =
           updateMultiPersonRequestsWithSelectedServices(nextContext, selected);
 
-        reply = buildSelectedServicesMessage(merged, bookingNotes);
+        reply = buildSelectedServicesMessage(merged);
         matchedSource = "service_options_selected";
         nextStep = "esperando_tecnica";
       }
@@ -4694,6 +4884,7 @@ export async function POST(request) {
       (ai.intent === "book_appointment" ||
         ai.intent === "ask_services" ||
         nextStep === "esperando_servicios" ||
+        nextStep === "esperando_multipersona_servicio" ||
         nextStep === "esperando_tecnica" ||
         nextStep === "esperando_fecha" ||
         nextStep === "esperando_opcion_horario")
@@ -4832,7 +5023,7 @@ export async function POST(request) {
             nextStep =
               slots.length > 0 ? "esperando_opcion_horario" : "esperando_fecha";
           } else {
-            reply = buildSelectedServicesMessage(mergedServices, bookingNotes);
+            reply = buildSelectedServicesMessage(mergedServices);
             matchedSource = "services_selected";
             nextStep = "esperando_tecnica";
           }
@@ -4987,7 +5178,7 @@ export async function POST(request) {
       !nextContext.preferred_staff_mode &&
       nextStep !== "esperando_seleccion_servicios"
     ) {
-      reply = buildSelectedServicesMessage(selectedServicesNow, bookingNotes);
+      reply = buildSelectedServicesMessage(selectedServicesNow);
       matchedSource = "request_staff_preference";
       nextStep = "esperando_tecnica";
     }
@@ -5134,6 +5325,7 @@ export async function POST(request) {
     }
 
     reply = sanitizeBotReply(reply);
+    delete nextContext.recent_messages;
 
     const savedConversation = await saveConversation(
       supabase,
