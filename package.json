@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:bot": "node --test tests/botConversationEngine.test.mjs tests/botConversationIntegration.test.mjs tests/botAppointmentOrchestrator.test.mjs tests/botConversationRegression.test.mjs tests/botAppointmentSql.test.mjs tests/botAppointmentProductionRepository.test.mjs tests/botAppointmentEndpoint.test.mjs tests/botAppointmentProductionIntegration.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

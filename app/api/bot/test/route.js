@@ -5,6 +5,15 @@ import {
   normalizeRole,
 } from "../../../lib/pushServer";
 import { getAvailability as getSafeAvailability } from "../../../lib/bookingAvailability";
+import {
+  executeBotTurn,
+} from "../../../lib/botConversationEngine";
+import {
+  botAppointmentWritesEnabled,
+  createAppointmentFromConfirmedPreview,
+  maskIdempotencyKey,
+} from "../../../lib/botAppointmentOrchestrator";
+import { createReadOnlyBotAppointmentRepository } from "../../../lib/botAppointmentRepository";
 import OpenAI from "openai";
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -3251,62 +3260,6 @@ Redacta la mejor respuesta final para la clienta.
   }
 }
 
-async function saveAppointmentRequest(supabase, { conversationId, clientPhone, clientName, context, ai, incomingMessage }) {
-  const requestedService = getRequestedServicesText(context, ai);
-  const hasClearBookingIntent =
-    ai.intent === "book_appointment" ||
-    requestedService ||
-    context.requested_date ||
-    context.selected_slot ||
-    context.preferred_staff_name;
-
-  if (!hasClearBookingIntent) return null;
-
-  const requestedTime =
-    context.selected_slot?.start_time ||
-    (context.minimum_start_minutes !== null && context.minimum_start_minutes !== undefined
-      ? minutesToTime(context.minimum_start_minutes)
-      : null);
-
-  const notes = [
-    `Resumen: ${incomingMessage}`,
-    context.preferred_staff_name ? `Técnica preferida: ${context.preferred_staff_name}.` : "",
-    context.booking_notes ? `Notas: ${context.booking_notes}` : "",
-    conversationId ? `Conversación: ${conversationId}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const payload = {
-    client_name: context.client_full_name || clientName || null,
-    client_phone: clientPhone,
-    requested_service: requestedService || null,
-    requested_date: context.requested_date || context.selected_slot?.date || null,
-    requested_time: requestedTime || null,
-    status: "pendiente",
-    notes,
-    updated_at: new Date().toISOString(),
-  };
-
-  const { data: existing } = await supabase
-    .from("bot_appointment_requests")
-    .select("id")
-    .eq("client_phone", clientPhone)
-    .eq("status", "pendiente")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const query = existing?.id
-    ? supabase.from("bot_appointment_requests").update(payload).eq("id", existing.id)
-    : supabase.from("bot_appointment_requests").insert([payload]);
-
-  const { error } = await query;
-  if (error) throw error;
-
-  return true;
-}
-
 function normalizeAIParsed(parsed) {
   return {
     intent: parsed?.intent || "unknown",
@@ -3985,149 +3938,168 @@ async function revalidateSelectedSlot({
   return { slot: slot || null, options };
 }
 
-async function upsertClient({ supabase, fullName, phone, birthday }) {
-  const cleanPhone = onlyDigits(phone);
-
-  const { data: existingClient, error: findError } = await supabase
-    .from("clients")
-    .select("*")
-    .eq("phone", cleanPhone)
-    .maybeSingle();
-
-  if (findError) throw findError;
-
-  const payload = {
-    full_name: fullName,
-    phone: cleanPhone,
-    birthday: birthday || null,
-    updated_at: new Date().toISOString(),
+function mapLegacyIntentForEngine(intent) {
+  const mapping = {
+    book_appointment: "booking",
+    ask_services: "ask_services",
+    ask_location: "location",
+    ask_business_hours: "business_hours",
+    payment_proof: "deposit",
+    human_help: "human_help",
+    greeting: "greeting",
+    reschedule: "reschedule",
+    cancel: "cancel",
+    unknown: "unknown",
   };
 
-  if (existingClient?.id) {
-    const { data, error } = await supabase
-      .from("clients")
-      .update(payload)
-      .eq("id", existingClient.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  }
-
-  const { data, error } = await supabase
-    .from("clients")
-    .insert([payload])
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+  return mapping[intent] || "unknown";
 }
 
-async function createAppointmentWithPayment({
-  supabase,
-  client,
-  selectedServices,
-  selectedSlot,
-  bookingNotes,
-}) {
-  const estimatedTotal = getEstimatedTotal(selectedServices);
-  const depositAmount = APPOINTMENT_DEPOSIT_AMOUNT;
-  const now = new Date().toISOString();
-
-  const appointmentPayload = {
-    client_id: client.id,
-    staff_id: selectedSlot.staff_id,
-    appointment_date: selectedSlot.date,
-    start_time: selectedSlot.start_time,
-    end_time: selectedSlot.end_time,
-    status: "pendiente_anticipo",
-    estimated_total: estimatedTotal,
-    deposit_amount: depositAmount,
-    deposit_payment_method: "transferencia",
-    force_created: false,
-    notes: bookingNotes || null,
-    updated_at: now,
-  };
-
-  const { data: appointment, error: appointmentError } = await supabase
-    .from("appointments")
-    .insert([appointmentPayload])
-    .select()
-    .single();
-
-  if (appointmentError) throw appointmentError;
-
-  let cursor = timeToMinutes(selectedSlot.start_time);
-
-  const serviceRows = selectedServices.map((service) => {
-    const duration = Number(service.duration_minutes || 0) || 60;
-    const cleanup = Number(service.cleanup_minutes || 0) || 0;
-    const start = minutesToTime(cursor);
-    const end = minutesToTime(cursor + duration + cleanup);
-    cursor += duration + cleanup;
-
-    const price = Number(service.base_price || 0);
-
-    return {
-      appointment_id: appointment.id,
-      service_id: service.id,
-      custom_name: service.name,
-      quantity: 1,
-      unit_price: price,
-      total_price: price,
-      price,
-      staff_id: selectedSlot.staff_id,
-      service_date: selectedSlot.date,
-      start_time: start,
-      end_time: end,
-      duration_minutes: duration,
-      cleanup_minutes: cleanup,
-      status: "pendiente_anticipo",
-      notes: bookingNotes || null,
-    };
-  });
-
-  const { error: servicesError } = await supabase
-    .from("appointment_services")
-    .insert(serviceRows);
-
-  if (servicesError) throw servicesError;
-
-  const paymentPayload = {
-    appointment_id: appointment.id,
-    client_id: client.id,
-    payment_method: "transferencia",
-    subtotal: estimatedTotal,
-    subtotal_services: estimatedTotal,
-    subtotal_extras: 0,
-    discount_amount: 0,
-    total: estimatedTotal,
-    total_amount: estimatedTotal,
-    paid_amount: 0,
-    balance_due: estimatedTotal,
-    deposit_amount: depositAmount,
-    payment_status: "pendiente_anticipo",
-    payment_date: todayISO(),
-    notes: `Anticipo solicitado por bot: $${depositAmount}. Pendiente de comprobante/validación.`,
-    updated_at: now,
-  };
-
-  const { data: payment, error: paymentError } = await supabase
-    .from("payments")
-    .insert([paymentPayload])
-    .select()
-    .single();
-
-  if (paymentError) throw paymentError;
+function buildEngineStateFromLegacy({ context, bookingStep }) {
+  const stored = context.conversation_engine_state || {};
 
   return {
-    appointment,
-    payment,
-    depositAmount,
-    estimatedTotal,
+    ...stored,
+    intent: stored.intent || context.intent || null,
+    selectedServices:
+      stored.selectedServices || context.selected_services || [],
+    peopleCount:
+      stored.peopleCount ||
+      context.multi_person_booking?.person_count ||
+      1,
+    datePreference: stored.datePreference || context.requested_date || null,
+    parsedDate: stored.parsedDate || context.requested_date || null,
+    timePreference: stored.timePreference || context.time_mode || null,
+    timeRange:
+      stored.timeRange ||
+      (context.minimum_start_minutes !== null &&
+      context.minimum_start_minutes !== undefined
+        ? {
+            start: minutesToTime(context.minimum_start_minutes),
+            end:
+              context.maximum_start_minutes !== null &&
+              context.maximum_start_minutes !== undefined
+                ? minutesToTime(context.maximum_start_minutes)
+                : null,
+          }
+        : null),
+    staffPreference:
+      stored.staffPreference ||
+      (context.preferred_staff_mode
+        ? {
+            type:
+              context.preferred_staff_mode === "specific"
+                ? "specific"
+                : "any",
+            staffId: context.preferred_staff_id || null,
+            staffName: context.preferred_staff_name || null,
+          }
+        : undefined),
+    pendingStep: stored.pendingStep || bookingStep || null,
+    lastOfferedMenu: stored.lastOfferedMenu || null,
+    depositMentioned:
+      stored.depositMentioned || context.deposit_message_sent === true,
+    humanReviewRequired:
+      stored.humanReviewRequired ||
+      context.requires_service_confirmation === true,
+    humanReviewReason:
+      stored.humanReviewReason ||
+      (context.requires_service_confirmation
+        ? "legacy_service_confirmation_required"
+        : null),
+    participants: stored.participants || [],
+    pendingParticipantId: stored.pendingParticipantId || null,
+    pendingData: stored.pendingData || [],
   };
+}
+
+function mapEngineStepToLegacy(step) {
+  const mapping = {
+    service: "esperando_servicios",
+    service_detail: "esperando_seleccion_servicios",
+    people_count: "esperando_multipersona_datos",
+    date: "esperando_fecha",
+    time: "esperando_hora",
+    staff: "esperando_tecnica",
+    availability: "esperando_opcion_horario",
+    appointment_preview: "preview_cita",
+    confirmation: "esperando_confirmacion",
+    human_review: "esperando_confirmacion_equipo",
+  };
+  return mapping[step] || null;
+}
+
+function serializeEngineState(state) {
+  return {
+    ...state,
+    selectedServices: (state.selectedServices || []).map((service) => ({
+      id: service.id,
+      name: service.name,
+    })),
+    participants: (state.participants || []).map((participant) => ({
+      ...participant,
+      services: (participant.services || []).map((service) => ({
+        id: service.id,
+        name: service.name,
+      })),
+    })),
+  };
+}
+
+function applyEngineStateToLegacyContext({
+  context,
+  state,
+  allServices,
+  execution,
+}) {
+  const selectedIds = new Set(
+    (state.selectedServices || []).map((service) => service.id)
+  );
+  const selectedServices = allServices.filter((service) =>
+    selectedIds.has(service.id)
+  );
+  const legacyContext = {
+    ...context,
+    selected_services: selectedServices,
+    pending_service_options:
+      state.lastOfferedMenu?.type === "services"
+        ? state.lastOfferedMenu.options
+            .map((option) =>
+              allServices.find((service) => service.id === option.id)
+            )
+            .filter(Boolean)
+        : [],
+    available_options:
+      state.lastOfferedMenu?.type === "availability"
+        ? execution?.options || []
+        : [],
+    requested_date: state.parsedDate || context.requested_date || null,
+    minimum_start_minutes: state.timeRange?.start
+      ? timeToMinutes(state.timeRange.start)
+      : null,
+    maximum_start_minutes: state.timeRange?.end
+      ? timeToMinutes(state.timeRange.end)
+      : null,
+    time_mode: state.timePreference || context.time_mode || "any",
+    preferred_staff_mode:
+      state.staffPreference?.type === "specific"
+        ? "specific"
+        : state.staffPreference?.type === "any"
+        ? "available_priority"
+        : null,
+    preferred_staff_id: state.staffPreference?.staffId || null,
+    preferred_staff_name: state.staffPreference?.staffName || null,
+    requires_service_confirmation: state.humanReviewRequired === true,
+    human_review_reason: state.humanReviewReason || null,
+    multi_person_booking: {
+      ...(context.multi_person_booking || {}),
+      person_count: state.peopleCount || 1,
+      requires_separate_appointments: Number(state.peopleCount || 1) > 1,
+      participants: state.participants || [],
+    },
+    conversation_engine_state: serializeEngineState(state),
+  };
+  return legacyContext;
 }
 
 export async function GET(request) {
@@ -4143,6 +4115,10 @@ export async function GET(request) {
       aiConfigured: configured,
       aiProvider: configured ? "openai" : "rules",
       model: configured ? openaiModel : null,
+      repositoryMode: "test_read_only",
+      productionWritesEnabled: botAppointmentWritesEnabled(),
+      testWritesEnabled: false,
+      whatsappConnected: false,
       message: configured
         ? `IA conectada en servidor con ${openaiModel}.`
         : AI_RULES_FALLBACK_MESSAGE,
@@ -4167,38 +4143,25 @@ export async function POST(request) {
     const body = await request.json();
     const incomingMessage = String(body.message || "").trim();
     const clientNameFromTest = String(body.clientName || "").trim();
-    const clientPhoneFromTest = String(body.clientPhone || "test").trim();
-    const allowRealWrite = body.allowRealWrite === true;
+    const requestedTestPhone = String(body.clientPhone || "anonymous").trim();
+    const clientPhoneFromTest = `test:${requestedTestPhone || "anonymous"}`;
+    const realWriteRequested = false;
+    // La creación real permanece bloqueada hasta que el flujo tenga una
+    // confirmación explícita y verificable de la vista previa.
+    const allowRealWrite = false;
     const allowInactiveTest = body.allowInactiveTest === true;
     // reset conversation final clean
     if (body.resetConversation === true || body.reset === true) {
-      const rawPhone = String(clientPhoneFromTest || "test").trim();
-      const digitsOnly = rawPhone.replace(/\D/g, "");
-      const last10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
-
-      const phoneVariants = Array.from(
-        new Set(
-          [
-            rawPhone,
-            digitsOnly,
-            last10,
-            digitsOnly ? `52${last10}` : "",
-            digitsOnly ? `+52${last10}` : "",
-            "test",
-          ].filter(Boolean)
-        )
-      );
-
       const { error: conversationDeleteError } = await supabase
         .from("bot_conversations")
         .delete()
-        .in("client_phone", phoneVariants);
+        .eq("client_phone", clientPhoneFromTest);
 
       try {
         await supabase
           .from("bot_messages")
           .delete()
-          .in("client_phone", phoneVariants);
+          .eq("client_phone", clientPhoneFromTest);
       } catch (messageResetError) {
         // Ignore if bot_messages is not available in this project.
       }
@@ -4436,6 +4399,185 @@ export async function POST(request) {
     const bookingStepAtStart = resetStateForNewBooking
       ? null
       : conversation?.booking_step || null;
+    const legacyAIStaffPreference = detectStaffPreference(
+      ai.staff_preference || "",
+      staff
+    );
+    const engineResult = await executeBotTurn({
+      conversationId: conversation?.id || null,
+      customerMessage: incomingMessage,
+      currentState: buildEngineStateFromLegacy({
+        context,
+        bookingStep: bookingStepAtStart,
+      }),
+      context: {
+        services: allServices,
+        staff,
+        bookingStep: bookingStepAtStart,
+        appointmentCustomer: {
+          name: clientNameFromTest,
+          phone: clientPhoneFromTest,
+        },
+        interpretation: {
+          intent: mapLegacyIntentForEngine(ai.intent),
+          confidence: ai.confidence,
+          staffPreference: legacyAIStaffPreference
+            ? {
+                type:
+                  legacyAIStaffPreference.mode === "specific"
+                    ? "specific"
+                    : "any",
+                staffId: legacyAIStaffPreference.staffId,
+                staffName: legacyAIStaffPreference.staffName,
+              }
+            : { type: "unknown", staffId: null, staffName: null },
+          depositMentioned: ai.says_paid === true,
+          needsHumanReview: false,
+          humanReviewReason: null,
+        },
+      },
+      executors: {
+        LEGACY_BUILD_LOCATION_RESPONSE: async () => ({
+          response: buildLocationResponse({
+            settings,
+            faqs,
+            knowledgeItems,
+            mediaAssets,
+            isFirstMessage: false,
+          }),
+        }),
+        LEGACY_BUILD_BUSINESS_HOURS_RESPONSE: async () => ({
+          response: BUSINESS_HOURS_MESSAGE,
+        }),
+        LEGACY_CHECK_AVAILABILITY: async (validatedData) => {
+          const selectedIds = new Set(
+            validatedData.selectedServices.map((service) => service.id)
+          );
+          const selectedServices = allServices.filter((service) =>
+            selectedIds.has(service.id)
+          );
+          const targetDate = parseRequestedDate(
+            validatedData.parsedDate ||
+              validatedData.datePreference ||
+              incomingMessage
+          );
+          if (!targetDate || selectedServices.length === 0) {
+            return {
+              response:
+                "Necesito confirmar el servicio y la fecha antes de revisar disponibilidad.",
+              options: [],
+              reason: "missing_validated_availability_data",
+            };
+          }
+          const preferredStaffMode =
+            validatedData.staffPreference?.type === "specific"
+              ? "specific"
+              : "available_priority";
+          const preferredStaffId =
+            validatedData.staffPreference?.staffId || null;
+          const preferredStaffName =
+            validatedData.staffPreference?.staffName || "";
+          const slots = await getAvailableSlots({
+            supabase,
+            selectedServices,
+            dateString: targetDate,
+            preferredStaffMode,
+            preferredStaffId,
+            minimumStartMinutes: validatedData.timeRange?.start
+              ? timeToMinutes(validatedData.timeRange.start)
+              : null,
+            maximumStartMinutes: validatedData.timeRange?.end
+              ? timeToMinutes(validatedData.timeRange.end)
+              : null,
+            timeMode: validatedData.timePreference || "any",
+            allowMissingTimeBlocks: true,
+          });
+          const feedback = getAvailabilityFeedback(slots);
+          return {
+            response: buildSlotsMessage(
+              slots,
+              selectedServices,
+              targetDate,
+              preferredStaffMode === "specific" ? preferredStaffName : ""
+            ),
+            options: slots,
+            parsedDate: targetDate,
+            reason: feedback.reason,
+            alternatives: feedback.alternatives,
+          };
+        },
+        LEGACY_RECHECK_APPOINTMENT_DRAFT: async (validatedData) => {
+          const result = await createAppointmentFromConfirmedPreview({
+            draft: validatedData.appointmentDraft,
+            repository: createReadOnlyBotAppointmentRepository({ supabase }),
+            writesEnabled: false,
+          });
+          const response =
+            result.code === "write_disabled"
+              ? "La solicitud quedó preparada correctamente en el modo de prueba. Todavía no se creó una cita real."
+              : result.code === "availability_changed"
+              ? "Ese horario ya no está disponible. Puedo volver a consultar otras opciones."
+              : result.code === "preview_expired"
+              ? "La vista previa venció. Necesito consultar nuevamente la disponibilidad."
+              : result.code === "preview_changed"
+              ? "Los datos del servicio cambiaron. Preparé una vista previa nueva para que la revises antes de confirmar."
+              : result.code === "service_unavailable"
+              ? "Uno de los servicios ya no está disponible. Revisemos las opciones vigentes."
+              : result.code === "staff_unavailable"
+              ? "La colaboradora seleccionada ya no está disponible. Revisemos otra opción."
+              : result.status === "human_review"
+              ? "El equipo necesita revisar esta solicitud antes de continuar. No se creó ninguna cita."
+              : "No pude preparar la solicitud de forma segura. No se creó ninguna cita.";
+          return {
+            response,
+            reason: result.code,
+            alternatives: result.alternatives || [],
+            appointmentDraft: result.draft,
+            orchestratorResult: {
+              ok: result.ok,
+              mode: result.mode,
+              status: result.status,
+              code: result.code,
+              reason: result.reason || null,
+              idempotencyKeyMasked: maskIdempotencyKey(
+                result.idempotencyKey
+              ),
+              transactionStatus:
+                result.transaction?.status || result.status || null,
+              appointmentId:
+                result.creation?.appointment?.id || null,
+              isReplay: result.creation?.isReplay === true,
+              safeErrorCode: result.ok ? null : result.code,
+              partialFailures: result.partialFailures || [],
+            },
+          };
+        },
+      },
+    });
+    if (
+      engineResult.contract.handled !== true ||
+      !engineResult.contract.response
+    ) {
+      throw new Error("Bot engine did not produce one final response.");
+    }
+    console.info("Bot engine decision.", {
+      messageLength: incomingMessage.length,
+      previousPendingStep: engineResult.debug.previousPendingStep,
+      intent: engineResult.debug.intent,
+      candidateCount: engineResult.debug.candidateServiceIds.length,
+      action: engineResult.debug.action,
+      delegatedAction: engineResult.contract.legacyAction,
+      humanReviewReason: engineResult.debug.humanReviewReason,
+      validationErrors: engineResult.contract.validationErrors,
+    });
+
+    if (
+      ai.intent === "unknown" &&
+      engineResult.interpretation.intent === "booking"
+    ) {
+      ai.intent = "book_appointment";
+    }
+
     const isNumberedOptionReply =
       isPureNumberSelection(incomingMessage) &&
       (bookingStepAtStart === "esperando_seleccion_servicios" ||
@@ -4469,11 +4611,14 @@ export async function POST(request) {
       extractBookingNotes(incomingMessage)
     );
 
-    let reply = "";
-    let matchedSource = "fallback";
+    let reply = engineResult.contract.response;
+    let matchedSource = engineResult.contract.legacyAction
+      ? engineResult.contract.legacyAction.toLowerCase()
+      : `engine_${engineResult.contract.action.toLowerCase()}`;
     let appointmentPreview = null;
     let availabilityReason = null;
-    let availabilityAlternatives = [];
+    let availabilityAlternatives =
+      engineResult.contract.execution?.alternatives || [];
 
     let nextContext = {
       ...context,
@@ -4499,18 +4644,36 @@ export async function POST(request) {
         ? timePreference.mode
         : context.time_mode || "any",
     };
+    const parsedEngineDate =
+      engineResult.contract.nextState.parsedDate ||
+      parseRequestedDate(
+        engineResult.contract.nextState.datePreference || incomingMessage
+      );
+    if (parsedEngineDate) {
+      engineResult.contract.nextState.parsedDate = parsedEngineDate;
+      engineResult.state.parsedDate = parsedEngineDate;
+    }
+    nextContext = applyEngineStateToLegacyContext({
+      context: nextContext,
+      state: engineResult.contract.nextState,
+      allServices,
+      execution: engineResult.contract.execution,
+    });
+    let nextStep = mapEngineStepToLegacy(
+      engineResult.contract.nextState.pendingStep
+    );
+    availabilityReason = engineResult.contract.execution?.reason || null;
 
     const incomingMultiPersonRequests =
       getInitialMultiPersonRequests(incomingMessage);
 
-    if (incomingMultiPersonRequests.length > 0) {
+    if (!engineResult.contract.handled && incomingMultiPersonRequests.length > 0) {
       nextContext.multi_person_requests = mergeMultiPersonRequests(
         nextContext.multi_person_requests || [],
         incomingMultiPersonRequests
       );
     }
 
-    let nextStep = bookingStepAtStart;
     const pendingOptions = Array.isArray(nextContext.pending_service_options)
       ? nextContext.pending_service_options
       : [];
@@ -4524,6 +4687,11 @@ export async function POST(request) {
       knowledgeItems,
     });
 
+    // Compatibilidad conservada para migración progresiva. El coordinador
+    // exige un contrato resuelto, por lo que este bloque no reinterpreta
+    // mensajes manejados por el motor. Las únicas delegaciones activas son
+    // los ejecutores explícitos definidos al invocar executeBotTurn().
+    if (!engineResult.contract.handled) {
     if (!reply && ai.says_paid) {
       const anticipoAsset = getAssetByKey(mediaAssets, "datos_anticipo");
 
@@ -4980,109 +5148,23 @@ export async function POST(request) {
             notes: nextContext.booking_notes || "",
           });
 
-          if (!allowRealWrite) {
-            nextContext.appointment_preview = appointmentPreview;
-            delete nextContext.created_appointment_id;
-            delete nextContext.created_payment_id;
+          nextContext.appointment_preview = appointmentPreview;
+          delete nextContext.created_appointment_id;
+          delete nextContext.created_payment_id;
 
-            const servicesText = selectedServices
-              .map((service) => service.name)
-              .join(" + ");
-            const depositMessage = takeDepositMessage(nextContext);
-            const depositText = depositMessage ? `\n\n${depositMessage}` : "";
+          const servicesText = selectedServices
+            .map((service) => service.name)
+            .join(" + ");
+          const depositMessage = takeDepositMessage(nextContext);
+          const depositText = depositMessage ? `\n\n${depositMessage}` : "";
 
-            reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}\nFecha: ${formatDate(
-              revalidatedSlot.date
-            )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
-              revalidatedSlot.staff_name
-            }${depositText}\n\nNo se creó ninguna cita, cliente ni pago real.`;
-            matchedSource = "appointment_preview";
-            nextStep = "preview_cita";
-          } else {
-            const client = await upsertClient({
-              supabase,
-              fullName,
-              phone,
-              birthday: nextContext.client_birthday,
-            });
-
-            const finalRevalidation = await revalidateSelectedSlot({
-              supabase,
-              selectedServices,
-              selectedSlot: revalidatedSlot,
-              allowMissingTimeBlocks: false,
-            });
-
-            if (!finalRevalidation.slot) {
-              availabilityReason =
-                "El horario seleccionado dejó de estar disponible antes de guardar la cita.";
-              availabilityAlternatives = finalRevalidation.options;
-              appointmentPreview = null;
-              nextContext.available_options = finalRevalidation.options;
-              delete nextContext.selected_slot;
-              delete nextContext.appointment_preview;
-              delete nextContext.created_appointment_id;
-              delete nextContext.created_payment_id;
-
-              reply = buildSlotsMessage(
-                finalRevalidation.options,
-                selectedServices,
-                revalidatedSlot.date,
-                revalidatedSlot.staff_name
-              );
-              matchedSource = "appointment_final_revalidation_failed";
-              nextStep =
-                finalRevalidation.options.length > 0
-                  ? "esperando_opcion_horario"
-                  : "esperando_fecha";
-            } else {
-
-            const created = await createAppointmentWithPayment({
-              supabase,
-              client,
-              selectedServices,
-              selectedSlot: finalRevalidation.slot,
-              bookingNotes: nextContext.booking_notes || "",
-            });
-
-            nextContext.created_appointment_id = created.appointment.id;
-            nextContext.created_payment_id = created.payment.id;
-            delete nextContext.appointment_preview;
-
-            const servicesText = selectedServices
-              .map((service) => service.name)
-              .join(" + ");
-
-            const depositMessage = takeDepositMessage(nextContext);
-            const depositText = depositMessage ? `\n\n${depositMessage}` : "";
-
-            reply = `Listo ${getFirstName(
-              fullName
-            )}. Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}\n\nFecha: ${formatDate(
-              revalidatedSlot.date
-            )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
-              revalidatedSlot.staff_name
-            }${depositText}\nTotal de anticipo requerido: $${
-              created.depositAmount
-            }.\n\n${mediaText(
-              getAssetByKey(mediaAssets, "datos_anticipo")
-            )}\n\n${mediaText(
-              getAssetByKey(mediaAssets, "politicas_salon")
-            )}\n\n${mediaText(
-              getAssetByKey(mediaAssets, "ubicacion_maps"),
-              buildLocationResponse({
-                settings,
-                faqs,
-                knowledgeItems,
-                mediaAssets,
-                isFirstMessage: false,
-              })
-            )}`;
-
-            matchedSource = "appointment_created_with_payment";
-            nextStep = "esperando_comprobante";
-            }
-          }
+          reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}\nFecha: ${formatDate(
+            revalidatedSlot.date
+          )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
+            revalidatedSlot.staff_name
+          }${depositText}\n\nNo se creó ninguna cita, cliente ni pago real.`;
+          matchedSource = "appointment_preview";
+          nextStep = "preview_cita";
         }
       }
     }
@@ -5618,9 +5700,22 @@ export async function POST(request) {
         "Disculpa, no logré entenderte bien. Puedes escribir “menú” para ver las opciones disponibles.";
       matchedSource = "fallback";
     }
+    }
 
     reply = sanitizeBotReply(reply);
     delete nextContext.recent_messages;
+    nextContext = applyEngineStateToLegacyContext({
+      context: nextContext,
+      state: engineResult.contract.nextState,
+      allServices,
+      execution: engineResult.contract.execution,
+    });
+    nextContext.conversation_engine_state = serializeEngineState(
+      engineResult.contract.nextState
+    );
+    nextStep = mapEngineStepToLegacy(
+      engineResult.contract.nextState.pendingStep
+    );
 
     const savedConversation = await saveConversation(
       supabase,
@@ -5646,16 +5741,7 @@ export async function POST(request) {
       }
     );
 
-    const appointmentRequestSaved = allowRealWrite && !availabilityReason
-      ? await saveAppointmentRequest(supabase, {
-          conversationId: savedConversation.id,
-          clientPhone: clientPhoneFromTest,
-          clientName: clientNameFromTest,
-          context: nextContext,
-          ai,
-          incomingMessage,
-        })
-      : null;
+    const appointmentRequestSaved = false;
 
     await saveBotMessages(
       supabase,
@@ -5680,10 +5766,47 @@ export async function POST(request) {
       step: nextStep,
       dryRun: !allowRealWrite,
       realWriteEnabled: allowRealWrite,
+      realWriteRequested,
       appointmentPreview,
       availabilityReason,
       availabilityAlternatives,
       appointmentRequestSaved: Boolean(appointmentRequestSaved),
+      engineDebug: {
+        action: engineResult.contract.action,
+        pendingStep: engineResult.contract.nextState.pendingStep,
+        lastOfferedMenu:
+          engineResult.contract.nextState.lastOfferedMenu || null,
+        selectedServices:
+          engineResult.contract.validatedData.selectedServices,
+        participants: engineResult.contract.nextState.participants || [],
+        pendingData: engineResult.contract.nextState.pendingData || [],
+        humanReviewReason:
+          engineResult.contract.nextState.humanReviewReason || null,
+        delegatedAction:
+          engineResult.contract.execution?.legacyAction || null,
+        validationErrors: engineResult.contract.validationErrors,
+        appointmentDraft:
+          engineResult.contract.nextState.appointmentDraft || null,
+        draftStatus:
+          engineResult.contract.nextState.appointmentDraft?.status || null,
+        previewId:
+          engineResult.contract.nextState.appointmentDraft?.previewId || null,
+        previewExpiresAt:
+          engineResult.contract.nextState.appointmentDraft?.expiresAt || null,
+        confirmation:
+          engineResult.contract.nextState.appointmentDraft?.confirmation ||
+          null,
+        writeMode: "simulation",
+        repositoryMode: "test_read_only",
+        productionWritesEnabled: botAppointmentWritesEnabled(),
+        testWritesEnabled: false,
+        whatsappConnected: false,
+        revalidation:
+          engineResult.contract.nextState.appointmentDraft?.lastValidation ||
+          null,
+        orchestratorResult:
+          engineResult.contract.nextState.orchestratorResult || null,
+      },
     });
   } catch (error) {
     console.error("Bot test request error:", error);

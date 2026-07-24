@@ -221,7 +221,7 @@ export default function BotPage() {
   const [testMessage, setTestMessage] = useState("");
   const [testLoading, setTestLoading] = useState(false);
   const [testChatMessages, setTestChatMessages] = useState([]);
-  const [testWithoutRealWrites, setTestWithoutRealWrites] = useState(true);
+  const testWithoutRealWrites = true;
   const testChatScrollRef = useRef(null);
 
   useEffect(() => {
@@ -904,7 +904,6 @@ useEffect(() => {
           message: cleanMessage,
           clientName: testClientName.trim(),
           clientPhone: testClientPhone.trim() || "test",
-          allowRealWrite: !testWithoutRealWrites,
           allowInactiveTest: true,
         }),
       });
@@ -942,6 +941,7 @@ useEffect(() => {
         created_at: new Date().toISOString(),
         intent: data.intent,
         matchedSource: data.matchedSource,
+        engineDebug: data.engineDebug || null,
       };
 
       setTestChatMessages((current) => [...current, botBubble]);
@@ -1486,9 +1486,8 @@ useEffect(() => {
                 <input
                   type="checkbox"
                   checked={testWithoutRealWrites}
-                  onChange={(event) =>
-                    setTestWithoutRealWrites(event.target.checked)
-                  }
+                  disabled
+                  onChange={() => {}}
                   className="mt-1 h-4 w-4 accent-[#bd7b83]"
                 />
                 <span>
@@ -1496,18 +1495,25 @@ useEffect(() => {
                     Modo prueba sin guardar citas reales
                   </span>
                   <span className="mt-1 block text-xs leading-5 text-[#68777c]">
-                    Activado por defecto. Permite revisar la conversación y la
-                    propuesta de cita sin crear clientes, citas ni pagos.
+                    La creación real está bloqueada durante esta fase. Puedes
+                    revisar la conversación y la propuesta de cita sin crear
+                    clientes, citas ni pagos.
                   </span>
                 </span>
               </label>
 
-              {!testWithoutRealWrites && (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
-                  Guardado real activado. Las pruebas pueden crear clientes,
-                  citas y pagos pendientes en la agenda.
-                </div>
-              )}
+              <div className="space-y-1 rounded-2xl border border-[#dde3e6] bg-white p-4 text-xs leading-5 text-[#68777c]">
+                <p>Repositorio: prueba / solo lectura</p>
+                <p>
+                  Creación de producción:{" "}
+                  {aiStatus?.productionWritesEnabled
+                    ? "bandera activa, no disponible desde este probador"
+                    : "bandera inactiva"}
+                </p>
+                <p>Modo simulación: activo</p>
+                <p>Sin WhatsApp: sin conexión ni envío real</p>
+                <p>Sin creación real: bloqueo obligatorio en el probador</p>
+              </div>
 
               <button
                 type="button"
@@ -1563,6 +1569,164 @@ useEffect(() => {
                           <p className="whitespace-pre-wrap leading-6">
                             {item.body}
                           </p>
+                          {item.engineDebug && (
+                            <div className="mt-3 space-y-1 border-t border-[#dde3e6] pt-3 text-xs leading-5 text-[#68777c]">
+                              <p>
+                                Acción: {item.engineDebug.action || "-"}
+                              </p>
+                              <p>
+                                Paso pendiente:{" "}
+                                {item.engineDebug.pendingStep || "-"}
+                              </p>
+                              <p>
+                                Menú vigente:{" "}
+                                {item.engineDebug.lastOfferedMenu
+                                  ? `${
+                                      item.engineDebug.lastOfferedMenu.type
+                                    } (${
+                                      item.engineDebug.lastOfferedMenu.options
+                                        ?.length || 0
+                                    } opciones)`
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Servicios:{" "}
+                                {item.engineDebug.selectedServices?.length
+                                  ? item.engineDebug.selectedServices
+                                      .map((service) => service.name)
+                                      .join(", ")
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Participantes:{" "}
+                                {item.engineDebug.participants?.length
+                                  ? item.engineDebug.participants
+                                      .map(
+                                        (participant) =>
+                                          `${participant.label}: ${
+                                            participant.services?.length
+                                              ? participant.services
+                                                  .map(
+                                                    (service) => service.name
+                                                  )
+                                                  .join(", ")
+                                              : "pendiente"
+                                          }`
+                                      )
+                                      .join(" | ")
+                                  : "una persona"}
+                              </p>
+                              <p>
+                                Datos pendientes:{" "}
+                                {item.engineDebug.pendingData?.length
+                                  ? item.engineDebug.pendingData.join(", ")
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Revisión humana:{" "}
+                                {item.engineDebug.humanReviewReason || "no"}
+                              </p>
+                              <p>
+                                Ejecutor autorizado:{" "}
+                                {item.engineDebug.delegatedAction || "ninguno"}
+                              </p>
+                              <p>
+                                Validación:{" "}
+                                {item.engineDebug.validationErrors?.length
+                                  ? item.engineDebug.validationErrors.join(", ")
+                                  : "sin errores"}
+                              </p>
+                              <p>
+                                Borrador:{" "}
+                                {item.engineDebug.draftStatus || "sin borrador"}
+                              </p>
+                              <p>
+                                Vista previa:{" "}
+                                {item.engineDebug.previewId || "no disponible"}
+                              </p>
+                              <p>
+                                Vence:{" "}
+                                {item.engineDebug.previewExpiresAt ||
+                                  "no disponible"}
+                              </p>
+                              <p>
+                                Confirmación recibida:{" "}
+                                {item.engineDebug.confirmation?.confirmedAt ||
+                                  "no"}
+                              </p>
+                              <p>
+                                Modo de escritura:{" "}
+                                {item.engineDebug.writeMode || "simulation"}
+                              </p>
+                              <p>
+                                Repositorio:{" "}
+                                {item.engineDebug.repositoryMode ||
+                                  "test_read_only"}
+                              </p>
+                              <p>
+                                Bandera de producción:{" "}
+                                {item.engineDebug.productionWritesEnabled
+                                  ? "activa"
+                                  : "inactiva"}
+                              </p>
+                              <p>
+                                WhatsApp:{" "}
+                                {item.engineDebug.whatsappConnected
+                                  ? "conectado"
+                                  : "sin conexión real"}
+                              </p>
+                              <p>
+                                Revalidación:{" "}
+                                {item.engineDebug.revalidation?.code ||
+                                  "pendiente"}
+                              </p>
+                              <p>
+                                Orquestador:{" "}
+                                {item.engineDebug.orchestratorResult?.code ||
+                                  "pendiente"}
+                              </p>
+                              <p>
+                                Estado transaccional:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.transactionStatus || "sin operación"}
+                              </p>
+                              <p>
+                                Resultado idempotente:{" "}
+                                {item.engineDebug.orchestratorResult?.isReplay
+                                  ? "replay"
+                                  : "sin replay"}
+                              </p>
+                              <p>
+                                Appointment ID:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.appointmentId || "no existe"}
+                              </p>
+                              <p>
+                                Error seguro:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.safeErrorCode || "ninguno"}
+                              </p>
+                              <p>
+                                Motivo sin escritura:{" "}
+                                {item.engineDebug.orchestratorResult?.reason ||
+                                  "no aplica"}
+                              </p>
+                              <p>
+                                Idempotencia:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.idempotencyKeyMasked || "no disponible"}
+                              </p>
+                              <p>
+                                Fallos parciales:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.partialFailures?.length
+                                  ? item.engineDebug.orchestratorResult.partialFailures
+                                      .map((failure) => failure.stage)
+                                      .join(", ")
+                                  : "ninguno"}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))
