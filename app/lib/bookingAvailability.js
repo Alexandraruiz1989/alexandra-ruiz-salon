@@ -254,6 +254,7 @@ export async function getAvailability({
   preferredStaffId = "",
   requestedStartTime = "",
   limit = 24,
+  allowMissingTimeBlocks = false,
 }) {
   const selectedDate = cleanText(date);
   const ids = [...new Set((serviceIds || []).map(cleanText).filter(Boolean))];
@@ -309,13 +310,15 @@ export async function getAvailability({
     adminSupabase.from("service_resources").select("*").eq("active", true),
   ]);
 
+  const timeBlocksPermissionDenied =
+    blocksResult.error?.code === "42501" && allowMissingTimeBlocks;
   const firstError = [
     servicesResult.error,
     staffResult.error,
     schedulesResult.error,
     staffServicesResult.error,
     existingServicesResult.error,
-    blocksResult.error,
+    timeBlocksPermissionDenied ? null : blocksResult.error,
     resourcesResult.error,
     serviceResourcesResult.error,
   ].find(Boolean);
@@ -413,5 +416,8 @@ export async function getAvailability({
       .slice(0, Number(limit || 24)),
     selected_services: selectedServices,
     total_duration_minutes: totalDuration,
+    warnings: timeBlocksPermissionDenied
+      ? [{ code: "staff_time_blocks_permission_denied" }]
+      : [],
   };
 }

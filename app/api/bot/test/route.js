@@ -199,9 +199,20 @@ function startsNewBookingConversation(message) {
     text.includes("quisiera cita") ||
     text.includes("nueva cita") ||
     text.includes("quiero agendar") ||
-    text.includes("quisiera agendar");
+    text.includes("quisiera agendar") ||
+    text.includes("tienen espacio") ||
+    text.includes("hay espacio");
+  const hasNewServiceInquiry =
+    (text.includes("hacen") ||
+      text.includes("manejan") ||
+      asksCatalogOrPrice(text)) &&
+    (mentionsPedicureTopic(text) ||
+      mentionsLashesTopic(text) ||
+      mentionsGelishTopic(text) ||
+      text.includes("escultural") ||
+      text.includes("acril"));
 
-  return startsWithGreeting && hasNewBookingIntent;
+  return startsWithGreeting && (hasNewBookingIntent || hasNewServiceInquiry);
 }
 
 function getFirstName(name) {
@@ -615,6 +626,127 @@ function mentionsGelishTopic(value) {
     text.includes("aplicacion de gel") ||
     text.includes("aplicación de gel") ||
     (text.includes("gel") && text.includes("sin manicure"))
+  );
+}
+
+function mentionsLashesTopic(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("pestana") ||
+    text.includes("pestaña") ||
+    text.includes("pestanas") ||
+    text.includes("pestañas") ||
+    text.includes("lifting") ||
+    text.includes("hawaiano") ||
+    text.includes("volumen 4d")
+  );
+}
+
+function hasLashesConversationContext(context = {}) {
+  return mentionsLashesTopic(
+    `${context.active_topic || ""} ${context.active_service_focus || ""}`
+  );
+}
+
+function asksCatalogOrPrice(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("precio") ||
+    text.includes("cuanto cuesta") ||
+    text.includes("cuánto cuesta") ||
+    text.includes("costo") ||
+    text.includes("cuestan") ||
+    text.includes("cuales tienen") ||
+    text.includes("cuáles tienen") ||
+    text.includes("opciones")
+  );
+}
+
+function asksNaturalLashes(value) {
+  const text = normalizeText(value);
+  return (
+    text === "natural" ||
+    text === "sutil" ||
+    text.includes("pestanas naturales") ||
+    text.includes("pestañas naturales") ||
+    text.includes("efecto natural") ||
+    text.includes("algo sutil")
+  );
+}
+
+function buildPedicurePriceCatalog() {
+  return `Claro. Manejamos varias opciones de pedicure:
+
+1. Pedicure seco — $180
+2. Pedicure seco con gel — $225
+3. Pedicure clásico — $300
+4. Pedicure clásico con gel — $380
+5. Pedicure spa — $399
+6. Pedicure spa con gel — $445
+7. Pedicure medicado — $500
+
+Si el pedicure medicado requiere atención por una uña adicional, el costo es +$70.
+
+¿Buscas algo express, spa o medicado?`;
+}
+
+function buildLashesPriceCatalog() {
+  return `Estas son nuestras opciones de pestañas:
+
+1. Lifting de pestañas con tinte — $370
+2. Extensiones clásicas — $650
+3. Extensiones efecto hawaiano — $750
+4. Extensiones volumen 4D — $850
+
+Si buscas un resultado natural o sutil, puedo ayudarte a elegir entre lifting y extensiones clásicas.`;
+}
+
+function buildNaturalLashesRecommendation() {
+  return `Para un resultado natural o sutil te recomiendo:
+
+1. Lifting de pestañas con tinte — $370, si quieres realzar tu pestaña natural.
+2. Extensiones clásicas — $650, si quieres un efecto natural con más longitud y volumen.
+
+¿Cuál de las dos opciones prefieres?`;
+}
+
+function getLashesCatalogChoice(value) {
+  const text = normalizeText(value);
+  const choices = [
+    {
+      number: "1",
+      name: "Lifting de pestañas con tinte",
+      price: 370,
+      matches: ["lifting"],
+    },
+    {
+      number: "2",
+      name: "Extensiones clásicas",
+      price: 650,
+      matches: ["clasica", "clasicas", "clásica", "clásicas"],
+    },
+    {
+      number: "3",
+      name: "Extensiones efecto hawaiano",
+      price: 750,
+      matches: ["hawaiano"],
+    },
+    {
+      number: "4",
+      name: "Extensiones volumen 4D",
+      price: 850,
+      matches: ["4d", "volumen"],
+    },
+  ];
+
+  return (
+    choices.find((choice) => text === choice.number) ||
+    choices.find((choice) =>
+      choice.matches.some((match) => text.includes(normalizeText(match)))
+    ) ||
+    null
   );
 }
 
@@ -1054,6 +1186,34 @@ function buildContextualServiceInquiryReply({
       reply: buildPedicureIngrownNailReply(),
       topic: "pedicure",
       serviceFocus: "pedicure en seco / pedicure medicado",
+    };
+  }
+
+  if (mentionsPedicureTopic(text) && asksCatalogOrPrice(text)) {
+    return {
+      reply: buildPedicurePriceCatalog(),
+      topic: "pedicure",
+      serviceFocus: "pedicure",
+    };
+  }
+
+  if (
+    mentionsLashesTopic(text) ||
+    (hasLashesConversationContext(context) && asksCatalogOrPrice(text))
+  ) {
+    const shouldShowCatalog =
+      asksCatalogOrPrice(text) || hasLashesConversationContext(context);
+
+    return {
+      reply: asksNaturalLashes(text)
+        ? buildNaturalLashesRecommendation()
+        : shouldShowCatalog
+        ? buildLashesPriceCatalog()
+        : "Sí, manejamos lifting y extensiones de pestañas. ¿Te gustaría conocer las opciones y precios?",
+      topic: "pestañas",
+      serviceFocus: asksNaturalLashes(text)
+        ? "pestañas naturales"
+        : "pestañas",
     };
   }
 
@@ -1828,7 +1988,10 @@ function detectsSecondPersonRequest(message) {
     text.includes("para mi mamá") ||
     text.includes("para mi hija") ||
     text.includes("para mi hermana") ||
-    text.includes("para mi amiga")
+    text.includes("para mi amiga") ||
+    text.includes("mi mama y yo") ||
+    text.includes("mi hermana y yo") ||
+    text.includes("mi amiga y yo")
   );
 }
 
@@ -2187,6 +2350,7 @@ function getTimeRangeLabel(timeMode) {
   if (timeMode === "afternoon") return "por la tarde";
   if (timeMode === "night") return "por la noche";
   if (timeMode === "before") return "antes de la hora indicada";
+  if (timeMode === "after") return "después de la hora indicada";
   return "";
 }
 
@@ -2196,7 +2360,9 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
   const rangeLabel = getTimeRangeLabel(slots?.timeMode);
 
   if (slots?.availabilityError) {
-    return "No pude revisar la disponibilidad en este momento. Puedo intentarlo de nuevo o ayudarte a revisar otro día.";
+    return `No pude confirmar horarios exactos para ${servicesText}${staffText} el ${formatDate(
+      dateString
+    )}. ¿Prefieres que revise por la mañana, tarde o noche, o quieres intentar con otro día?`;
   }
 
   if (slots?.exactUnavailable) {
@@ -2754,6 +2920,7 @@ function getConversationContextForAI(context = {}) {
     preferred_staff_name: context.preferred_staff_name || null,
     requires_service_confirmation:
       context.requires_service_confirmation === true,
+    requested_lash_service: context.requested_lash_service || null,
     multi_person_booking: multiPersonBooking,
     deposit_message_sent: context.deposit_message_sent === true,
   };
@@ -3482,6 +3649,7 @@ async function findNextAvailableSlotsBot({
   maximumStartMinutes = null,
   timeMode = "any",
   maxDays = 21,
+  allowMissingTimeBlocks = false,
 }) {
   for (let dayOffset = 0; dayOffset <= maxDays; dayOffset += 1) {
     const dateString = addDaysFromTodayBot(dayOffset);
@@ -3495,6 +3663,7 @@ async function findNextAvailableSlotsBot({
       minimumStartMinutes,
       maximumStartMinutes,
       timeMode,
+      allowMissingTimeBlocks,
     });
 
     if (Array.isArray(slots) && slots.length > 0) {
@@ -3624,6 +3793,7 @@ async function loadSafeBotSlots({
   preferredStaffMode,
   preferredStaffId,
   requestedStartTime = "",
+  allowMissingTimeBlocks = false,
 }) {
   try {
     const result = await getSafeAvailability({
@@ -3634,11 +3804,29 @@ async function loadSafeBotSlots({
         preferredStaffMode === "specific" ? preferredStaffId || "" : "",
       requestedStartTime,
       limit: 240,
+      allowMissingTimeBlocks,
     });
+
+    if (
+      result.warnings?.some(
+        (warning) => warning.code === "staff_time_blocks_permission_denied"
+      )
+    ) {
+      console.warn("Bot availability recovered without staff time blocks.", {
+        code: "staff_time_blocks_permission_denied",
+        date: dateString,
+        serviceCount: selectedServices.length,
+      });
+    }
 
     return normalizeSafeSlots(result.slots, dateString);
   } catch (error) {
-    console.error("Bot safe availability error:", error);
+    console.warn("Bot availability lookup failed.", {
+      code: String(error?.code || "availability_lookup_failed"),
+      message: String(error?.message || "Unknown availability error"),
+      date: dateString,
+      serviceCount: selectedServices.length,
+    });
     return addSlotMetadata([], { availabilityError: true });
   }
 }
@@ -3652,6 +3840,7 @@ async function getAvailableSlots({
   minimumStartMinutes = null,
   maximumStartMinutes = null,
   timeMode = "any",
+  allowMissingTimeBlocks = false,
 }) {
   const exactRequested =
     timeMode === "exact" &&
@@ -3667,6 +3856,7 @@ async function getAvailableSlots({
       preferredStaffMode,
       preferredStaffId,
       requestedStartTime,
+      allowMissingTimeBlocks,
     });
     if (exactCandidates.availabilityError) {
       return addSlotMetadata([], {
@@ -3698,6 +3888,7 @@ async function getAvailableSlots({
       dateString,
       preferredStaffMode,
       preferredStaffId,
+      allowMissingTimeBlocks,
     });
     if (allCandidates.availabilityError) {
       return addSlotMetadata([], {
@@ -3739,6 +3930,7 @@ async function getAvailableSlots({
     dateString,
     preferredStaffMode,
     preferredStaffId,
+    allowMissingTimeBlocks,
   });
   if (safeSlots.availabilityError) {
     return addSlotMetadata([], { availabilityError: true, timeMode });
@@ -3767,7 +3959,12 @@ async function getAvailableSlots({
   );
 }
 
-async function revalidateSelectedSlot({ supabase, selectedServices, selectedSlot }) {
+async function revalidateSelectedSlot({
+  supabase,
+  selectedServices,
+  selectedSlot,
+  allowMissingTimeBlocks = false,
+}) {
   const options = await getAvailableSlots({
     supabase,
     selectedServices,
@@ -3777,6 +3974,7 @@ async function revalidateSelectedSlot({ supabase, selectedServices, selectedSlot
     minimumStartMinutes: timeToMinutes(selectedSlot.start_time),
     maximumStartMinutes: null,
     timeMode: "exact",
+    allowMissingTimeBlocks,
   });
   const slot = options.find(
     (option) =>
@@ -4226,6 +4424,15 @@ export async function POST(request) {
       ai.intent = "book_appointment";
     }
 
+    if (
+      context.multi_person_booking?.requires_separate_appointments &&
+      normalizeText(incomingMessage).includes("para ambas") &&
+      mentionsGelishTopic(incomingMessage)
+    ) {
+      ai.intent = "book_appointment";
+      ai.services_requested = ["gelish manos"];
+    }
+
     const bookingStepAtStart = resetStateForNewBooking
       ? null
       : conversation?.booking_step || null;
@@ -4486,6 +4693,9 @@ export async function POST(request) {
           contextualServiceReply.serviceFocus ||
           nextContext.active_service_focus ||
           null;
+        if (contextualServiceReply.topic === "pestañas") {
+          nextStep = "esperando_tipo_pestanas";
+        }
         if (contextualServiceReply.selectedService) {
           nextContext.selected_services = mergeServices(
             nextContext.selected_services || selectedServicesFromContext,
@@ -4497,6 +4707,81 @@ export async function POST(request) {
             ]);
         }
       }
+    }
+
+    const lashesCatalogChoice =
+      nextStep === "esperando_tipo_pestanas"
+        ? getLashesCatalogChoice(incomingMessage)
+        : null;
+
+    if (!reply && lashesCatalogChoice) {
+      nextContext.requested_lash_service = {
+        name: lashesCatalogChoice.name,
+        price: lashesCatalogChoice.price,
+      };
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = lashesCatalogChoice.name;
+      reply = nextContext.requested_date
+        ? `Perfecto. Tomaré ${lashesCatalogChoice.name} — $${lashesCatalogChoice.price} para revisar disponibilidad el ${formatDate(
+            nextContext.requested_date
+          )}. Prepararé la solicitud para confirmación del equipo.`
+        : `Perfecto. Tomaré ${lashesCatalogChoice.name} — $${lashesCatalogChoice.price}. ¿Qué día te gustaría venir?`;
+      matchedSource = "lashes_catalog_choice";
+      nextStep = nextContext.requested_date
+        ? "revision_equipo_pestanas"
+        : "esperando_fecha_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      asksNaturalLashes(incomingMessage)
+    ) {
+      reply = buildNaturalLashesRecommendation();
+      matchedSource = "lashes_natural_recommendation";
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = "pestañas naturales";
+      nextStep = "esperando_tipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      isAffirmativeReply(incomingMessage)
+    ) {
+      reply = buildLashesPriceCatalog();
+      matchedSource = "lashes_catalog_followup";
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = "pestañas";
+      nextStep = "esperando_tipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      nextContext.requested_lash_service &&
+      requestedDate
+    ) {
+      nextContext.requested_date = requestedDate;
+      reply = `Perfecto. Conservo ${formatDate(
+        requestedDate
+      )} para ${nextContext.requested_lash_service.name}. Prepararé la solicitud para que el equipo confirme disponibilidad.`;
+      matchedSource = "lashes_selected_date";
+      nextStep = "revision_equipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      requestedDate &&
+      selectedServicesFromContext.length === 0
+    ) {
+      nextContext.requested_date = requestedDate;
+      reply = `Conservo ${formatDate(
+        requestedDate
+      )} como el día que prefieres.\n\n${buildNaturalLashesRecommendation()}`;
+      matchedSource = "lashes_date_needs_type";
+      nextStep = "esperando_tipo_pestanas";
     }
 
     if (
@@ -4658,6 +4943,7 @@ export async function POST(request) {
           supabase,
           selectedServices,
           selectedSlot,
+          allowMissingTimeBlocks: !allowRealWrite,
         });
         const revalidatedOptions = revalidation.options;
         const revalidatedSlot = revalidation.slot;
@@ -4724,6 +5010,7 @@ export async function POST(request) {
               supabase,
               selectedServices,
               selectedSlot: revalidatedSlot,
+              allowMissingTimeBlocks: false,
             });
 
             if (!finalRevalidation.slot) {
@@ -4962,6 +5249,7 @@ export async function POST(request) {
               minimumStartMinutes: nextContext.minimum_start_minutes,
               maximumStartMinutes: nextContext.maximum_start_minutes,
               timeMode: "earliest",
+              allowMissingTimeBlocks: !allowRealWrite,
             });
 
             nextContext.preferred_staff_mode = nearestStaffMode;
@@ -5001,6 +5289,7 @@ export async function POST(request) {
               minimumStartMinutes: nextContext.minimum_start_minutes,
               maximumStartMinutes: nextContext.maximum_start_minutes,
               timeMode: nextContext.time_mode,
+              allowMissingTimeBlocks: !allowRealWrite,
             });
 
             nextContext.preferred_staff_mode = targetStaffMode;
@@ -5012,12 +5301,16 @@ export async function POST(request) {
             availabilityReason = slotFeedback.reason;
             availabilityAlternatives = slotFeedback.alternatives;
 
-            reply = buildSlotsMessage(
+            const slotsReply = buildSlotsMessage(
               slots,
               mergedServices,
               targetDate,
               targetStaffMode === "specific" ? targetStaffName : ""
             );
+            reply = nextContext.multi_person_booking
+              ?.requires_separate_appointments
+              ? `Para preparar las dos citas por separado, estos son espacios iniciales para revisar:\n\n${slotsReply}\n\nDime si prefieren horarios seguidos y confirmaré cada cita por separado.`
+              : slotsReply;
 
             matchedSource = "services_staff_date_availability";
             nextStep =
@@ -5090,6 +5383,7 @@ export async function POST(request) {
           minimumStartMinutes: nextContext.minimum_start_minutes,
           maximumStartMinutes: nextContext.maximum_start_minutes,
           timeMode: nextContext.time_mode,
+          allowMissingTimeBlocks: !allowRealWrite,
         });
 
         nextContext.requested_date = targetDate;
@@ -5149,6 +5443,7 @@ export async function POST(request) {
         minimumStartMinutes: nextContext.minimum_start_minutes,
         maximumStartMinutes: nextContext.maximum_start_minutes,
         timeMode: nextContext.time_mode,
+        allowMissingTimeBlocks: !allowRealWrite,
       });
 
       nextContext.preferred_staff_mode = preferredStaffMode;
