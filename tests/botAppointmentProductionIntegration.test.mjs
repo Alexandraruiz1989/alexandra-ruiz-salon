@@ -9,6 +9,10 @@ import {
 import { createProductionBotAppointmentRepository } from "../app/lib/botAppointmentProductionRepository.js";
 
 const now = new Date("2026-07-24T12:00:00.000Z");
+const enabledEnv = {
+  APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
+  BOT_APPOINTMENT_WRITES_ENABLED: "true",
+};
 
 function confirmedDraft(overrides = {}) {
   const draft = prepareAppointmentDraft({
@@ -84,7 +88,7 @@ function rpcPayload(draft, status = "created", overrides = {}) {
   };
 }
 
-function harness(responder, env = { BOT_APPOINTMENT_WRITES_ENABLED: "true" }) {
+function harness(responder, env = enabledEnv) {
   const calls = [];
   const supabase = {
     async rpc(name, parameters) {
@@ -298,7 +302,7 @@ test("integración 12: fallo de la RPC no anuncia una cita creada", async () => 
   const draft = confirmedDraft();
   let calls = 0;
   const repository = createProductionBotAppointmentRepository({
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
     supabase: {
       async rpc() {
         calls += 1;

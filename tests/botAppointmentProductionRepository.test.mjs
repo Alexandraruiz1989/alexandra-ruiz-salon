@@ -37,6 +37,10 @@ const draft = {
   expiresAt: "2026-07-25T14:15:00.000Z",
 };
 const idempotencyKey = "conversation:preview:confirmation";
+const enabledEnv = {
+  APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
+  BOT_APPOINTMENT_WRITES_ENABLED: "true",
+};
 
 function createdPayload(overrides = {}) {
   return {
@@ -80,7 +84,7 @@ test("repo 1: la bandera solo acepta true exacto", () => {
     false
   );
   assert.equal(
-    botAppointmentWritesEnabled({ BOT_APPOINTMENT_WRITES_ENABLED: "true" }),
+    botAppointmentWritesEnabled(enabledEnv),
     true
   );
 });
@@ -103,7 +107,7 @@ test("repo 3: llama únicamente la RPC transaccional con snapshots", async () =>
   const supabase = createSupabase({ data: createdPayload(), error: null });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -127,7 +131,7 @@ test("repo 4: nunca envía datos ni operaciones de pagos", async () => {
   const supabase = createSupabase({ data: createdPayload(), error: null });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   await repository.createAppointmentTransaction({ draft, idempotencyKey });
   const serialized = JSON.stringify(supabase.calls[0]);
@@ -141,7 +145,7 @@ test("repo 5: error del proveedor se normaliza sin detalle técnico", async () =
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -158,7 +162,7 @@ test("repo 6: excepción de red se normaliza de forma segura", async () => {
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -175,7 +179,7 @@ test("repo 7: replay completo se acepta y conserva isReplay", async () => {
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -192,7 +196,7 @@ test("repo 8: creación sin servicios verificados se rechaza", async () => {
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -209,7 +213,7 @@ test("repo 9: respuesta con otra identidad se rechaza", async () => {
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -231,7 +235,7 @@ test("repo 10: respuesta con fecha, hora o colaboradora distinta se rechaza", as
     });
     const repository = createProductionBotAppointmentRepository({
       supabase,
-      env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+      env: enabledEnv,
     });
     const result = await repository.createAppointmentTransaction({
       draft,
@@ -248,7 +252,7 @@ test("repo 11: estados desconocidos nunca se aceptan como creación", async () =
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,
@@ -278,7 +282,7 @@ for (const [status, errorCode] of [
     });
     const repository = createProductionBotAppointmentRepository({
       supabase,
-      env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+      env: enabledEnv,
     });
     const result = await repository.createAppointmentTransaction({
       draft,
@@ -297,7 +301,7 @@ test("repo 12: estado created sin appointmentId se rechaza", async () => {
   });
   const repository = createProductionBotAppointmentRepository({
     supabase,
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
   });
   const result = await repository.createAppointmentTransaction({
     draft,

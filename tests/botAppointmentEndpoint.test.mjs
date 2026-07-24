@@ -10,6 +10,10 @@ import {
 import { authenticateInternalBotRequest } from "../app/lib/botInternalRequestAuth.js";
 
 const now = new Date("2026-07-24T12:00:00.000Z");
+const enabledEnv = {
+  APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
+  BOT_APPOINTMENT_WRITES_ENABLED: "true",
+};
 
 function confirmedDraft(overrides = {}) {
   const draft = prepareAppointmentDraft({
@@ -134,7 +138,7 @@ test("endpoint 2: con bandera activa y auth sin configurar responde 401", async 
   const draft = confirmedDraft();
   let supabaseCalls = 0;
   const response = await handleBotAppointmentConfirmation(makeRequest(draft), {
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
     createSupabase() {
       supabaseCalls += 1;
       return {};
@@ -150,7 +154,7 @@ test("endpoint 3: controles de escritura enviados por cliente se rechazan", asyn
   const response = await handleBotAppointmentConfirmation(
     makeRequest(draft, { allowRealWrite: true }),
     {
-      env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+      env: enabledEnv,
       authenticateRequest: async () => ({ ok: true }),
       supabase: {},
       loadContext: async () => {
@@ -169,7 +173,7 @@ test("endpoint 4: bot_settings inactivo impide llegar al repositorio", async () 
   const draft = confirmedDraft();
   let repositoryCalls = 0;
   const response = await handleBotAppointmentConfirmation(makeRequest(draft), {
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
     authenticateRequest: async () => ({ ok: true }),
     supabase: {},
     loadContext: async () =>
@@ -191,7 +195,7 @@ test("endpoint 5: fingerprint distinto se rechaza sin RPC", async () => {
   const response = await handleBotAppointmentConfirmation(
     makeRequest(draft, { requestHash: "fp_diferente" }),
     {
-      env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+      env: enabledEnv,
       authenticateRequest: async () => ({ ok: true }),
       supabase: {},
       loadContext: async () => contextFor(draft),
@@ -211,7 +215,7 @@ test("endpoint 6: una confirmación válida usa el repositorio una sola vez", as
   const draft = confirmedDraft();
   const calls = [];
   const response = await handleBotAppointmentConfirmation(makeRequest(draft), {
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
     authenticateRequest: async () => ({
       ok: true,
       principal: { type: "internal" },
@@ -246,7 +250,7 @@ test("endpoint 7: replay idempotente responde 200 y no duplica en el adaptador",
   const draft = confirmedDraft();
   const calls = [];
   const response = await handleBotAppointmentConfirmation(makeRequest(draft), {
-    env: { BOT_APPOINTMENT_WRITES_ENABLED: "true" },
+    env: enabledEnv,
     authenticateRequest: async () => ({ ok: true }),
     supabase: {},
     loadContext: async () => contextFor(draft),

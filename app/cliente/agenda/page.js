@@ -55,11 +55,6 @@ export default function ClienteAgendaPage() {
     loadData();
   }, []);
 
-  useEffect(() => {
-    setSlots([]);
-    setSelectedSlot(null);
-  }, [selectedServiceIds, appointmentDate, preferredStaffId]);
-
   const groupedServices = useMemo(() => {
     return services.reduce((groups, service) => {
       const category = service.category || "Servicios";
@@ -86,6 +81,8 @@ export default function ClienteAgendaPage() {
   );
 
   const toggleService = (serviceId) => {
+    setSlots([]);
+    setSelectedSlot(null);
     setSelectedServiceIds((current) =>
       current.includes(serviceId)
         ? current.filter((id) => id !== serviceId)
@@ -149,6 +146,11 @@ export default function ClienteAgendaPage() {
           appointment_date: appointmentDate,
           start_time: selectedSlot.start_time,
           staff_id: selectedSlot.staff_id,
+          preview_id: selectedSlot.preview?.id,
+          preview_version: selectedSlot.preview?.version,
+          confirmation_id: selectedSlot.preview?.confirmation_id,
+          request_hash: selectedSlot.preview?.request_hash,
+          preview_expires_at: selectedSlot.preview?.expires_at,
           notes,
         }),
       });
@@ -256,7 +258,11 @@ export default function ClienteAgendaPage() {
                   type="date"
                   min={todayISO()}
                   value={appointmentDate}
-                  onChange={(event) => setAppointmentDate(event.target.value)}
+                  onChange={(event) => {
+                    setAppointmentDate(event.target.value);
+                    setSlots([]);
+                    setSelectedSlot(null);
+                  }}
                   className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
                 />
               </div>
@@ -267,7 +273,11 @@ export default function ClienteAgendaPage() {
                 </label>
                 <select
                   value={preferredStaffId}
-                  onChange={(event) => setPreferredStaffId(event.target.value)}
+                  onChange={(event) => {
+                    setPreferredStaffId(event.target.value);
+                    setSlots([]);
+                    setSelectedSlot(null);
+                  }}
                   className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
                 >
                   <option value="">La colaboradora disponible</option>
@@ -350,13 +360,37 @@ export default function ClienteAgendaPage() {
                 />
               </div>
 
+              {selectedSlot && (
+                <div className="mt-4 rounded-3xl border border-[#ead8d4] bg-[#fff8f6] p-4 text-sm leading-6 text-[#765d5f]">
+                  <p className="font-medium text-[#3b2b2d]">
+                    Revisa antes de confirmar
+                  </p>
+                  <p>
+                    {(selectedSlot.preview?.services || [])
+                      .map((service) => service.name)
+                      .join(", ")}
+                  </p>
+                  <p>
+                    {appointmentDate} · {selectedSlot.start_time}-
+                    {selectedSlot.end_time} ·{" "}
+                    {selectedSlot.staff_name || "colaboradora disponible"}
+                  </p>
+                  <p>
+                    Total aproximado{" "}
+                    {formatMoney(selectedSlot.preview?.expected_price)}
+                  </p>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={createAppointment}
                 disabled={submitting || !selectedSlot}
                 className="mt-4 w-full rounded-full bg-[#3b2b2d] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
               >
-                {submitting ? "Enviando solicitud..." : "Solicitar cita"}
+                {submitting
+                  ? "Confirmando solicitud..."
+                  : "Confirmar y enviar solicitud"}
               </button>
 
               <p className="mt-4 text-sm leading-6 text-[#765d5f]">

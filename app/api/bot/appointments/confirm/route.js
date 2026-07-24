@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server.js";
 import { createAdminClient } from "../../../../lib/pushServer.js";
-import {
-  createAppointmentFromConfirmedPreview,
-  validateAppointmentDraft,
-} from "../../../../lib/botAppointmentOrchestrator.js";
-import {
-  botAppointmentWritesEnabled,
-  createProductionBotAppointmentRepository,
-} from "../../../../lib/botAppointmentProductionRepository.js";
+import { validateAppointmentDraft } from "../../../../lib/botAppointmentOrchestrator.js";
+import { botAppointmentWritesEnabled } from "../../../../lib/botAppointmentProductionRepository.js";
 import { authenticateInternalBotRequest } from "../../../../lib/botInternalRequestAuth.js";
+import {
+  createAppointmentFromBot,
+  prepareBotAppointmentContract,
+} from "../../../../lib/appointmentChannelAdapters.js";
+import { createAppointmentTransactionalRepository } from "../../../../lib/appointmentTransactionalRepository.js";
 
 const ALLOWED_BODY_KEYS = new Set([
   "conversationId",
@@ -218,12 +217,15 @@ export async function handleBotAppointmentConfirmation(
 
   const repositoryFactory =
     dependencies.createRepository ||
-    ((options) => createProductionBotAppointmentRepository(options));
+    ((options) => createAppointmentTransactionalRepository(options));
   const repository = repositoryFactory({ supabase, env });
-  const result = await createAppointmentFromConfirmedPreview({
-    draft: confirmation.draft,
-    repository,
-    writesEnabled: true,
+  const result = await createAppointmentFromBot({
+    input: prepareBotAppointmentContract(
+      confirmation.draft,
+      authorization?.actorId || authorization?.user?.id || ""
+    ),
+    env,
+    transactionalRepository: repository,
     now: dependencies.now || new Date(),
   });
 
@@ -231,7 +233,7 @@ export async function handleBotAppointmentConfirmation(
     const status =
       result.status === "human_review" ||
       result.code === "availability_changed" ||
-      result.transaction?.status === "not_available"
+      result.status === "not_available"
         ? 409
         : 422;
     return safeError(
@@ -248,11 +250,11 @@ export async function handleBotAppointmentConfirmation(
       ok: true,
       status: "created",
       code: result.code,
-      appointmentId: result.creation?.appointment?.id || null,
-      servicesCreated: Number(result.creation?.servicesCreated || 0),
-      isReplay: result.creation?.isReplay === true,
+      appointmentId: result.appointmentId,
+      servicesCreated: Number(result.servicesCreated || 0),
+      isReplay: result.isReplay === true,
     },
-    result.creation?.isReplay ? 200 : 201
+    result.isReplay ? 200 : 201
   );
 }
 

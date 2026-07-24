@@ -6,10 +6,13 @@ begin;
 
 create extension if not exists pgcrypto;
 
-create table if not exists public.bot_appointment_operations (
+create table if not exists public.appointment_write_operations (
   id uuid primary key default gen_random_uuid(),
+  source text not null
+    check (source in ('admin', 'client_portal', 'bot')),
+  actor_id uuid null,
   idempotency_key text not null,
-  conversation_id uuid not null
+  conversation_id uuid null
     references public.bot_conversations(id) on delete restrict,
   preview_id text not null,
   confirmation_id text not null,
@@ -32,17 +35,21 @@ create table if not exists public.bot_appointment_operations (
   expires_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint bot_appointment_operations_idempotency_key_unique
+  constraint appointment_write_operations_idempotency_key_unique
     unique (idempotency_key),
-  constraint bot_appointment_operations_confirmation_unique
-    unique (conversation_id, preview_id, confirmation_id)
+  constraint appointment_write_operations_confirmation_unique
+    unique (source, preview_id, confirmation_id)
 );
 
-create index if not exists bot_appointment_operations_conversation_idx
-  on public.bot_appointment_operations (conversation_id, created_at desc);
+create index if not exists appointment_write_operations_source_idx
+  on public.appointment_write_operations (source, created_at desc);
 
-create index if not exists bot_appointment_operations_appointment_idx
-  on public.bot_appointment_operations (appointment_id)
+create index if not exists appointment_write_operations_conversation_idx
+  on public.appointment_write_operations (conversation_id, created_at desc)
+  where conversation_id is not null;
+
+create index if not exists appointment_write_operations_appointment_idx
+  on public.appointment_write_operations (appointment_id)
   where appointment_id is not null;
 
 create index if not exists clients_phone_digits_idx
@@ -51,14 +58,16 @@ create index if not exists clients_phone_digits_idx
   )
   where phone is not null;
 
-alter table public.bot_appointment_operations enable row level security;
+alter table public.appointment_write_operations enable row level security;
 
-revoke all on table public.bot_appointment_operations
+revoke all on table public.appointment_write_operations
   from public, anon, authenticated;
-grant select, insert, update on table public.bot_appointment_operations
+grant select, insert, update on table public.appointment_write_operations
   to service_role;
 
-create or replace function public.create_bot_appointment_transaction(
+create or replace function public.create_appointment_transaction(
+  p_source text,
+  p_actor_id uuid,
   p_idempotency_key text,
   p_conversation_id uuid,
   p_preview_id text,
@@ -76,7 +85,9 @@ create or replace function public.create_bot_appointment_transaction(
   p_staff_id uuid default null,
   p_expected_price numeric default null,
   p_deposit_status text default 'unknown',
-  p_preview_expires_at timestamptz default null
+  p_preview_expires_at timestamptz default null,
+  p_force_created boolean default false,
+  p_notes text default null
 )
 returns jsonb
 language plpgsql
@@ -84,9 +95,10 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  v_source text := lower(trim(coalesce(p_source, '')));
   v_request jsonb;
   v_request_hash text;
-  v_operation public.bot_appointment_operations%rowtype;
+  v_operation public.appointment_write_operations%rowtype;
   v_result jsonb;
   v_conversation public.bot_conversations%rowtype;
   v_phone_digits text;
@@ -112,8 +124,10 @@ declare
   v_appointment_id uuid;
 begin
   if
-    nullif(trim(coalesce(p_idempotency_key, '')), '') is null
-    or p_conversation_id is null
+    v_source not in ('admin', 'client_portal', 'bot')
+    or nullif(trim(coalesce(p_idempotency_key, '')), '') is null
+    or (v_source = 'bot' and p_conversation_id is null)
+    or (v_source in ('admin', 'client_portal') and p_actor_id is null)
     or nullif(trim(coalesce(p_preview_id, '')), '') is null
     or nullif(trim(coalesce(p_confirmation_id, '')), '') is null
     or coalesce(p_preview_version, 0) < 1
@@ -152,6 +166,8 @@ begin
   );
 
   v_request := jsonb_build_object(
+    'source', v_source,
+    'actorId', p_actor_id,
     'conversationId', p_conversation_id,
     'previewId', trim(p_preview_id),
     'confirmationId', trim(p_confirmation_id),
@@ -170,7 +186,9 @@ begin
     'staffId', p_staff_id,
     'expectedPrice', p_expected_price,
     'depositStatus', lower(trim(coalesce(p_deposit_status, 'unknown'))),
-    'previewExpiresAt', p_preview_expires_at
+    'previewExpiresAt', p_preview_expires_at,
+    'forceCreated', coalesce(p_force_created, false),
+    'notes', trim(coalesce(p_notes, ''))
   );
 
   v_request_hash := encode(
@@ -180,14 +198,14 @@ begin
 
   perform pg_advisory_xact_lock(
     hashtextextended(
-      'bot-idempotency:' || trim(p_idempotency_key),
+      'appointment-idempotency:' || trim(p_idempotency_key),
       0
     )
   );
   perform pg_advisory_xact_lock(
     hashtextextended(
-      'bot-confirmation:'
-        || p_conversation_id::text
+      'appointment-confirmation:'
+        || v_source
         || ':'
         || trim(p_preview_id)
         || ':'
@@ -198,11 +216,11 @@ begin
 
   select operation.*
   into v_operation
-  from public.bot_appointment_operations operation
+  from public.appointment_write_operations operation
   where
     operation.idempotency_key = trim(p_idempotency_key)
     or (
-      operation.conversation_id = p_conversation_id
+      operation.source = v_source
       and operation.preview_id = trim(p_preview_id)
       and operation.confirmation_id = trim(p_confirmation_id)
     )
@@ -252,7 +270,9 @@ begin
     );
   end if;
 
-  insert into public.bot_appointment_operations (
+  insert into public.appointment_write_operations (
+    source,
+    actor_id,
     idempotency_key,
     conversation_id,
     preview_id,
@@ -262,6 +282,8 @@ begin
     expires_at
   )
   values (
+    v_source,
+    p_actor_id,
     trim(p_idempotency_key),
     p_conversation_id,
     trim(p_preview_id),
@@ -274,8 +296,11 @@ begin
 
   begin
     if
-      p_preview_expires_at is null
-      or p_preview_expires_at <= now()
+      v_source <> 'admin'
+      and (
+        p_preview_expires_at is null
+        or p_preview_expires_at <= now()
+      )
     then
       v_result := jsonb_build_object(
         'status', 'invalid_request',
@@ -287,7 +312,7 @@ begin
         'errorCode', 'preview_expired',
         'errorMessage', 'La vista previa venció y debe generarse nuevamente.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'expired',
         result = v_result,
@@ -298,6 +323,7 @@ begin
       return v_result;
     end if;
 
+    if v_source = 'bot' then
     select conversation.*
     into v_conversation
     from public.bot_conversations conversation
@@ -319,7 +345,7 @@ begin
         'errorCode', 'conversation_not_eligible',
         'errorMessage', 'La conversación requiere revisión del equipo.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'human_review',
         result = v_result,
@@ -391,7 +417,7 @@ begin
         'errorCode', 'persisted_confirmation_mismatch',
         'errorMessage', 'La vista previa guardada debe confirmarse nuevamente.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -417,12 +443,35 @@ begin
         'errorCode', 'bot_inactive',
         'errorMessage', 'El bot está desactivado.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'human_review',
         result = v_result,
         error_code = 'bot_inactive',
         error_message = 'El bot está desactivado.',
+        updated_at = now()
+      where id = v_operation.id;
+      return v_result;
+    end if;
+    end if;
+
+    if coalesce(p_force_created, false) = true and v_source <> 'admin' then
+      v_result := jsonb_build_object(
+        'status', 'invalid_request',
+        'appointmentId', null,
+        'clientId', null,
+        'idempotencyKey', trim(p_idempotency_key),
+        'isReplay', false,
+        'servicesCreated', 0,
+        'errorCode', 'force_not_allowed',
+        'errorMessage', 'La solicitud no permite forzar la cita.'
+      );
+      update public.appointment_write_operations
+      set
+        status = 'failed',
+        result = v_result,
+        error_code = 'force_not_allowed',
+        error_message = 'Solo agenda administrativa puede solicitar force_created.',
         updated_at = now()
       where id = v_operation.id;
       return v_result;
@@ -439,7 +488,7 @@ begin
         'errorCode', 'deposit_pending',
         'errorMessage', 'El anticipo requerido todavía no está verificado.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'human_review',
         result = v_result,
@@ -463,7 +512,7 @@ begin
         'errorCode', 'deposit_requires_review',
         'errorMessage', 'El estado del anticipo requiere revisión del equipo.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'human_review',
         result = v_result,
@@ -493,7 +542,7 @@ begin
         'errorCode', 'invalid_appointment_data',
         'errorMessage', 'La fecha, horario, colaboradora o participante no son válidos.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -521,7 +570,7 @@ begin
         'errorCode', 'staff_unavailable',
         'errorMessage', 'La colaboradora seleccionada ya no está disponible.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -534,7 +583,7 @@ begin
 
     perform pg_advisory_xact_lock(
       hashtextextended(
-        'bot-staff-day:'
+        'appointment-staff-day:'
           || p_staff_id::text
           || ':'
           || p_appointment_date::text,
@@ -566,7 +615,7 @@ begin
           'errorCode', 'invalid_service_assignment',
           'errorMessage', 'Un servicio o participante no es válido.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -585,8 +634,14 @@ begin
       if
         not found
         or coalesce(v_service.active, false) = false
-        or coalesce(v_service.bot_active, false) = false
-        or coalesce(v_service.bot_bookable, false) = false
+        or (
+          v_source in ('bot', 'client_portal')
+          and (
+            coalesce(v_service.bot_active, false) = false
+            or coalesce(v_service.bot_bookable, false) = false
+            or coalesce(v_service.service_type, 'servicio') <> 'servicio'
+          )
+        )
       then
         v_result := jsonb_build_object(
           'status', 'invalid_service',
@@ -598,7 +653,7 @@ begin
           'errorCode', 'service_unavailable',
           'errorMessage', 'Uno de los servicios ya no está disponible.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -620,7 +675,7 @@ begin
           'errorCode', 'variable_price_requires_review',
           'errorMessage', 'El servicio requiere valoración de precio.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'human_review',
           result = v_result,
@@ -652,7 +707,7 @@ begin
           'errorCode', 'preview_service_changed',
           'errorMessage', 'El precio o duración cambió; revisa una vista previa nueva.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -688,7 +743,7 @@ begin
           'errorCode', 'staff_service_not_allowed',
           'errorMessage', 'La colaboradora no está habilitada para uno de los servicios.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -713,7 +768,7 @@ begin
           'errorCode', 'service_duration_missing',
           'errorMessage', 'Uno de los servicios no tiene duración válida.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -765,7 +820,7 @@ begin
         'errorCode', 'preview_totals_changed',
         'errorMessage', 'La duración, hora final o precio cambió desde la vista previa.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -809,7 +864,7 @@ begin
         'errorCode', 'outside_staff_schedule',
         'errorMessage', 'El horario ya no está disponible.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -841,7 +896,7 @@ begin
         'errorCode', 'minimum_notice_not_met',
         'errorMessage', 'El horario ya no cumple la anticipación mínima.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -870,7 +925,7 @@ begin
         'errorCode', 'staff_time_block',
         'errorMessage', 'El horario está bloqueado.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -916,7 +971,7 @@ begin
         'errorCode', 'staff_overlap',
         'errorMessage', 'El horario fue ocupado por otra cita.'
       );
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         result = v_result,
@@ -940,7 +995,7 @@ begin
     loop
       perform pg_advisory_xact_lock(
         hashtextextended(
-          'bot-resource-day:'
+          'appointment-resource-day:'
             || v_resource.id::text
             || ':'
             || p_appointment_date::text,
@@ -962,7 +1017,7 @@ begin
           'errorCode', 'resource_unavailable',
           'errorMessage', 'Un recurso necesario ya no está disponible.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -1032,7 +1087,7 @@ begin
             'errorCode', 'resource_capacity',
             'errorMessage', 'No hay capacidad suficiente del recurso requerido.'
           );
-          update public.bot_appointment_operations
+          update public.appointment_write_operations
           set
             status = 'failed',
             result = v_result,
@@ -1063,7 +1118,7 @@ begin
           'errorCode', 'client_not_found',
           'errorMessage', 'No se encontró la clienta seleccionada.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -1090,7 +1145,7 @@ begin
           'errorCode', 'client_phone_mismatch',
           'errorMessage', 'Los datos de la clienta no coinciden.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -1115,7 +1170,7 @@ begin
           'errorCode', 'client_data_incomplete',
           'errorMessage', 'Faltan nombre o teléfono válidos de la clienta.'
         );
-        update public.bot_appointment_operations
+        update public.appointment_write_operations
         set
           status = 'failed',
           result = v_result,
@@ -1127,7 +1182,7 @@ begin
       end if;
 
       perform pg_advisory_xact_lock(
-        hashtextextended('bot-client-phone:' || v_phone_digits, 0)
+        hashtextextended('appointment-client-phone:' || v_phone_digits, 0)
       );
 
       select client.*
@@ -1180,11 +1235,20 @@ begin
       'agendada',
       'pendiente',
       'pendiente',
-      'bot',
+      case
+        when v_source = 'client_portal' then 'cliente_portal'
+        else v_source
+      end,
       v_estimated_total,
       0,
-      false,
-      'Creada mediante la operación transaccional del bot.',
+      case
+        when v_source = 'admin' then coalesce(p_force_created, false)
+        else false
+      end,
+      coalesce(
+        nullif(trim(coalesce(p_notes, '')), ''),
+        'Creada mediante la operación transaccional de agenda.'
+      ),
       'Solicitud recibida. El equipo revisará el anticipo si corresponde.',
       now()
     )
@@ -1260,7 +1324,7 @@ begin
       'errorMessage', null
     );
 
-    update public.bot_appointment_operations
+    update public.appointment_write_operations
     set
       status = 'created',
       appointment_id = v_appointment_id,
@@ -1284,7 +1348,7 @@ begin
         'errorMessage', 'No se pudo crear la cita de forma transaccional.'
       );
 
-      update public.bot_appointment_operations
+      update public.appointment_write_operations
       set
         status = 'failed',
         appointment_id = null,
@@ -1299,7 +1363,9 @@ begin
 end;
 $$;
 
-revoke all on function public.create_bot_appointment_transaction(
+revoke all on function public.create_appointment_transaction(
+  text,
+  uuid,
   text,
   uuid,
   text,
@@ -1317,10 +1383,14 @@ revoke all on function public.create_bot_appointment_transaction(
   uuid,
   numeric,
   text,
-  timestamptz
+  timestamptz,
+  boolean,
+  text
 ) from public, anon, authenticated;
 
-grant execute on function public.create_bot_appointment_transaction(
+grant execute on function public.create_appointment_transaction(
+  text,
+  uuid,
   text,
   uuid,
   text,
@@ -1338,7 +1408,9 @@ grant execute on function public.create_bot_appointment_transaction(
   uuid,
   numeric,
   text,
-  timestamptz
+  timestamptz,
+  boolean,
+  text
 ) to service_role;
 
 notify pgrst, 'reload schema';

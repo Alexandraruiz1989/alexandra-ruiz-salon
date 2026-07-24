@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const migration = readFileSync(
-  new URL("../supabase_bot_appointment_transaction.sql", import.meta.url),
+  new URL("../supabase_appointment_transaction.sql", import.meta.url),
   "utf8"
 );
 const rollback = readFileSync(
   new URL(
-    "../supabase_bot_appointment_transaction_rollback.sql",
+    "../supabase_appointment_transaction_rollback.sql",
     import.meta.url
   ),
   "utf8"
@@ -46,18 +46,18 @@ test("SQL 2: la tabla idempotente tiene ambas identidades únicas y RLS", () => 
   );
   assert.match(
     migration,
-    /unique\s*\(\s*conversation_id\s*,\s*preview_id\s*,\s*confirmation_id\s*\)/i
+    /unique\s*\(\s*source\s*,\s*preview_id\s*,\s*confirmation_id\s*\)/i
   );
   assert.match(
     migration,
-    /alter table public\.bot_appointment_operations enable row level security/i
+    /alter table public\.appointment_write_operations enable row level security/i
   );
 });
 
 test("SQL 3: la RPC es SECURITY DEFINER con search_path fijo", () => {
   assert.match(
     migration,
-    /create or replace function public\.create_bot_appointment_transaction/i
+    /create or replace function public\.create_appointment_transaction/i
   );
   assert.match(migration, /security definer/i);
   assert.match(migration, /set search_path = public, pg_temp/i);
@@ -66,19 +66,19 @@ test("SQL 3: la RPC es SECURITY DEFINER con search_path fijo", () => {
 test("SQL 4: la RPC y tabla no se conceden a roles públicos", () => {
   assert.match(
     migration,
-    /revoke all on table public\.bot_appointment_operations\s+from public, anon, authenticated/i
+    /revoke all on table public\.appointment_write_operations\s+from public, anon, authenticated/i
   );
   assert.match(
     migration,
-    /grant select, insert, update on table public\.bot_appointment_operations\s+to service_role/i
+    /grant select, insert, update on table public\.appointment_write_operations\s+to service_role/i
   );
   assert.match(
     migration,
-    /grant execute on function public\.create_bot_appointment_transaction[\s\S]+to service_role/i
+    /grant execute on function public\.create_appointment_transaction[\s\S]+to service_role/i
   );
   assert.doesNotMatch(
     migration,
-    /grant execute on function public\.create_bot_appointment_transaction[\s\S]+to (?:anon|authenticated)/i
+    /grant execute on function public\.create_appointment_transaction[\s\S]+to (?:anon|authenticated)/i
   );
 });
 
@@ -191,7 +191,7 @@ test("SQL 10: compara la confirmación contra el borrador persistido", () => {
 });
 
 test("SQL 11: cliente concurrente se serializa y no se sobrescribe", () => {
-  assert.match(migration, /bot-client-phone:/i);
+  assert.match(migration, /appointment-client-phone:/i);
   assert.match(migration, /regexp_replace\(coalesce\(client\.phone/i);
   assert.match(
     migration,
@@ -202,11 +202,11 @@ test("SQL 11: cliente concurrente se serializa y no se sobrescribe", () => {
 
 test("SQL 12: rollback coincide con la firma y no elimina datos reales", () => {
   const signature =
-    /create or replace function public\.create_bot_appointment_transaction\s*\(([\s\S]*?)\)\s*returns jsonb/i.exec(
+    /create or replace function public\.create_appointment_transaction\s*\(([\s\S]*?)\)\s*returns jsonb/i.exec(
       migration
     )?.[1];
   const dropSignature =
-    /drop function if exists public\.create_bot_appointment_transaction\s*\(([\s\S]*?)\)\s*;/i.exec(
+    /drop function if exists public\.create_appointment_transaction\s*\(([\s\S]*?)\)\s*;/i.exec(
       rollback
     )?.[1];
   assert.ok(signature);
@@ -228,5 +228,32 @@ test("SQL 12: rollback coincide con la firma y no elimina datos reales", () => {
   assert.doesNotMatch(
     rollback,
     /drop table if exists public\.(?:appointments|appointment_services|clients|payments)/i
+  );
+});
+
+test("SQL 13: el origen se limita a los tres canales", () => {
+  assert.match(
+    migration,
+    /source\s+text\s+not null[\s\S]+source in\s*\(\s*'admin'\s*,\s*'client_portal'\s*,\s*'bot'\s*\)/i
+  );
+  assert.match(
+    migration,
+    /v_source not in\s*\(\s*'admin'\s*,\s*'client_portal'\s*,\s*'bot'\s*\)/i
+  );
+});
+
+test("SQL 14: la idempotencia registra origen y actor", () => {
+  assert.match(
+    migration,
+    /insert into public\.appointment_write_operations\s*\(\s*source\s*,\s*actor_id\s*,\s*idempotency_key/i
+  );
+  assert.match(migration, /'source'\s*,\s*v_source/i);
+  assert.match(migration, /'actorId'\s*,\s*p_actor_id/i);
+});
+
+test("SQL 15: bot_settings solo se exige al origen bot", () => {
+  assert.match(
+    migration,
+    /if v_source = 'bot' then[\s\S]+from public\.bot_conversations[\s\S]+from public\.bot_settings[\s\S]+end if;/i
   );
 });

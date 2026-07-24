@@ -4,6 +4,7 @@ import {
   ensureClientForUser,
   getAuthUserFromRequest,
 } from "../../../lib/clientPortalServer";
+import { isPortalBookableService } from "../../../lib/appointmentWriteContracts.js";
 
 function errorResponse(error, status = 400) {
   return NextResponse.json(
@@ -45,7 +46,17 @@ export async function GET(request) {
 
     return NextResponse.json({
       success: true,
-      services: servicesResult.data || [],
+      services: (servicesResult.data || [])
+        .filter(isPortalBookableService)
+        .map((service) => ({
+          id: service.id,
+          name: service.name,
+          category: service.category || "Servicios",
+          description: service.description || "",
+          base_price: Number(service.base_price || 0),
+          duration_minutes: Number(service.duration_minutes || 0),
+          cleanup_minutes: Number(service.cleanup_minutes || 0),
+        })),
       staff: (staffResult.data || []).map((person) => ({
         id: person.id,
         full_name: person.full_name,
