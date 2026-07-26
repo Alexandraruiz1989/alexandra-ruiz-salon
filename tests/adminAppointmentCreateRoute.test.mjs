@@ -370,7 +370,7 @@ test("ruta admin 14: extras usan datos autoritativos y no precio del navegador",
   assert.equal(contracts[0].expectedPrice, 350);
 });
 
-test("ruta admin 15: permanece sin uso y no contiene escritor secuencial", () => {
+test("ruta admin 15: la ruta no contiene escritor secuencial y Agenda la usa tras banderas", () => {
   const routeSource = readFileSync(
     new URL(
       "../app/api/admin/appointments/create/route.js",
@@ -387,8 +387,12 @@ test("ruta admin 15: permanece sin uso y no contiene escritor secuencial", () =>
     /\.from\(["'](?:appointments|appointment_services|appointment_extra_items)["']\)[\s\S]{0,120}\.(?:insert|update)\(/
   );
   assert.doesNotMatch(routeSource, /legacyWriter/);
-  assert.doesNotMatch(
+  assert.match(
     agendaSource,
     /\/api\/admin\/appointments\/create/
+  );
+  assert.match(
+    agendaSource,
+    /ADMIN_TRANSACTIONAL_APPOINTMENT_WRITES_ENABLED/
   );
 });

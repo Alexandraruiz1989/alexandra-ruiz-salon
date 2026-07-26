@@ -1,10 +1,35 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  adminTransactionalAppointmentWritesEnabled,
+  buildAdminAppointmentCreatePayload,
+  getAdminTransactionalCreateBlocker,
+} from "../../lib/adminAppointmentClientMode";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
 const DESIGN_IMAGE_BUCKET = "appointment-designs";
+const ADMIN_TRANSACTIONAL_APPOINTMENT_WRITES_ENABLED =
+  adminTransactionalAppointmentWritesEnabled({
+    APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED:
+      process.env.APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED,
+    APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED:
+      process.env.APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED,
+    NEXT_PUBLIC_APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED:
+      process.env.NEXT_PUBLIC_APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED,
+    NEXT_PUBLIC_APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED:
+      process.env.NEXT_PUBLIC_APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED,
+  });
+
+function createAdminAppointmentEventId() {
+  const randomId =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return `admin_event_${randomId}`;
+}
 
 const agendaMenuItems = [
   { key: "nueva", label: "Nueva cita" },
@@ -2550,6 +2575,78 @@ const notifyAppointmentStaff = async ({
   return pushResult.error || null;
 };
 
+const runAppointmentPostSaveEffects = async ({
+  appointment,
+  lines,
+  wasEditing = false,
+  previousStaffIds = [],
+  previousSignature = "",
+  previousServicesSignature = "",
+}) => {
+  let notificationWarning = "";
+
+  await createAppointmentFollowups(appointment);
+
+  const currentStaffSignature = [
+    appointment.appointment_date,
+    appointment.start_time,
+    appointment.end_time,
+    [...new Set((lines || []).map((line) => line.staff_id).filter(Boolean))]
+      .sort()
+      .join(","),
+  ].join("|");
+
+  const shouldNotifyAppointment =
+    !wasEditing ||
+    !previousSignature ||
+    previousSignature !== currentStaffSignature;
+
+  if (shouldNotifyAppointment) {
+    const notificationError = await notifyAppointmentStaff({
+      appointment,
+      lines,
+      eventType: wasEditing ? "cita_actualizada" : "cita_nueva",
+      previousStaffIds: wasEditing ? previousStaffIds : [],
+    });
+
+    if (notificationError) {
+      notificationWarning = ` La cita se guardó, pero no se pudo enviar notificación push: ${notificationError.message}`;
+    }
+  }
+
+  const currentServicesSignature = (lines || [])
+    .map((line) =>
+      [line.service_id, line.staff_id, line.start_time, line.end_time].join(":")
+    )
+    .sort()
+    .join("|");
+  const adminEventType = !wasEditing
+    ? "cita_nueva_admin"
+    : previousServicesSignature !== currentServicesSignature
+    ? "cita_servicios_admin"
+    : "cita_actualizada_admin";
+  const clientForNotification = clients.find(
+    (item) => item.id === appointment.client_id
+  );
+  const adminNotificationResult = await triggerAdminAppointmentNotification({
+    appointment_id: appointment.id,
+    event_type: adminEventType,
+    client_name: clientForNotification?.full_name || "Clienta",
+    summary: `${appointment.appointment_date} ${formatTime(
+      appointment.start_time
+    )}-${formatTime(appointment.end_time)} · ${(lines || [])
+      .map((line) => getServiceName(line.service_id))
+      .filter(Boolean)
+      .join(", ")}`,
+  });
+
+  if (adminNotificationResult.error) {
+    notificationWarning = `${notificationWarning} No se pudo notificar al admin: ${adminNotificationResult.error.message}`;
+  }
+
+  return notificationWarning;
+};
+
 const handleSubmit = async () => {
     setSaving(true);
     setMessage("");
@@ -2685,6 +2782,102 @@ const handleSubmit = async () => {
           .sort()
           .join("|")
       : "";
+
+    const shouldUseTransactionalCreate =
+      ADMIN_TRANSACTIONAL_APPOINTMENT_WRITES_ENABLED && !editingAppointmentId;
+
+    if (shouldUseTransactionalCreate) {
+      const transactionalBlocker = getAdminTransactionalCreateBlocker({
+        form,
+        serviceLines: validServiceLines,
+        appointmentExtras: validAppointmentExtras,
+        designImageFile,
+      });
+
+      if (transactionalBlocker) {
+        setMessage(transactionalBlocker);
+        setSaving(false);
+        return;
+      }
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        setMessage("Tu sesión expiró. Vuelve a iniciar sesión.");
+        setSaving(false);
+        return;
+      }
+
+      const response = await fetch("/api/admin/appointments/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(
+          buildAdminAppointmentCreatePayload({
+            eventId: createAdminAppointmentEventId(),
+            form,
+            serviceLines: validServiceLines,
+            appointmentExtras: validAppointmentExtras,
+            forceCreated: Boolean(form.force_created && canForceAgenda),
+          })
+        ),
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok || !result.success || !result.appointmentId) {
+        setMessage(
+          result.error ||
+            "No se pudo guardar la cita con el modo transaccional."
+        );
+        setSaving(false);
+        return;
+      }
+
+      const { data: createdAppointment, error: createdAppointmentError } =
+        await supabase
+          .from("appointments")
+          .select("*")
+          .eq("id", result.appointmentId)
+          .single();
+
+      if (createdAppointmentError) {
+        setMessage(
+          `La cita se creó, pero no se pudo recargar el detalle: ${createdAppointmentError.message}`
+        );
+        setSaving(false);
+        return;
+      }
+
+      appointment = createdAppointment;
+
+      notificationWarning = await runAppointmentPostSaveEffects({
+        appointment,
+        lines: validServiceLines,
+        wasEditing: false,
+        previousStaffIds: [],
+        previousSignature: "",
+        previousServicesSignature: "",
+      });
+
+      setSelectedDate(form.appointment_date);
+      await loadDateData(form.appointment_date);
+      await loadRangeData(form.appointment_date);
+
+      resetForm();
+      setMessage(
+        `Cita registrada correctamente ✨${notificationWarning}${
+          result.isReplay ? " Operación repetida detectada; se conservó la misma cita." : ""
+        }`
+      );
+      setSaving(false);
+      setActiveSection("diaria");
+      setAppointmentExtraLines([]);
+      setDesignImageFile(null);
+      return;
+    }
 
     if (editingAppointmentId) {
       const { data: updatedAppointment, error: updateError } = await supabase
@@ -2824,62 +3017,14 @@ if (designImageFile) {
   }
 }
 
-await createAppointmentFollowups(appointment);
-
-const currentStaffSignature = [
-  appointment.appointment_date,
-  appointment.start_time,
-  appointment.end_time,
-  [...new Set(validServiceLines.map((line) => line.staff_id).filter(Boolean))]
-    .sort()
-    .join(","),
-].join("|");
-
-const shouldNotifyAppointment =
-  !wasEditing || !previousSignature || previousSignature !== currentStaffSignature;
-
-if (shouldNotifyAppointment) {
-  const notificationError = await notifyAppointmentStaff({
-    appointment,
-    lines: validServiceLines,
-    eventType: wasEditing ? "cita_actualizada" : "cita_nueva",
-    previousStaffIds: wasEditing ? previousStaffIds : [],
-  });
-
-  if (notificationError) {
-    notificationWarning = ` La cita se guardó, pero no se pudo enviar notificación push: ${notificationError.message}`;
-  }
-}
-
-const currentServicesSignature = validServiceLines
-  .map((line) =>
-    [line.service_id, line.staff_id, line.start_time, line.end_time].join(":")
-  )
-  .sort()
-  .join("|");
-const adminEventType = !wasEditing
-  ? "cita_nueva_admin"
-  : previousServicesSignature !== currentServicesSignature
-  ? "cita_servicios_admin"
-  : "cita_actualizada_admin";
-const clientForNotification = clients.find(
-  (item) => item.id === appointment.client_id
-);
-const adminNotificationResult = await triggerAdminAppointmentNotification({
-  appointment_id: appointment.id,
-  event_type: adminEventType,
-  client_name: clientForNotification?.full_name || "Clienta",
-  summary: `${appointment.appointment_date} ${formatTime(
-    appointment.start_time
-  )}-${formatTime(appointment.end_time)} · ${validServiceLines
-    .map((line) => getServiceName(line.service_id))
-    .filter(Boolean)
-    .join(", ")}`,
+notificationWarning = await runAppointmentPostSaveEffects({
+  appointment,
+  lines: validServiceLines,
+  wasEditing,
+  previousStaffIds,
+  previousSignature,
+  previousServicesSignature,
 });
-
-if (adminNotificationResult.error) {
-  notificationWarning = `${notificationWarning} No se pudo notificar al admin: ${adminNotificationResult.error.message}`;
-}
     setSelectedDate(form.appointment_date);
     await loadDateData(form.appointment_date);
     await loadRangeData(form.appointment_date);
