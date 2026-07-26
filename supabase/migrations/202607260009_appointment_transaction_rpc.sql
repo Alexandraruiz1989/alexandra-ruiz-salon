@@ -1,3 +1,8 @@
+-- Derived from supabase_appointment_transaction.sql.
+-- Contains no exported rows or production data.
+-- Adds transactional appointment write operation table and RPC.
+-- Dependencies: public clients, staff, services, schedules, appointments and appointment relation tables.
+
 -- Creación transaccional e idempotente de citas para Alexandra Ruiz Salón.
 -- ARCHIVO PARA REVISIÓN: no ejecutar sin pasar primero por staging.
 -- No crea pagos, no verifica anticipos y no envía mensajes.
