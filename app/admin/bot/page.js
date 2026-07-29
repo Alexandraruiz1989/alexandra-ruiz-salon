@@ -64,6 +64,20 @@ const quickReplies = [
   },
 ];
 
+async function getBotRequestHeaders({ json = false } = {}) {
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
+  if (!accessToken) {
+    throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+  }
+
+  return {
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    Authorization: `Bearer ${accessToken}`,
+  };
+}
+
 function formatDateTime(value) {
   if (!value) return "Sin fecha";
 
@@ -207,6 +221,7 @@ export default function BotPage() {
   const [testMessage, setTestMessage] = useState("");
   const [testLoading, setTestLoading] = useState(false);
   const [testChatMessages, setTestChatMessages] = useState([]);
+  const testWithoutRealWrites = true;
   const testChatScrollRef = useRef(null);
 
   useEffect(() => {
@@ -224,6 +239,8 @@ export default function BotPage() {
     };
 
     start();
+    // La carga inicial debe ejecutarse una sola vez después de validar la sesión.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -246,35 +263,10 @@ useEffect(() => {
 }, [testChatMessages, testLoading]);
 
   useEffect(() => {
-    if (activeSection !== "conversaciones") return;
-
-    if (!selectedConversationId && conversations.length > 0) {
-      setSelectedConversationId(conversations[0].id);
-      return;
-    }
-
-    if (
-      selectedConversationId &&
-      conversations.length > 0 &&
-      !conversations.some((conversation) => conversation.id === selectedConversationId)
-    ) {
-      setSelectedConversationId(conversations[0].id);
-    }
-  }, [activeSection, conversations, selectedConversationId]);
-
-  useEffect(() => {
     if (activeSection !== "conversaciones" || !selectedConversationId) return;
 
     loadConversationMessages(selectedConversationId);
   }, [activeSection, selectedConversationId]);
-
-  useEffect(() => {
-    const selected = conversations.find(
-      (conversation) => conversation.id === selectedConversationId
-    );
-
-    setAssignedTo(selected?.assigned_to || "");
-  }, [conversations, selectedConversationId]);
 
   useEffect(() => {
     if (!conversationScrollRef.current) return;
@@ -285,7 +277,7 @@ useEffect(() => {
     });
   }, [conversationMessages, selectedConversationId]);
 
-  const loadData = async () => {
+  async function loadData() {
     setLoadingData(true);
     setMessage("");
 
@@ -372,19 +364,33 @@ useEffect(() => {
         )
       );
     } else {
-      setConversations(conversationsResult.data || []);
+      const loadedConversations = conversationsResult.data || [];
+      const selectedConversation =
+        loadedConversations.find(
+          (conversation) => conversation.id === selectedConversationId
+        ) || loadedConversations[0] || null;
+
+      setConversations(loadedConversations);
+      setSelectedConversationId(selectedConversation?.id || null);
+      setAssignedTo(selectedConversation?.assigned_to || "");
     }
 
     setLoadingData(false);
-  };
+  }
 
-  const loadAiStatus = async () => {
+  async function loadAiStatus() {
     try {
-      const response = await fetch("/api/bot/test", { method: "GET" });
+      const headers = await getBotRequestHeaders();
+      const response = await fetch("/api/bot/test", { method: "GET", headers });
       const data = await response.json();
 
       if (response.ok) {
         setAiStatus(data);
+      } else {
+        setAiStatus({
+          aiConfigured: false,
+          message: data.error || "No se pudo revisar el estado del bot.",
+        });
       }
     } catch (error) {
       setAiStatus({
@@ -393,9 +399,9 @@ useEffect(() => {
           "IA no conectada. El bot está funcionando con reglas básicas.",
       });
     }
-  };
+  }
 
-  const loadConversationMessages = async (conversationId) => {
+  async function loadConversationMessages(conversationId) {
     if (!conversationId) return;
 
     setLoadingConversationMessages(true);
@@ -414,7 +420,7 @@ useEffect(() => {
     }
 
     setLoadingConversationMessages(false);
-  };
+  }
 
   const updateConversationControl = async (conversation, enabled) => {
     if (!conversation?.id) return;
@@ -890,15 +896,15 @@ useEffect(() => {
     setTestLoading(true);
 
     try {
+      const headers = await getBotRequestHeaders({ json: true });
       const response = await fetch("/api/bot/test", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           message: cleanMessage,
           clientName: testClientName.trim(),
           clientPhone: testClientPhone.trim() || "test",
+          allowInactiveTest: true,
         }),
       });
 
@@ -935,6 +941,7 @@ useEffect(() => {
         created_at: new Date().toISOString(),
         intent: data.intent,
         matchedSource: data.matchedSource,
+        engineDebug: data.engineDebug || null,
       };
 
       setTestChatMessages((current) => [...current, botBubble]);
@@ -961,15 +968,16 @@ useEffect(() => {
     setTestLoading(true);
 
     try {
+      const headers = await getBotRequestHeaders({ json: true });
       const response = await fetch("/api/bot/test", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           resetConversation: true,
           clientName: testClientName.trim(),
           clientPhone: testClientPhone.trim() || "test",
+          allowRealWrite: false,
+          allowInactiveTest: true,
         }),
       });
 
@@ -1474,6 +1482,39 @@ useEffect(() => {
                 placeholder="9991112233"
               />
 
+              <label className="flex items-start gap-3 rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] p-4">
+                <input
+                  type="checkbox"
+                  checked={testWithoutRealWrites}
+                  disabled
+                  onChange={() => {}}
+                  className="mt-1 h-4 w-4 accent-[#bd7b83]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-[#263238]">
+                    Modo prueba sin guardar citas reales
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-[#68777c]">
+                    La creación real está bloqueada durante esta fase. Puedes
+                    revisar la conversación y la propuesta de cita sin crear
+                    clientes, citas ni pagos.
+                  </span>
+                </span>
+              </label>
+
+              <div className="space-y-1 rounded-2xl border border-[#dde3e6] bg-white p-4 text-xs leading-5 text-[#68777c]">
+                <p>Repositorio: prueba / solo lectura</p>
+                <p>
+                  Creación de producción:{" "}
+                  {aiStatus?.productionWritesEnabled
+                    ? "bandera activa, no disponible desde este probador"
+                    : "bandera inactiva"}
+                </p>
+                <p>Modo simulación: activo</p>
+                <p>Sin WhatsApp: sin conexión ni envío real</p>
+                <p>Sin creación real: bloqueo obligatorio en el probador</p>
+              </div>
+
               <button
                 type="button"
                 onClick={resetTestChat}
@@ -1528,6 +1569,164 @@ useEffect(() => {
                           <p className="whitespace-pre-wrap leading-6">
                             {item.body}
                           </p>
+                          {item.engineDebug && (
+                            <div className="mt-3 space-y-1 border-t border-[#dde3e6] pt-3 text-xs leading-5 text-[#68777c]">
+                              <p>
+                                Acción: {item.engineDebug.action || "-"}
+                              </p>
+                              <p>
+                                Paso pendiente:{" "}
+                                {item.engineDebug.pendingStep || "-"}
+                              </p>
+                              <p>
+                                Menú vigente:{" "}
+                                {item.engineDebug.lastOfferedMenu
+                                  ? `${
+                                      item.engineDebug.lastOfferedMenu.type
+                                    } (${
+                                      item.engineDebug.lastOfferedMenu.options
+                                        ?.length || 0
+                                    } opciones)`
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Servicios:{" "}
+                                {item.engineDebug.selectedServices?.length
+                                  ? item.engineDebug.selectedServices
+                                      .map((service) => service.name)
+                                      .join(", ")
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Participantes:{" "}
+                                {item.engineDebug.participants?.length
+                                  ? item.engineDebug.participants
+                                      .map(
+                                        (participant) =>
+                                          `${participant.label}: ${
+                                            participant.services?.length
+                                              ? participant.services
+                                                  .map(
+                                                    (service) => service.name
+                                                  )
+                                                  .join(", ")
+                                              : "pendiente"
+                                          }`
+                                      )
+                                      .join(" | ")
+                                  : "una persona"}
+                              </p>
+                              <p>
+                                Datos pendientes:{" "}
+                                {item.engineDebug.pendingData?.length
+                                  ? item.engineDebug.pendingData.join(", ")
+                                  : "ninguno"}
+                              </p>
+                              <p>
+                                Revisión humana:{" "}
+                                {item.engineDebug.humanReviewReason || "no"}
+                              </p>
+                              <p>
+                                Ejecutor autorizado:{" "}
+                                {item.engineDebug.delegatedAction || "ninguno"}
+                              </p>
+                              <p>
+                                Validación:{" "}
+                                {item.engineDebug.validationErrors?.length
+                                  ? item.engineDebug.validationErrors.join(", ")
+                                  : "sin errores"}
+                              </p>
+                              <p>
+                                Borrador:{" "}
+                                {item.engineDebug.draftStatus || "sin borrador"}
+                              </p>
+                              <p>
+                                Vista previa:{" "}
+                                {item.engineDebug.previewId || "no disponible"}
+                              </p>
+                              <p>
+                                Vence:{" "}
+                                {item.engineDebug.previewExpiresAt ||
+                                  "no disponible"}
+                              </p>
+                              <p>
+                                Confirmación recibida:{" "}
+                                {item.engineDebug.confirmation?.confirmedAt ||
+                                  "no"}
+                              </p>
+                              <p>
+                                Modo de escritura:{" "}
+                                {item.engineDebug.writeMode || "simulation"}
+                              </p>
+                              <p>
+                                Repositorio:{" "}
+                                {item.engineDebug.repositoryMode ||
+                                  "test_read_only"}
+                              </p>
+                              <p>
+                                Bandera de producción:{" "}
+                                {item.engineDebug.productionWritesEnabled
+                                  ? "activa"
+                                  : "inactiva"}
+                              </p>
+                              <p>
+                                WhatsApp:{" "}
+                                {item.engineDebug.whatsappConnected
+                                  ? "conectado"
+                                  : "sin conexión real"}
+                              </p>
+                              <p>
+                                Revalidación:{" "}
+                                {item.engineDebug.revalidation?.code ||
+                                  "pendiente"}
+                              </p>
+                              <p>
+                                Orquestador:{" "}
+                                {item.engineDebug.orchestratorResult?.code ||
+                                  "pendiente"}
+                              </p>
+                              <p>
+                                Estado transaccional:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.transactionStatus || "sin operación"}
+                              </p>
+                              <p>
+                                Resultado idempotente:{" "}
+                                {item.engineDebug.orchestratorResult?.isReplay
+                                  ? "replay"
+                                  : "sin replay"}
+                              </p>
+                              <p>
+                                Appointment ID:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.appointmentId || "no existe"}
+                              </p>
+                              <p>
+                                Error seguro:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.safeErrorCode || "ninguno"}
+                              </p>
+                              <p>
+                                Motivo sin escritura:{" "}
+                                {item.engineDebug.orchestratorResult?.reason ||
+                                  "no aplica"}
+                              </p>
+                              <p>
+                                Idempotencia:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.idempotencyKeyMasked || "no disponible"}
+                              </p>
+                              <p>
+                                Fallos parciales:{" "}
+                                {item.engineDebug.orchestratorResult
+                                  ?.partialFailures?.length
+                                  ? item.engineDebug.orchestratorResult.partialFailures
+                                      .map((failure) => failure.stage)
+                                      .join(", ")
+                                  : "ninguno"}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))
@@ -1696,7 +1895,10 @@ useEffect(() => {
                     <button
                       type="button"
                       key={conversation.id}
-                      onClick={() => setSelectedConversationId(conversation.id)}
+                      onClick={() => {
+                        setSelectedConversationId(conversation.id);
+                        setAssignedTo(conversation.assigned_to || "");
+                      }}
                       className={`w-full min-w-0 border-b border-[#edf0f1] px-4 py-4 text-left transition hover:bg-[#f7f9fa] ${
                         isSelected ? "bg-[#f9eef0]" : "bg-white"
                       }`}

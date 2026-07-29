@@ -1,9 +1,21 @@
 ﻿import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  createAdminClient,
+  getSessionProfile,
+  normalizeRole,
+} from "../../../lib/pushServer";
+import { getAvailability as getSafeAvailability } from "../../../lib/bookingAvailability";
+import {
+  executeBotTurn,
+} from "../../../lib/botConversationEngine";
+import {
+  botAppointmentWritesEnabled,
+  createAppointmentFromConfirmedPreview,
+  maskIdempotencyKey,
+} from "../../../lib/botAppointmentOrchestrator";
+import { createReadOnlyBotAppointmentRepository } from "../../../lib/botAppointmentRepository";
 import OpenAI from "openai";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const openaiApiKey = process.env.OPENAI_API_KEY;
 const openaiModel = process.env.OPENAI_MODEL || "gpt-5.6-luna";
 const aiEnabled = process.env.BOT_AI_ENABLED !== "false";
@@ -11,9 +23,41 @@ const AI_RULES_FALLBACK_MESSAGE =
   "IA no conectada. El bot está funcionando con reglas básicas.";
 let openaiClient = null;
 
+function accessErrorResponse(status) {
+  return NextResponse.json(
+    {
+      ok: false,
+      error:
+        status === 401
+          ? "Tu sesión expiró. Vuelve a iniciar sesión."
+          : "No tienes permiso para usar el probador del bot.",
+    },
+    { status }
+  );
+}
+
+async function authorizeAdminRequest(request) {
+  const supabase = createAdminClient();
+  const session = await getSessionProfile(request, supabase);
+
+  if (session.error) {
+    return {
+      response: accessErrorResponse(session.status === 401 ? 401 : 403),
+    };
+  }
+
+  if (normalizeRole(session.profile?.role) !== "admin") {
+    return { response: accessErrorResponse(403) };
+  }
+
+  return { supabase, session };
+}
+
 const SALON_TIME_ZONE = "America/Mexico_City";
 const SALON_NAME = "Alexandra Ruiz Salón";
-const STAFF_PRIORITY = ["laura canul", "tania mendez", "alexandra ruiz"];
+const APPOINTMENT_DEPOSIT_AMOUNT = 100;
+const APPOINTMENT_DEPOSIT_MESSAGE =
+  "Te comento que las citas se agendan con un anticipo de $100, que se descontará de tu total a pagar.";
 const EXCLUDED_STAFF_FOR_BOT = ["junuen ruiz"];
 const STAFF_LEAD_TIME_MINUTES = {
   "laura canul": 20,
@@ -123,12 +167,61 @@ function normalizeText(text) {
     .trim();
 }
 
-function sanitizeBotReply(reply) {
+function removeInternalReplyLines(reply) {
   return String(reply || "")
+    .split("\n")
+    .filter((line) => {
+      const text = normalizeText(line).replace(/^[-*•]\s*/, "");
+
+      return !(
+        text.startsWith("nota:") ||
+        text.startsWith("notas:") ||
+        text.startsWith("nombres:") ||
+        text.startsWith("resumen:") ||
+        text.startsWith("reservas separadas") ||
+        text.startsWith("cita para dos personas:") ||
+        text.startsWith("el mensaje actual selecciona")
+      );
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function sanitizeBotReply(reply) {
+  return removeInternalReplyLines(reply)
     .replace(/Alexandra Ruiz Sal[oó]n Spa/gi, SALON_NAME)
     .replace(/Alexandra Ruiz Salon Spa/gi, "Alexandra Ruiz Salon")
     .replace(/Alexandra Ruiz Sal[oó]n\s+&\s+Spa/gi, SALON_NAME)
+    .replace(/(?:💕|✨|🔗|🖼️)/gu, "")
     .trim();
+}
+
+function startsNewBookingConversation(message) {
+  const text = normalizeText(message);
+  const startsWithGreeting =
+    text.startsWith("hola") ||
+    text.startsWith("buen dia") ||
+    text.startsWith("buenas");
+  const hasNewBookingIntent =
+    text.includes("quiero cita") ||
+    text.includes("quisiera cita") ||
+    text.includes("nueva cita") ||
+    text.includes("quiero agendar") ||
+    text.includes("quisiera agendar") ||
+    text.includes("tienen espacio") ||
+    text.includes("hay espacio");
+  const hasNewServiceInquiry =
+    (text.includes("hacen") ||
+      text.includes("manejan") ||
+      asksCatalogOrPrice(text)) &&
+    (mentionsPedicureTopic(text) ||
+      mentionsLashesTopic(text) ||
+      mentionsGelishTopic(text) ||
+      text.includes("escultural") ||
+      text.includes("acril"));
+
+  return startsWithGreeting && (hasNewBookingIntent || hasNewServiceInquiry);
 }
 
 function getFirstName(name) {
@@ -213,23 +306,23 @@ function getSalonNowMinutes() {
   return Number(values.hour) * 60 + Number(values.minute);
 }
 
-function overlaps(startA, endA, startB, endB) {
-  const aStart = timeToMinutes(startA);
-  const aEnd = timeToMinutes(endA);
-  const bStart = timeToMinutes(startB);
-  const bEnd = timeToMinutes(endB);
-  if (aStart === null || aEnd === null || bStart === null || bEnd === null) return false;
-  return aStart < bEnd && bStart < aEnd;
-}
-
 function parseRequestedDate(rawText) {
   const text = normalizeText(rawText);
+  const textWithoutMorningPeriod = text.replace(
+    /\b(?:en|por|de) la manana\b/g,
+    ""
+  );
   const today = todayISO();
   if (!text) return null;
 
   if (text.includes("pasado manana") || text.includes("pasado mañana")) return addDaysISO(today, 2);
   if (text.includes("hoy")) return today;
-  if (text.includes("manana") || text.includes("mañana")) return addDaysISO(today, 1);
+  if (
+    textWithoutMorningPeriod.includes("manana") ||
+    textWithoutMorningPeriod.includes("mañana")
+  ) {
+    return addDaysISO(today, 1);
+  }
 
   const weekMatch = text.match(/(?:en|dentro de)\s+(\d+)\s+semana/);
   if (weekMatch) return addDaysISO(today, Number(weekMatch[1]) * 7);
@@ -311,7 +404,7 @@ function parseExplicitTime(rawText) {
   if (!text) return null;
 
   const match =
-    text.match(/(?:a las|alas|para las|despues de las|después de las|desde las|a partir de las)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/) ||
+    text.match(/(?:a las|alas|para las|antes de las|despues de las|después de las|desde las|a partir de las)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/) ||
     text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
 
   if (!match) return null;
@@ -321,21 +414,76 @@ function parseExplicitTime(rawText) {
 
   if (suffix === "pm" && hour < 12) hour += 12;
   if (suffix === "am" && hour === 12) hour = 0;
-  if (!suffix && hour >= 1 && hour <= 8 && !text.includes("mañana") && !text.includes("manana")) hour += 12;
+  const explicitlyMorning =
+    text.includes("de la mañana") ||
+    text.includes("de la manana") ||
+    text.includes("en la mañana") ||
+    text.includes("en la manana") ||
+    text.includes("por la mañana") ||
+    text.includes("por la manana");
+  if (!suffix && hour >= 1 && hour <= 8 && !explicitlyMorning) hour += 12;
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return hour * 60 + minute;
 }
 
 function parseTimePreference(rawText) {
+  // Regresión manual del probador:
+  // - Uñas y pedi mañana antes de las 12 con cualquiera.
+  // - Lifting y ceja el sábado en la tarde.
+  // - Cita con Alexandra a las 4.
+  // - Primera vez con pedicure.
+  // - Lo más temprano para retoque.
+  // - Ya transferí el anticipo.
   const text = normalizeText(rawText);
   const explicit = parseExplicitTime(text);
+  const wantsEarliest =
+    text.includes("lo mas temprano") || text.includes("lo más temprano");
+
+  if (text.includes("antes de las") && explicit !== null) {
+    return { mode: "before", minutes: null, maximumMinutes: explicit };
+  }
+
   if (text.includes("despues") || text.includes("después") || text.includes("desde") || text.includes("a partir")) {
     if (explicit !== null) return { mode: "after", minutes: explicit };
   }
-  if (explicit !== null) return { mode: "around", minutes: explicit };
-  if (text.includes("tarde") || text.includes("noche")) return { mode: "after", minutes: 15 * 60 };
-  if (text.includes("temprano") || text.includes("mañana") || text.includes("manana")) return { mode: "early", minutes: null };
-  return { mode: "any", minutes: null };
+
+  if (explicit !== null) return { mode: "exact", minutes: explicit };
+
+  if (text.includes("noche")) {
+    return {
+      mode: wantsEarliest ? "earliest" : "night",
+      minutes: 18 * 60 + 31,
+      maximumMinutes: null,
+    };
+  }
+
+  if (text.includes("tarde")) {
+    return {
+      mode: wantsEarliest ? "earliest" : "afternoon",
+      minutes: 12 * 60,
+      maximumMinutes: 18 * 60 + 31,
+    };
+  }
+
+  if (
+    text.includes("en la mañana") ||
+    text.includes("en la manana") ||
+    text.includes("por la mañana") ||
+    text.includes("por la manana") ||
+    text.includes("temprano")
+  ) {
+    return {
+      mode: wantsEarliest ? "earliest" : "morning",
+      minutes: 8 * 60,
+      maximumMinutes: 12 * 60,
+    };
+  }
+
+  if (wantsEarliest) {
+    return { mode: "earliest", minutes: null, maximumMinutes: null };
+  }
+
+  return { mode: "any", minutes: null, maximumMinutes: null };
 }
 
 function asksLocation(text) {
@@ -357,9 +505,35 @@ function asksBusinessHours(text) {
   return t.includes("horario") || t.includes("a que hora abren") || t.includes("a qué hora abren") || t.includes("a que hora cierran") || t.includes("a qué hora cierran");
 }
 
+function asksAvailability(text) {
+  const value = normalizeText(text);
+
+  return (
+    value.includes("tienen espacio") ||
+    value.includes("hay espacio") ||
+    value.includes("tienen disponibilidad") ||
+    value.includes("hay disponibilidad") ||
+    value.includes("pueden atender")
+  );
+}
+
 function asksPaymentProof(text) {
   const t = normalizeText(text);
   return t.includes("ya pague") || t.includes("ya pagué") || t.includes("ya transferi") || t.includes("ya transferí") || t.includes("comprobante") || t.includes("anticipo enviado") || t.includes("te mande el pago") || t.includes("te mandé el pago");
+}
+
+function isAffirmativeReply(text) {
+  const value = normalizeText(text);
+
+  return (
+    value === "si" ||
+    value === "ok" ||
+    value === "okay" ||
+    value === "va" ||
+    value === "claro" ||
+    value === "de acuerdo" ||
+    value === "por favor"
+  );
 }
 
 function asksGreetingOrInfo(text) {
@@ -461,6 +635,127 @@ function mentionsGelishTopic(value) {
     text.includes("aplicacion de gel") ||
     text.includes("aplicación de gel") ||
     (text.includes("gel") && text.includes("sin manicure"))
+  );
+}
+
+function mentionsLashesTopic(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("pestana") ||
+    text.includes("pestaña") ||
+    text.includes("pestanas") ||
+    text.includes("pestañas") ||
+    text.includes("lifting") ||
+    text.includes("hawaiano") ||
+    text.includes("volumen 4d")
+  );
+}
+
+function hasLashesConversationContext(context = {}) {
+  return mentionsLashesTopic(
+    `${context.active_topic || ""} ${context.active_service_focus || ""}`
+  );
+}
+
+function asksCatalogOrPrice(value) {
+  const text = normalizeText(value);
+
+  return (
+    text.includes("precio") ||
+    text.includes("cuanto cuesta") ||
+    text.includes("cuánto cuesta") ||
+    text.includes("costo") ||
+    text.includes("cuestan") ||
+    text.includes("cuales tienen") ||
+    text.includes("cuáles tienen") ||
+    text.includes("opciones")
+  );
+}
+
+function asksNaturalLashes(value) {
+  const text = normalizeText(value);
+  return (
+    text === "natural" ||
+    text === "sutil" ||
+    text.includes("pestanas naturales") ||
+    text.includes("pestañas naturales") ||
+    text.includes("efecto natural") ||
+    text.includes("algo sutil")
+  );
+}
+
+function buildPedicurePriceCatalog() {
+  return `Claro. Manejamos varias opciones de pedicure:
+
+1. Pedicure seco — $180
+2. Pedicure seco con gel — $225
+3. Pedicure clásico — $300
+4. Pedicure clásico con gel — $380
+5. Pedicure spa — $399
+6. Pedicure spa con gel — $445
+7. Pedicure medicado — $500
+
+Si el pedicure medicado requiere atención por una uña adicional, el costo es +$70.
+
+¿Buscas algo express, spa o medicado?`;
+}
+
+function buildLashesPriceCatalog() {
+  return `Estas son nuestras opciones de pestañas:
+
+1. Lifting de pestañas con tinte — $370
+2. Extensiones clásicas — $650
+3. Extensiones efecto hawaiano — $750
+4. Extensiones volumen 4D — $850
+
+Si buscas un resultado natural o sutil, puedo ayudarte a elegir entre lifting y extensiones clásicas.`;
+}
+
+function buildNaturalLashesRecommendation() {
+  return `Para un resultado natural o sutil te recomiendo:
+
+1. Lifting de pestañas con tinte — $370, si quieres realzar tu pestaña natural.
+2. Extensiones clásicas — $650, si quieres un efecto natural con más longitud y volumen.
+
+¿Cuál de las dos opciones prefieres?`;
+}
+
+function getLashesCatalogChoice(value) {
+  const text = normalizeText(value);
+  const choices = [
+    {
+      number: "1",
+      name: "Lifting de pestañas con tinte",
+      price: 370,
+      matches: ["lifting"],
+    },
+    {
+      number: "2",
+      name: "Extensiones clásicas",
+      price: 650,
+      matches: ["clasica", "clasicas", "clásica", "clásicas"],
+    },
+    {
+      number: "3",
+      name: "Extensiones efecto hawaiano",
+      price: 750,
+      matches: ["hawaiano"],
+    },
+    {
+      number: "4",
+      name: "Extensiones volumen 4D",
+      price: 850,
+      matches: ["4d", "volumen"],
+    },
+  ];
+
+  return (
+    choices.find((choice) => text === choice.number) ||
+    choices.find((choice) =>
+      choice.matches.some((match) => text.includes(normalizeText(match)))
+    ) ||
+    null
   );
 }
 
@@ -903,6 +1198,34 @@ function buildContextualServiceInquiryReply({
     };
   }
 
+  if (mentionsPedicureTopic(text) && asksCatalogOrPrice(text)) {
+    return {
+      reply: buildPedicurePriceCatalog(),
+      topic: "pedicure",
+      serviceFocus: "pedicure",
+    };
+  }
+
+  if (
+    mentionsLashesTopic(text) ||
+    (hasLashesConversationContext(context) && asksCatalogOrPrice(text))
+  ) {
+    const shouldShowCatalog =
+      asksCatalogOrPrice(text) || hasLashesConversationContext(context);
+
+    return {
+      reply: asksNaturalLashes(text)
+        ? buildNaturalLashesRecommendation()
+        : shouldShowCatalog
+        ? buildLashesPriceCatalog()
+        : "Sí, manejamos lifting y extensiones de pestañas. ¿Te gustaría conocer las opciones y precios?",
+      topic: "pestañas",
+      serviceFocus: asksNaturalLashes(text)
+        ? "pestañas naturales"
+        : "pestañas",
+    };
+  }
+
   if (asksGelishRemovalQuestion(incomingMessage)) {
     return {
       reply: buildGelishRemovalReply(allServices),
@@ -923,6 +1246,10 @@ function buildContextualServiceInquiryReply({
   }
 
   if (text.includes("escultural")) {
+    const esculturalService = (services || []).find((service) => {
+      const serviceText = normalizeServiceText(service);
+      return serviceText.includes("escultural") && isServiceBookable(service);
+    });
     const priceText = `$${getEsculturalesAcrylicPrice(services)}`;
 
     if (text.includes("cuanto cuesta") || text.includes("cuánto cuesta") || text.includes("precio")) {
@@ -930,6 +1257,7 @@ function buildContextualServiceInquiryReply({
         reply: `Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. El largo extra tiene costo adicional de +$50 y el diseño se cotiza según lo que elijas.\n\n¿Te gustaría agendarlas?`,
         topic: "extensiones",
         serviceFocus: "esculturales",
+        selectedService: esculturalService,
       };
     }
 
@@ -937,6 +1265,7 @@ function buildContextualServiceInquiryReply({
       reply: `Sí, manejamos uñas esculturales. Las esculturales de acrílico tienen costo de ${priceText} en largo base #2. Si deseas largo mayor o diseño, puede tener costo adicional.\n\n¿Te gustaría agendarlas?`,
       topic: "extensiones",
       serviceFocus: "esculturales",
+      selectedService: esculturalService,
     };
   }
 
@@ -1233,6 +1562,33 @@ function isServiceBookable(service) {
   if (isDesignOrExtraService(service)) return false;
   if (text.includes("uña para pie") || text.includes("una para pie") || text.includes("reconstruccion estetica de una para pie")) return false;
   return true;
+}
+
+function isPublicBotService(service) {
+  if (!service || service.bot_active === false) return false;
+
+  const name = normalizeText(service.name);
+
+  // Este servicio permanece disponible para la agenda interna, pero nunca se
+  // muestra ni se selecciona desde conversaciones de clientas.
+  if (
+    name.includes("relleno") &&
+    name.includes("acril") &&
+    name.includes("cliente frecuente")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function asksAcrylicFillReview(message) {
+  const text = normalizeText(message);
+
+  return (
+    text.includes("relleno") &&
+    (text.includes("acril") || text.includes("uñas acril") || text.includes("unas acril"))
+  );
 }
 
 function normalizeServiceText(service) {
@@ -1634,11 +1990,36 @@ function detectsSecondPersonRequest(message) {
     text.includes("otra cita") ||
     text.includes("dos personas") ||
     text.includes("para dos") ||
+    text.includes("somos dos") ||
+    text.includes("para mi mama y para mi") ||
+    text.includes("para mi y mi mama") ||
     text.includes("para mi mama") ||
     text.includes("para mi mamá") ||
     text.includes("para mi hija") ||
     text.includes("para mi hermana") ||
-    text.includes("para mi amiga")
+    text.includes("para mi amiga") ||
+    text.includes("mi mama y yo") ||
+    text.includes("mi hermana y yo") ||
+    text.includes("mi amiga y yo")
+  );
+}
+
+function detectsTwoPersonGelHandsRequest(message) {
+  const text = normalizeText(message);
+  const explicitlyTwo =
+    text.includes("dos personas") ||
+    text.includes("para dos") ||
+    text.includes("somos dos") ||
+    ((text.includes("mi mama") || text.includes("mi mamá")) &&
+      (text.includes("y para mi") ||
+        text.includes("y para mí") ||
+        text.includes("y yo") ||
+        text.includes("las dos")));
+
+  return (
+    explicitlyTwo &&
+    mentionsGelishTopic(text) &&
+    !mentionsPedicureTopic(text)
   );
 }
 
@@ -1653,22 +2034,56 @@ function detectsMultiPersonGelPedicureRequest(message) {
 }
 
 function getInitialMultiPersonRequests(message) {
-  if (!detectsMultiPersonGelPedicureRequest(message)) return [];
+  if (detectsTwoPersonGelHandsRequest(message)) {
+    return [
+      {
+        key: "person_1",
+        label: "Primera persona",
+        service_query: "gelish manos",
+        status: "needs_arrangement",
+      },
+      {
+        key: "person_2",
+        label: "Segunda persona",
+        service_query: "gelish manos",
+        status: "needs_arrangement",
+      },
+    ];
+  }
+
+  if (detectsMultiPersonGelPedicureRequest(message)) {
+    return [
+      {
+        key: "clienta",
+        label: "Para ti",
+        person: "clienta",
+        service_query: "gel",
+        status: "needs_service_detail",
+      },
+      {
+        key: "mama",
+        label: "Para tu mamá",
+        person: "mamá",
+        service_query: "pedicure",
+        status: "needs_service_detail",
+      },
+    ];
+  }
+
+  if (!detectsSecondPersonRequest(message)) return [];
 
   return [
     {
-      key: "clienta",
-      label: "Para ti",
-      person: "clienta",
-      service_query: "gel",
-      status: "needs_service_detail",
+      key: "person_1",
+      label: "Primera persona",
+      service_query: "",
+      status: "needs_service",
     },
     {
-      key: "mama",
-      label: "Para tu mamá",
-      person: "mamá",
-      service_query: "pedicure",
-      status: "needs_service_detail",
+      key: "person_2",
+      label: "Segunda persona",
+      service_query: "",
+      status: "needs_service",
     },
   ];
 }
@@ -1731,6 +2146,18 @@ function updateMultiPersonRequestsWithSelectedServices(context, selectedServices
       };
     }
 
+    if (
+      (request?.key === "person_1" || request?.key === "person_2") &&
+      selectedServices.length > 0
+    ) {
+      return {
+        ...request,
+        service_ids: selectedServices.map((service) => service.id),
+        service_names: selectedServices.map((service) => service.name),
+        status: "service_selected",
+      };
+    }
+
     return request;
   });
 }
@@ -1779,19 +2206,28 @@ function extractBookingNotes(message, aiNotes = "") {
   const largo = String(message || "").match(/largo\s*#?\s*(\d+)/i);
 
   if (largo) notes.push(`Solicita largo #${largo[1]}.`);
-  if (aiNotes) notes.push(aiNotes);
+  if (aiNotes && /^solicita largo #?\d+\.?$/i.test(aiNotes.trim())) {
+    notes.push(aiNotes.trim());
+  }
 
   return notes.join(" ").trim();
 }
 
-function buildSelectedServicesMessage(services, notes = "") {
-  const noteText = notes ? `\n\nNota: ${notes}` : "";
+function mergeBookingNotes(existingNotes, newNotes) {
+  const largoNotes = `${existingNotes || ""} ${newNotes || ""}`.match(
+    /Solicita largo #?\d+\./gi
+  );
+  const uniqueNotes = Array.from(new Set(largoNotes || []));
 
+  return uniqueNotes.join(" ");
+}
+
+function buildSelectedServicesMessage(services) {
   return `Perfecto 💕 Revisamos disponibilidad para:\n\n${services
     .map((service) => `• ${service.name}`)
     .join(
       "\n"
-    )}${noteText}\n\n¿Tienes técnica de preferencia?\n\n1. Laura Canul\n2. Tania Mendez\n3. Alexandra Ruiz\n4. La colaboradora disponible`;
+    )}\n\n¿Tienes técnica de preferencia?\n\n1. Laura Canul\n2. Tania Mendez\n3. Alexandra Ruiz\n4. La colaboradora disponible`;
 }
 
 function buildSelectedServicePricesMessage(services) {
@@ -1807,19 +2243,27 @@ function buildSelectedServicePricesMessage(services) {
 
 function detectStaffPreference(text, staff) {
   const t = normalizeText(text);
+  const tokens = t.split(/\s+/).filter(Boolean);
+  const selectsAvailableOption =
+    tokens.includes("4") &&
+    tokens.every((token) => token === "4" || token === "opcion" || token === "la");
 
   if (!t) return null;
 
   if (
+    selectsAvailableOption ||
+    t === "any" ||
     t.includes("disponible") ||
     t.includes("cualquiera") ||
     t.includes("cualquier") ||
     t.includes("chica") ||
     t.includes("colaboradora") ||
     t.includes("quien sea") ||
+    t.includes("quien tenga espacio") ||
     t.includes("sin preferencia") ||
+    t.includes("prim") ||
     t.includes("primera vez") ||
-    t === "4"
+    t.includes("la disponible")
   ) {
     return {
       mode: "available_priority",
@@ -1894,30 +2338,6 @@ function detectStaffPreference(text, staff) {
 
   return null;
 }
-function sortStaffByPriority(staff, mode, preferredStaffId) {
-  const cleanStaff = (staff || []).filter((person) => {
-    const name = normalizeText(person.full_name);
-    return !EXCLUDED_STAFF_FOR_BOT.some((excluded) => name.includes(excluded));
-  });
-
-  if (mode === "specific" && preferredStaffId) {
-    return cleanStaff.filter((person) => person.id === preferredStaffId);
-  }
-
-  return [...cleanStaff].sort((a, b) => {
-    const aName = normalizeText(a.full_name);
-    const bName = normalizeText(b.full_name);
-
-    const aIndex = STAFF_PRIORITY.findIndex((name) => aName.includes(name));
-    const bIndex = STAFF_PRIORITY.findIndex((name) => bName.includes(name));
-
-    const safeA = aIndex === -1 ? 999 : aIndex;
-    const safeB = bIndex === -1 ? 999 : bIndex;
-
-    return safeA - safeB;
-  });
-}
-
 function getLeadTimeForStaff(person) {
   const name = normalizeText(person.full_name);
 
@@ -1928,43 +2348,59 @@ function getLeadTimeForStaff(person) {
   return match ? match[1] : 20;
 }
 
-function getTotalDuration(services) {
-  return (services || []).reduce((total, service) => {
-    const duration = Number(service.duration_minutes || 0);
-    const cleanup = Number(service.cleanup_minutes || 0);
-    return total + (duration || 60) + cleanup;
-  }, 0);
-}
-
 function getEstimatedTotal(services) {
   return (services || []).reduce((total, service) => {
     return total + Number(service.base_price || 0);
   }, 0);
 }
 
-function getScheduleForStaff(staffSchedules, staffId, dateString) {
-  const dayOfWeek = getWeekdayFromISO(dateString);
-
-  const schedule = (staffSchedules || []).find(
-    (item) =>
-      item.staff_id === staffId &&
-      Number(item.day_of_week) === Number(dayOfWeek) &&
-      item.is_active !== false &&
-      item.is_day_off !== true
-  );
-
-  return schedule || null;
+function getTimeRangeLabel(timeMode) {
+  if (timeMode === "morning") return "por la mañana";
+  if (timeMode === "afternoon") return "por la tarde";
+  if (timeMode === "night") return "por la noche";
+  if (timeMode === "before") return "antes de la hora indicada";
+  if (timeMode === "after") return "después de la hora indicada";
+  return "";
 }
 
 function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffName = "") {
   const servicesText = selectedServices.map((service) => service.name).join(" + ");
+  const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
+  const rangeLabel = getTimeRangeLabel(slots?.timeMode);
+
+  if (slots?.availabilityError) {
+    return `No pude confirmar horarios exactos para ${servicesText}${staffText} el ${formatDate(
+      dateString
+    )}. ¿Prefieres que revise por la mañana, tarde o noche, o quieres intentar con otro día?`;
+  }
+
+  if (slots?.exactUnavailable) {
+    const requestedTime = formatTime12(slots.requestedStartTime);
+
+    if (slots.length === 0) {
+      return `A las ${requestedTime} no tengo espacio disponible para ${servicesText}${staffText} el ${formatDate(
+        dateString
+      )}. Puedes indicarme otro horario para revisar más opciones.`;
+    }
+
+    const nearbyOptions = slots
+      .map(
+        (slot, index) =>
+          `${index + 1}. ${formatTime12(slot.start_time)} con ${slot.staff_name}`
+      )
+      .join("\n");
+
+    return `A las ${requestedTime} no tengo espacio disponible para ${servicesText}${staffText}, pero puedo ofrecerte estas opciones cercanas:\n\n${nearbyOptions}\n\nResponde con el número de la opción que prefieras.`;
+  }
 
   if (!slots || slots.length === 0) {
-    const staffText = preferredStaffName ? ` con ${preferredStaffName}` : "";
+    if (rangeLabel) {
+      return `${rangeLabel.charAt(0).toUpperCase() + rangeLabel.slice(1)} no encontré espacios disponibles para ${servicesText}${staffText}. Puedo revisar otro rango u otro día.`;
+    }
 
     return `Por el momento no encontré espacios disponibles para ${servicesText}${staffText} el ${formatDate(
       dateString
-    )}. 💕 Puedes decirme otro día, otro horario o elegir la colaboradora disponible para revisar más opciones.`;
+    )}. Puedes decirme otro día, otro horario o elegir la colaboradora disponible para revisar más opciones.`;
   }
 
   const optionsText = slots
@@ -1974,20 +2410,104 @@ function buildSlotsMessage(slots, selectedServices, dateString, preferredStaffNa
     )
     .join("\n");
 
-  return `Tengo estos espacios disponibles para ${servicesText} el ${formatDate(
-    dateString
-  )}:\n\n${optionsText}\n\nResponde con el número de la opción que prefieras.`;
+  const rangeText = rangeLabel ? ` ${rangeLabel}` : "";
+
+  return `Para el ${formatDate(dateString)}${rangeText} encontré estos espacios para ${servicesText}:\n\n${optionsText}\n\n¿Cuál prefieres?`;
 }
 
-function buildAppointmentSummary({ services, slot, depositAmount, notes }) {
-  const servicesText = services.map((service) => `• ${service.name}`).join("\n");
-  const notesText = notes ? `\n\nNota: ${notes}` : "";
+function isTwoPersonGelHandsRequests(requests = []) {
+  return (
+    requests.length === 2 &&
+    requests.every(
+      (request) => normalizeText(request.service_query) === "gelish manos"
+    )
+  );
+}
 
-  return `Perfecto 💕 Tengo estos datos para tu cita:\n\nServicios:\n${servicesText}${notesText}\n\nFecha: ${formatDate(
+function isGenericTwoPersonRequest(requests = []) {
+  return (
+    requests.length === 2 &&
+    requests.every((request) => !normalizeText(request.service_query))
+  );
+}
+
+function buildTwoPersonGelHandsReply() {
+  return "Claro, serían 2 citas de gel en manos. ¿Les gustaría venir juntas en horarios seguidos o solo revisar espacios disponibles para ambas?";
+}
+
+function getAvailabilityFeedback(slots) {
+  if (slots?.availabilityError) {
+    return {
+      reason: "No fue posible revisar la disponibilidad en este momento.",
+      alternatives: [],
+    };
+  }
+
+  if (slots?.exactUnavailable) {
+    return {
+      reason: `La hora solicitada (${formatTime12(
+        slots.requestedStartTime
+      )}) no está disponible.`,
+      alternatives: [...slots],
+    };
+  }
+
+  if (!Array.isArray(slots) || slots.length === 0) {
+    return {
+      reason: "No hay horarios válidos para los datos solicitados.",
+      alternatives: [],
+    };
+  }
+
+  return { reason: null, alternatives: [] };
+}
+
+function buildAppointmentSummary({ services, slot, depositAmount }) {
+  const servicesText = services.map((service) => `• ${service.name}`).join("\n");
+
+  return `Perfecto 💕 Tengo estos datos para tu cita:\n\nServicios:\n${servicesText}\n\nFecha: ${formatDate(
     slot.date
   )}\nHora: ${formatTime12(slot.start_time)}\nColaboradora: ${
     slot.staff_name
-  }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nAnticipo requerido: $${depositAmount}.\nEse anticipo se descuenta del total a pagar el día de tu cita.`;
+  }\n\n${APPOINTMENT_DEPOSIT_MESSAGE}\nAnticipo requerido: $${depositAmount}.`;
+}
+
+function buildAppointmentPreview({ fullName, phone, birthday, services, slot, notes }) {
+  const depositAmount = APPOINTMENT_DEPOSIT_AMOUNT;
+  const estimatedTotal = getEstimatedTotal(services);
+
+  return {
+    client: {
+      full_name: fullName,
+      phone: onlyDigits(phone),
+      birthday: birthday || null,
+    },
+    services: services.map((service) => ({
+      id: service.id,
+      name: service.name,
+      price: Number(service.base_price || 0),
+      duration_minutes: Number(service.duration_minutes || 0),
+      cleanup_minutes: Number(service.cleanup_minutes || 0),
+    })),
+    slot: {
+      date: slot.date,
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+      staff_id: slot.staff_id,
+      staff_name: slot.staff_name,
+    },
+    estimated_total: estimatedTotal,
+    deposit_amount: depositAmount,
+    notes: notes || "",
+    status: "pending_review",
+  };
+}
+
+function takeDepositMessage(context) {
+  if (context.deposit_message_sent) return "";
+
+  context.deposit_message_sent = true;
+  return APPOINTMENT_DEPOSIT_MESSAGE;
 }
 
 function mediaText(asset, fallback = "") {
@@ -2372,8 +2892,47 @@ function scoreKnowledgeText(searchText, itemText, keywords = "") {
 function formatRecentMessagesForSearch(messages) {
   return (messages || [])
     .slice(-6)
-    .map((message) => `${message.direction || ""}: ${message.body || ""}`)
+    .map(
+      (message) =>
+        `${message.direction || ""}: ${removeInternalReplyLines(
+          message.body || ""
+        )}`
+    )
+    .filter((line) => !/:\s*$/.test(line))
     .join("\n");
+}
+
+function getConversationContextForAI(context = {}) {
+  const selectedServices = Array.isArray(context.selected_services)
+    ? context.selected_services.map((service) => ({
+        id: service.id,
+        name: service.name,
+      }))
+    : [];
+  const multiPersonBooking = context.multi_person_booking
+    ? {
+        person_count: context.multi_person_booking.person_count,
+        requires_separate_appointments:
+          context.multi_person_booking.requires_separate_appointments === true,
+        arrangement: context.multi_person_booking.arrangement || null,
+        status: context.multi_person_booking.status || null,
+      }
+    : null;
+
+  return {
+    active_topic: context.active_topic || null,
+    active_service_focus: context.active_service_focus || null,
+    selected_services: selectedServices,
+    requested_date: context.requested_date || null,
+    time_mode: context.time_mode || "any",
+    preferred_staff_mode: context.preferred_staff_mode || null,
+    preferred_staff_name: context.preferred_staff_name || null,
+    requires_service_confirmation:
+      context.requires_service_confirmation === true,
+    requested_lash_service: context.requested_lash_service || null,
+    multi_person_booking: multiPersonBooking,
+    deposit_message_sent: context.deposit_message_sent === true,
+  };
 }
 
 function isContextFollowUp(message) {
@@ -2638,6 +3197,7 @@ Reglas de estilo:
 - Responde en español mexicano, con tono cálido, profesional, claro y elegante.
 - No uses "hermosa" por defecto.
 - No uses ni menciones "${SALON_NAME} Spa"; el nombre correcto es "${SALON_NAME}".
+- No uses emojis decorativos.
 - No muestres etiquetas internas, nombres de intents, fuentes técnicas ni debug.
 - Sé breve y útil. Si falta un dato, pregunta solo lo necesario.
 
@@ -2662,7 +3222,7 @@ ${incomingMessage}
 ${formatRecentMessagesForSearch(recentMessages)}
 
 Contexto interno resumido:
-${truncateForAI(JSON.stringify(context || {}, null, 2), 1600)}
+${truncateForAI(JSON.stringify(getConversationContextForAI(context), null, 2), 1600)}
 
 Interpretación automática:
 ${truncateForAI(JSON.stringify(ai || {}, null, 2), 900)}
@@ -2698,62 +3258,6 @@ Redacta la mejor respuesta final para la clienta.
     console.error("OpenAI assistant reply error:", error);
     return "";
   }
-}
-
-async function saveAppointmentRequest(supabase, { conversationId, clientPhone, clientName, context, ai, incomingMessage }) {
-  const requestedService = getRequestedServicesText(context, ai);
-  const hasClearBookingIntent =
-    ai.intent === "book_appointment" ||
-    requestedService ||
-    context.requested_date ||
-    context.selected_slot ||
-    context.preferred_staff_name;
-
-  if (!hasClearBookingIntent) return null;
-
-  const requestedTime =
-    context.selected_slot?.start_time ||
-    (context.minimum_start_minutes !== null && context.minimum_start_minutes !== undefined
-      ? minutesToTime(context.minimum_start_minutes)
-      : null);
-
-  const notes = [
-    `Resumen: ${incomingMessage}`,
-    context.preferred_staff_name ? `Técnica preferida: ${context.preferred_staff_name}.` : "",
-    context.booking_notes ? `Notas: ${context.booking_notes}` : "",
-    conversationId ? `Conversación: ${conversationId}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const payload = {
-    client_name: context.client_full_name || clientName || null,
-    client_phone: clientPhone,
-    requested_service: requestedService || null,
-    requested_date: context.requested_date || context.selected_slot?.date || null,
-    requested_time: requestedTime || null,
-    status: "pendiente",
-    notes,
-    updated_at: new Date().toISOString(),
-  };
-
-  const { data: existing } = await supabase
-    .from("bot_appointment_requests")
-    .select("id")
-    .eq("client_phone", clientPhone)
-    .eq("status", "pendiente")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const query = existing?.id
-    ? supabase.from("bot_appointment_requests").update(payload).eq("id", existing.id)
-    : supabase.from("bot_appointment_requests").insert([payload]);
-
-  const { error } = await query;
-  if (error) throw error;
-
-  return true;
 }
 
 function normalizeAIParsed(parsed) {
@@ -2887,6 +3391,8 @@ Contexto:
 - Si dice "pedi" o "pedicure" de forma general, significa categoría pedicure; NO elijas varios servicios exactos. Usa services_requested: ["pedicure"] para que el bot muestre opciones y pida elegir una.
 - Si dice "también quiero", "agrega", "también", quiere sumar un servicio a lo ya elegido.
 - Si dice "ya pagué", "ya transferí", "te mando comprobante", la intención es comprobante de anticipo.
+- No redactes avisos ni recordatorios de anticipo. La ruta los agrega una sola vez cuando prepara o registra la cita.
+- Si context.deposit_message_sent es true, no vuelvas a mencionar la política de anticipo.
 - Si dice "Ale", se refiere a Alexandra Ruiz.
 - Si dice "cualquier chica", "la que esté disponible", "es mi primera vez", no tiene técnica de preferencia.
 - Si menciona largo #3, largo 3 o largo extra, guárdalo en notes, no lo trates como número de opción.
@@ -2940,8 +3446,8 @@ Reglas:
   try {
     const raw = await createOpenAITextResponse({
       instructions: systemPrompt,
-      input: `Contexto previo:\n${JSON.stringify(
-        context || {},
+      input: `Devuelve únicamente un objeto JSON válido con la estructura indicada.\n\nContexto previo:\n${JSON.stringify(
+        getConversationContextForAI(context),
         null,
         2
       )}\n\nMensaje de la clienta:\n${message}`,
@@ -3071,8 +3577,11 @@ function asksNearestAvailabilityBot(message) {
     text.includes("mas proxima") ||
     text.includes("mas pronto") ||
     text.includes("lo mas pronto") ||
+    text.includes("lo mas temprano") ||
+    text.includes("mas temprano") ||
     text.includes("lo antes posible") ||
     text.includes("primer espacio") ||
+    text.includes("primer horario") ||
     text.includes("proximo espacio") ||
     text.includes("siguiente espacio") ||
     text.includes("cita mas cercana") ||
@@ -3090,8 +3599,10 @@ async function findNextAvailableSlotsBot({
   preferredStaffMode = "available_priority",
   preferredStaffId = null,
   minimumStartMinutes = null,
+  maximumStartMinutes = null,
   timeMode = "any",
   maxDays = 21,
+  allowMissingTimeBlocks = false,
 }) {
   for (let dayOffset = 0; dayOffset <= maxDays; dayOffset += 1) {
     const dateString = addDaysFromTodayBot(dayOffset);
@@ -3103,7 +3614,9 @@ async function findNextAvailableSlotsBot({
       preferredStaffMode,
       preferredStaffId,
       minimumStartMinutes,
+      maximumStartMinutes,
       timeMode,
+      allowMissingTimeBlocks,
     });
 
     if (Array.isArray(slots) && slots.length > 0) {
@@ -3163,317 +3676,500 @@ function isFreshServiceRequestBot(message, ai) {
     text.includes("agendar")
   );
 }
+function addSlotMetadata(slots, metadata = {}) {
+  Object.assign(slots, metadata);
+  return slots;
+}
+
+function normalizeSafeSlots(slots, dateString) {
+  return (slots || [])
+    .filter((slot) => {
+      const staffName = normalizeText(slot.staff_name);
+      return !EXCLUDED_STAFF_FOR_BOT.some((excluded) =>
+        staffName.includes(excluded)
+      );
+    })
+    .map((slot) => ({
+      staff_id: slot.staff_id,
+      staff_name: slot.staff_name,
+      date: dateString,
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+    }));
+}
+
+function applyBotAvailabilityRules({
+  slots,
+  dateString,
+  minimumStartMinutes,
+  maximumStartMinutes,
+  applyRequestedRange = true,
+}) {
+  const isToday = dateString === todayISO();
+  const nowMinutes = getSalonNowMinutes();
+
+  return slots.filter((slot) => {
+    const startMinutes = timeToMinutes(slot.start_time);
+    if (startMinutes === null) return false;
+
+    if (isToday) {
+      const leadTime = getLeadTimeForStaff({ full_name: slot.staff_name });
+      if (startMinutes < nowMinutes + leadTime) return false;
+    }
+
+    if (
+      applyRequestedRange &&
+      minimumStartMinutes !== null &&
+      minimumStartMinutes !== undefined &&
+      startMinutes < minimumStartMinutes
+    ) {
+      return false;
+    }
+
+    if (
+      applyRequestedRange &&
+      maximumStartMinutes !== null &&
+      maximumStartMinutes !== undefined &&
+      startMinutes >= maximumStartMinutes
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+async function loadSafeBotSlots({
+  supabase,
+  selectedServices,
+  dateString,
+  preferredStaffMode,
+  preferredStaffId,
+  requestedStartTime = "",
+  allowMissingTimeBlocks = false,
+}) {
+  try {
+    const result = await getSafeAvailability({
+      adminSupabase: supabase,
+      date: dateString,
+      serviceIds: selectedServices.map((service) => service.id),
+      preferredStaffId:
+        preferredStaffMode === "specific" ? preferredStaffId || "" : "",
+      requestedStartTime,
+      limit: 240,
+      allowMissingTimeBlocks,
+    });
+
+    if (
+      result.warnings?.some(
+        (warning) => warning.code === "staff_time_blocks_permission_denied"
+      )
+    ) {
+      console.warn("Bot availability recovered without staff time blocks.", {
+        code: "staff_time_blocks_permission_denied",
+        date: dateString,
+        serviceCount: selectedServices.length,
+      });
+    }
+
+    return normalizeSafeSlots(result.slots, dateString);
+  } catch (error) {
+    console.warn("Bot availability lookup failed.", {
+      code: String(error?.code || "availability_lookup_failed"),
+      message: String(error?.message || "Unknown availability error"),
+      date: dateString,
+      serviceCount: selectedServices.length,
+    });
+    return addSlotMetadata([], { availabilityError: true });
+  }
+}
+
 async function getAvailableSlots({
   supabase,
   selectedServices,
   dateString,
   preferredStaffMode,
   preferredStaffId,
-  minimumStartMinutes,
-  timeMode,
+  minimumStartMinutes = null,
+  maximumStartMinutes = null,
+  timeMode = "any",
+  allowMissingTimeBlocks = false,
 }) {
-  const totalDuration = getTotalDuration(selectedServices);
+  const exactRequested =
+    timeMode === "exact" &&
+    minimumStartMinutes !== null &&
+    minimumStartMinutes !== undefined;
 
-  const [staffResult, busyResult, schedulesResult] = await Promise.all([
-    supabase
-      .from("staff")
-      .select("id, full_name, active")
-      .eq("active", true)
-      .order("full_name"),
-    supabase
-      .from("appointment_services")
-      .select("id, staff_id, service_date, start_time, end_time, status")
-      .eq("service_date", dateString)
-      .not("status", "eq", "cancelada"),
-    supabase.from("staff_schedules").select("*"),
-  ]);
-
-  if (staffResult.error) throw staffResult.error;
-  if (busyResult.error) throw busyResult.error;
-  if (schedulesResult.error) throw schedulesResult.error;
-
-  const staff = sortStaffByPriority(
-    staffResult.data || [],
-    preferredStaffMode,
-    preferredStaffId
-  );
-
-  const schedules = schedulesResult.data || [];
-  const busy = busyResult.data || [];
-  const isToday = dateString === todayISO();
-  const nowMinutes = getSalonNowMinutes();
-
-  let slots = [];
-
-  for (const person of staff) {
-    const schedule = getScheduleForStaff(schedules, person.id, dateString);
-
-    if (!schedule) continue;
-
-    const startMinutes = timeToMinutes(schedule.start_time);
-    const endMinutes = timeToMinutes(schedule.end_time);
-
-    if (startMinutes === null || endMinutes === null) continue;
-
-    const leadTime = getLeadTimeForStaff(person);
-    const earliestForStaff = isToday ? nowMinutes + leadTime : startMinutes;
-
-    for (
-      let minute = startMinutes;
-      minute + totalDuration <= endMinutes;
-      minute += 30
-    ) {
-      if (minute < earliestForStaff) continue;
-
-      if (
-        minimumStartMinutes !== null &&
-        minimumStartMinutes !== undefined &&
-        minute < minimumStartMinutes
-      ) {
-        continue;
-      }
-
-      const startTime = minutesToTime(minute);
-      const endTime = minutesToTime(minute + totalDuration);
-
-      const isBusy = busy.some(
-        (item) =>
-          item.staff_id === person.id &&
-          overlaps(startTime, endTime, item.start_time, item.end_time)
-      );
-
-      if (!isBusy) {
-        slots.push({
-          option_number: slots.length + 1,
-          staff_id: person.id,
-          staff_name: person.full_name,
-          date: dateString,
-          start_time: startTime,
-          end_time: endTime,
-        });
-      }
+  if (exactRequested) {
+    const requestedStartTime = minutesToTime(minimumStartMinutes);
+    const exactCandidates = await loadSafeBotSlots({
+      supabase,
+      selectedServices,
+      dateString,
+      preferredStaffMode,
+      preferredStaffId,
+      requestedStartTime,
+      allowMissingTimeBlocks,
+    });
+    if (exactCandidates.availabilityError) {
+      return addSlotMetadata([], {
+        availabilityError: true,
+        requestedStartTime,
+        timeMode,
+      });
     }
+    const exactSlots = applyBotAvailabilityRules({
+      slots: exactCandidates,
+      dateString,
+      minimumStartMinutes,
+      maximumStartMinutes: null,
+      applyRequestedRange: true,
+    })
+      .slice(0, 8)
+      .map((slot, index) => ({ ...slot, option_number: index + 1 }));
+
+    if (exactSlots.length > 0) {
+      return addSlotMetadata(exactSlots, {
+        requestedStartTime,
+        exactUnavailable: false,
+      });
+    }
+
+    const allCandidates = await loadSafeBotSlots({
+      supabase,
+      selectedServices,
+      dateString,
+      preferredStaffMode,
+      preferredStaffId,
+      allowMissingTimeBlocks,
+    });
+    if (allCandidates.availabilityError) {
+      return addSlotMetadata([], {
+        availabilityError: true,
+        requestedStartTime,
+        timeMode,
+      });
+    }
+    const nearbySlots = applyBotAvailabilityRules({
+      slots: allCandidates,
+      dateString,
+      minimumStartMinutes: null,
+      maximumStartMinutes: null,
+      applyRequestedRange: false,
+    })
+      .sort((a, b) => {
+        const distanceA = Math.abs(
+          timeToMinutes(a.start_time) - minimumStartMinutes
+        );
+        const distanceB = Math.abs(
+          timeToMinutes(b.start_time) - minimumStartMinutes
+        );
+
+        if (distanceA !== distanceB) return distanceA - distanceB;
+        return a.start_time.localeCompare(b.start_time);
+      })
+      .slice(0, 8)
+      .map((slot, index) => ({ ...slot, option_number: index + 1 }));
+
+    return addSlotMetadata(nearbySlots, {
+      requestedStartTime,
+      exactUnavailable: true,
+    });
   }
 
-  if (timeMode === "early") {
-    slots = slots.filter((slot) => timeToMinutes(slot.start_time) <= 13 * 60);
+  const safeSlots = await loadSafeBotSlots({
+    supabase,
+    selectedServices,
+    dateString,
+    preferredStaffMode,
+    preferredStaffId,
+    allowMissingTimeBlocks,
+  });
+  if (safeSlots.availabilityError) {
+    return addSlotMetadata([], { availabilityError: true, timeMode });
   }
+  const filteredSlots = applyBotAvailabilityRules({
+    slots: safeSlots,
+    dateString,
+    minimumStartMinutes,
+    maximumStartMinutes,
+    applyRequestedRange: true,
+  });
 
-  return slots.slice(0, 8).map((slot, index) => ({
-    ...slot,
-    option_number: index + 1,
-  }));
+  const limitedSlots =
+    timeMode === "earliest" ? filteredSlots.slice(0, 1) : filteredSlots.slice(0, 8);
+
+  return addSlotMetadata(
+    limitedSlots.map((slot, index) => ({
+      ...slot,
+      option_number: index + 1,
+    })),
+    {
+      timeMode,
+      minimumStartMinutes,
+      maximumStartMinutes,
+    }
+  );
 }
 
-async function upsertClient({ supabase, fullName, phone, birthday }) {
-  const cleanPhone = onlyDigits(phone);
-
-  const { data: existingClient, error: findError } = await supabase
-    .from("clients")
-    .select("*")
-    .eq("phone", cleanPhone)
-    .maybeSingle();
-
-  if (findError) throw findError;
-
-  const payload = {
-    full_name: fullName,
-    phone: cleanPhone,
-    birthday: birthday || null,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (existingClient?.id) {
-    const { data, error } = await supabase
-      .from("clients")
-      .update(payload)
-      .eq("id", existingClient.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data;
-  }
-
-  const { data, error } = await supabase
-    .from("clients")
-    .insert([payload])
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-async function createAppointmentWithPayment({
+async function revalidateSelectedSlot({
   supabase,
-  client,
   selectedServices,
   selectedSlot,
-  bookingNotes,
+  allowMissingTimeBlocks = false,
 }) {
-  const estimatedTotal = getEstimatedTotal(selectedServices);
-  const depositAmount = selectedServices.length * 100;
-  const now = new Date().toISOString();
-
-  const appointmentPayload = {
-    client_id: client.id,
-    staff_id: selectedSlot.staff_id,
-    appointment_date: selectedSlot.date,
-    start_time: selectedSlot.start_time,
-    end_time: selectedSlot.end_time,
-    status: "pendiente_anticipo",
-    estimated_total: estimatedTotal,
-    deposit_amount: depositAmount,
-    deposit_payment_method: "transferencia",
-    force_created: false,
-    notes: bookingNotes || null,
-    updated_at: now,
-  };
-
-  const { data: appointment, error: appointmentError } = await supabase
-    .from("appointments")
-    .insert([appointmentPayload])
-    .select()
-    .single();
-
-  if (appointmentError) throw appointmentError;
-
-  let cursor = timeToMinutes(selectedSlot.start_time);
-
-  const serviceRows = selectedServices.map((service) => {
-    const duration = Number(service.duration_minutes || 0) || 60;
-    const cleanup = Number(service.cleanup_minutes || 0) || 0;
-    const start = minutesToTime(cursor);
-    const end = minutesToTime(cursor + duration + cleanup);
-    cursor += duration + cleanup;
-
-    const price = Number(service.base_price || 0);
-
-    return {
-      appointment_id: appointment.id,
-      service_id: service.id,
-      custom_name: service.name,
-      quantity: 1,
-      unit_price: price,
-      total_price: price,
-      price,
-      staff_id: selectedSlot.staff_id,
-      service_date: selectedSlot.date,
-      start_time: start,
-      end_time: end,
-      duration_minutes: duration,
-      cleanup_minutes: cleanup,
-      status: "pendiente_anticipo",
-      notes: bookingNotes || null,
-    };
+  const options = await getAvailableSlots({
+    supabase,
+    selectedServices,
+    dateString: selectedSlot.date,
+    preferredStaffMode: "specific",
+    preferredStaffId: selectedSlot.staff_id,
+    minimumStartMinutes: timeToMinutes(selectedSlot.start_time),
+    maximumStartMinutes: null,
+    timeMode: "exact",
+    allowMissingTimeBlocks,
   });
+  const slot = options.find(
+    (option) =>
+      option.staff_id === selectedSlot.staff_id &&
+      option.start_time === selectedSlot.start_time
+  );
 
-  const { error: servicesError } = await supabase
-    .from("appointment_services")
-    .insert(serviceRows);
+  return { slot: slot || null, options };
+}
 
-  if (servicesError) throw servicesError;
-
-  const paymentPayload = {
-    appointment_id: appointment.id,
-    client_id: client.id,
-    payment_method: "transferencia",
-    subtotal: estimatedTotal,
-    subtotal_services: estimatedTotal,
-    subtotal_extras: 0,
-    discount_amount: 0,
-    total: estimatedTotal,
-    total_amount: estimatedTotal,
-    paid_amount: 0,
-    balance_due: estimatedTotal,
-    deposit_amount: depositAmount,
-    payment_status: "pendiente_anticipo",
-    payment_date: todayISO(),
-    notes: `Anticipo solicitado por bot: $${depositAmount}. Pendiente de comprobante/validación.`,
-    updated_at: now,
+function mapLegacyIntentForEngine(intent) {
+  const mapping = {
+    book_appointment: "booking",
+    ask_services: "ask_services",
+    ask_location: "location",
+    ask_business_hours: "business_hours",
+    payment_proof: "deposit",
+    human_help: "human_help",
+    greeting: "greeting",
+    reschedule: "reschedule",
+    cancel: "cancel",
+    unknown: "unknown",
   };
 
-  const { data: payment, error: paymentError } = await supabase
-    .from("payments")
-    .insert([paymentPayload])
-    .select()
-    .single();
+  return mapping[intent] || "unknown";
+}
 
-  if (paymentError) throw paymentError;
+function buildEngineStateFromLegacy({ context, bookingStep }) {
+  const stored = context.conversation_engine_state || {};
 
   return {
-    appointment,
-    payment,
-    depositAmount,
-    estimatedTotal,
+    ...stored,
+    intent: stored.intent || context.intent || null,
+    selectedServices:
+      stored.selectedServices || context.selected_services || [],
+    peopleCount:
+      stored.peopleCount ||
+      context.multi_person_booking?.person_count ||
+      1,
+    datePreference: stored.datePreference || context.requested_date || null,
+    parsedDate: stored.parsedDate || context.requested_date || null,
+    timePreference: stored.timePreference || context.time_mode || null,
+    timeRange:
+      stored.timeRange ||
+      (context.minimum_start_minutes !== null &&
+      context.minimum_start_minutes !== undefined
+        ? {
+            start: minutesToTime(context.minimum_start_minutes),
+            end:
+              context.maximum_start_minutes !== null &&
+              context.maximum_start_minutes !== undefined
+                ? minutesToTime(context.maximum_start_minutes)
+                : null,
+          }
+        : null),
+    staffPreference:
+      stored.staffPreference ||
+      (context.preferred_staff_mode
+        ? {
+            type:
+              context.preferred_staff_mode === "specific"
+                ? "specific"
+                : "any",
+            staffId: context.preferred_staff_id || null,
+            staffName: context.preferred_staff_name || null,
+          }
+        : undefined),
+    pendingStep: stored.pendingStep || bookingStep || null,
+    lastOfferedMenu: stored.lastOfferedMenu || null,
+    depositMentioned:
+      stored.depositMentioned || context.deposit_message_sent === true,
+    humanReviewRequired:
+      stored.humanReviewRequired ||
+      context.requires_service_confirmation === true,
+    humanReviewReason:
+      stored.humanReviewReason ||
+      (context.requires_service_confirmation
+        ? "legacy_service_confirmation_required"
+        : null),
+    participants: stored.participants || [],
+    pendingParticipantId: stored.pendingParticipantId || null,
+    pendingData: stored.pendingData || [],
   };
 }
 
-export async function GET() {
-  const configured = isOpenAIConfigured();
+function mapEngineStepToLegacy(step) {
+  const mapping = {
+    service: "esperando_servicios",
+    service_detail: "esperando_seleccion_servicios",
+    people_count: "esperando_multipersona_datos",
+    date: "esperando_fecha",
+    time: "esperando_hora",
+    staff: "esperando_tecnica",
+    availability: "esperando_opcion_horario",
+    appointment_preview: "preview_cita",
+    confirmation: "esperando_confirmacion",
+    human_review: "esperando_confirmacion_equipo",
+  };
+  return mapping[step] || null;
+}
 
-  return NextResponse.json({
-    ok: true,
-    aiConfigured: configured,
-    aiProvider: configured ? "openai" : "rules",
-    model: configured ? openaiModel : null,
-    message: configured
-      ? `IA conectada en servidor con ${openaiModel}.`
-      : AI_RULES_FALLBACK_MESSAGE,
-  });
+function serializeEngineState(state) {
+  return {
+    ...state,
+    selectedServices: (state.selectedServices || []).map((service) => ({
+      id: service.id,
+      name: service.name,
+    })),
+    participants: (state.participants || []).map((participant) => ({
+      ...participant,
+      services: (participant.services || []).map((service) => ({
+        id: service.id,
+        name: service.name,
+      })),
+    })),
+  };
+}
+
+function applyEngineStateToLegacyContext({
+  context,
+  state,
+  allServices,
+  execution,
+}) {
+  const selectedIds = new Set(
+    (state.selectedServices || []).map((service) => service.id)
+  );
+  const selectedServices = allServices.filter((service) =>
+    selectedIds.has(service.id)
+  );
+  const legacyContext = {
+    ...context,
+    selected_services: selectedServices,
+    pending_service_options:
+      state.lastOfferedMenu?.type === "services"
+        ? state.lastOfferedMenu.options
+            .map((option) =>
+              allServices.find((service) => service.id === option.id)
+            )
+            .filter(Boolean)
+        : [],
+    available_options:
+      state.lastOfferedMenu?.type === "availability"
+        ? execution?.options || []
+        : [],
+    requested_date: state.parsedDate || context.requested_date || null,
+    minimum_start_minutes: state.timeRange?.start
+      ? timeToMinutes(state.timeRange.start)
+      : null,
+    maximum_start_minutes: state.timeRange?.end
+      ? timeToMinutes(state.timeRange.end)
+      : null,
+    time_mode: state.timePreference || context.time_mode || "any",
+    preferred_staff_mode:
+      state.staffPreference?.type === "specific"
+        ? "specific"
+        : state.staffPreference?.type === "any"
+        ? "available_priority"
+        : null,
+    preferred_staff_id: state.staffPreference?.staffId || null,
+    preferred_staff_name: state.staffPreference?.staffName || null,
+    requires_service_confirmation: state.humanReviewRequired === true,
+    human_review_reason: state.humanReviewReason || null,
+    multi_person_booking: {
+      ...(context.multi_person_booking || {}),
+      person_count: state.peopleCount || 1,
+      requires_separate_appointments: Number(state.peopleCount || 1) > 1,
+      participants: state.participants || [],
+    },
+    conversation_engine_state: serializeEngineState(state),
+  };
+  return legacyContext;
+}
+
+export async function GET(request) {
+  try {
+    const authorization = await authorizeAdminRequest(request);
+
+    if (authorization.response) return authorization.response;
+
+    const configured = isOpenAIConfigured();
+
+    return NextResponse.json({
+      ok: true,
+      aiConfigured: configured,
+      aiProvider: configured ? "openai" : "rules",
+      model: configured ? openaiModel : null,
+      repositoryMode: "test_read_only",
+      productionWritesEnabled: botAppointmentWritesEnabled(),
+      testWritesEnabled: false,
+      whatsappConnected: false,
+      message: configured
+        ? `IA conectada en servidor con ${openaiModel}.`
+        : AI_RULES_FALLBACK_MESSAGE,
+    });
+  } catch (error) {
+    console.error("Bot test status error:", error);
+    return NextResponse.json(
+      { ok: false, error: "No se pudo revisar el estado del bot." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(request) {
   try {
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        { error: "Faltan variables de Supabase." },
-        { status: 500 }
-      );
-    }
+    const authorization = await authorizeAdminRequest(request);
+
+    if (authorization.response) return authorization.response;
+
+    const supabase = authorization.supabase;
 
     const body = await request.json();
     const incomingMessage = String(body.message || "").trim();
     const clientNameFromTest = String(body.clientName || "").trim();
-    const clientPhoneFromTest = String(body.clientPhone || "test").trim();
+    const requestedTestPhone = String(body.clientPhone || "anonymous").trim();
+    const clientPhoneFromTest = `test:${requestedTestPhone || "anonymous"}`;
+    const realWriteRequested = false;
+    // La creación real permanece bloqueada hasta que el flujo tenga una
+    // confirmación explícita y verificable de la vista previa.
+    const allowRealWrite = false;
+    const allowInactiveTest = body.allowInactiveTest === true;
     // reset conversation final clean
     if (body.resetConversation === true || body.reset === true) {
-      const supabase = createClient(supabaseUrl, serviceRoleKey);
-      const rawPhone = String(clientPhoneFromTest || "test").trim();
-      const digitsOnly = rawPhone.replace(/\D/g, "");
-      const last10 = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
-
-      const phoneVariants = Array.from(
-        new Set(
-          [
-            rawPhone,
-            digitsOnly,
-            last10,
-            digitsOnly ? `52${last10}` : "",
-            digitsOnly ? `+52${last10}` : "",
-            "test",
-          ].filter(Boolean)
-        )
-      );
-
       const { error: conversationDeleteError } = await supabase
         .from("bot_conversations")
         .delete()
-        .in("client_phone", phoneVariants);
+        .eq("client_phone", clientPhoneFromTest);
 
       try {
         await supabase
           .from("bot_messages")
           .delete()
-          .in("client_phone", phoneVariants);
+          .eq("client_phone", clientPhoneFromTest);
       } catch (messageResetError) {
         // Ignore if bot_messages is not available in this project.
       }
 
       if (conversationDeleteError) {
+        console.error("Bot test reset error:", conversationDeleteError);
         return NextResponse.json(
-          { error: `No se pudo reiniciar la conversacion: ${conversationDeleteError.message}` },
+          { error: "No se pudo reiniciar la conversación." },
           { status: 500 }
         );
       }
@@ -3481,8 +4177,8 @@ export async function POST(request) {
       return NextResponse.json({
         ok: true,
         reset: true,
-        reply: "Conversacion reiniciada. Ya no tomare en cuenta el contexto anterior.",
-        phoneVariants,
+        reply:
+          "Conversación reiniciada. Ya no tomaré en cuenta el contexto anterior.",
       });
     }
 
@@ -3492,8 +4188,6 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
 
     const conversation = await getConversation(supabase, clientPhoneFromTest);
     const existingContext = conversation?.conversation_context || {};
@@ -3540,13 +4234,28 @@ export async function POST(request) {
       });
     }
 
-    const recentMessages = await getRecentBotMessages(
+    const storedRecentMessages = await getRecentBotMessages(
       supabase,
       conversation?.id,
       clientPhoneFromTest
     );
+    const resetStateForNewBooking = startsNewBookingConversation(incomingMessage);
+    const conversationStartedAt = resetStateForNewBooking
+      ? new Date().toISOString()
+      : existingContext.conversation_started_at || null;
+    const recentMessages = resetStateForNewBooking
+      ? []
+      : conversationStartedAt
+      ? storedRecentMessages.filter(
+          (message) =>
+            !message.created_at ||
+            new Date(message.created_at).getTime() >=
+              new Date(conversationStartedAt).getTime()
+        )
+      : storedRecentMessages;
     const context = {
-      ...existingContext,
+      ...(resetStateForNewBooking ? {} : existingContext),
+      conversation_started_at: conversationStartedAt,
       recent_messages: recentMessages,
     };
 
@@ -3604,15 +4313,31 @@ export async function POST(request) {
     }
 
     const settings = settingsResult.data;
+
+    if (settings?.active === false && !allowInactiveTest) {
+      return NextResponse.json({
+        ok: true,
+        reply:
+          "El bot está desactivado. Puedes atender esta conversación manualmente.",
+        message:
+          "El bot está desactivado. Puedes atender esta conversación manualmente.",
+        bot_disabled: true,
+        botInactive: true,
+        intent: "human_handoff",
+        matchedSource: "bot_settings_inactive",
+        step: "humano",
+        dryRun: !allowRealWrite,
+      });
+    }
+
     const menuOptions = menuResult.data || [];
     const faqs = faqResult.data || [];
     const knowledgeItems = [
       ...(knowledgeResult.data || []),
       ...getDefaultKnowledgeItems(),
     ];
-    const allServices = servicesResult.data || [];
+    const allServices = (servicesResult.data || []).filter(isPublicBotService);
     const services = allServices
-      .filter((service) => service.bot_active !== false)
       .filter(isServiceBookable);
     const staff = staffResult.data || [];
     const mediaAssets = mediaResult.data || [];
@@ -3658,38 +4383,249 @@ export async function POST(request) {
       ai.intent = "payment_proof";
     }
 
+    if (asksAvailability(incomingMessage)) {
+      ai.intent = "book_appointment";
+    }
+
+    if (
+      context.multi_person_booking?.requires_separate_appointments &&
+      normalizeText(incomingMessage).includes("para ambas") &&
+      mentionsGelishTopic(incomingMessage)
+    ) {
+      ai.intent = "book_appointment";
+      ai.services_requested = ["gelish manos"];
+    }
+
+    const bookingStepAtStart = resetStateForNewBooking
+      ? null
+      : conversation?.booking_step || null;
+    const legacyAIStaffPreference = detectStaffPreference(
+      ai.staff_preference || "",
+      staff
+    );
+    const engineResult = await executeBotTurn({
+      conversationId: conversation?.id || null,
+      customerMessage: incomingMessage,
+      currentState: buildEngineStateFromLegacy({
+        context,
+        bookingStep: bookingStepAtStart,
+      }),
+      context: {
+        services: allServices,
+        staff,
+        bookingStep: bookingStepAtStart,
+        appointmentCustomer: {
+          name: clientNameFromTest,
+          phone: clientPhoneFromTest,
+        },
+        interpretation: {
+          intent: mapLegacyIntentForEngine(ai.intent),
+          confidence: ai.confidence,
+          staffPreference: legacyAIStaffPreference
+            ? {
+                type:
+                  legacyAIStaffPreference.mode === "specific"
+                    ? "specific"
+                    : "any",
+                staffId: legacyAIStaffPreference.staffId,
+                staffName: legacyAIStaffPreference.staffName,
+              }
+            : { type: "unknown", staffId: null, staffName: null },
+          depositMentioned: ai.says_paid === true,
+          needsHumanReview: false,
+          humanReviewReason: null,
+        },
+      },
+      executors: {
+        LEGACY_BUILD_LOCATION_RESPONSE: async () => ({
+          response: buildLocationResponse({
+            settings,
+            faqs,
+            knowledgeItems,
+            mediaAssets,
+            isFirstMessage: false,
+          }),
+        }),
+        LEGACY_BUILD_BUSINESS_HOURS_RESPONSE: async () => ({
+          response: BUSINESS_HOURS_MESSAGE,
+        }),
+        LEGACY_CHECK_AVAILABILITY: async (validatedData) => {
+          const selectedIds = new Set(
+            validatedData.selectedServices.map((service) => service.id)
+          );
+          const selectedServices = allServices.filter((service) =>
+            selectedIds.has(service.id)
+          );
+          const targetDate = parseRequestedDate(
+            validatedData.parsedDate ||
+              validatedData.datePreference ||
+              incomingMessage
+          );
+          if (!targetDate || selectedServices.length === 0) {
+            return {
+              response:
+                "Necesito confirmar el servicio y la fecha antes de revisar disponibilidad.",
+              options: [],
+              reason: "missing_validated_availability_data",
+            };
+          }
+          const preferredStaffMode =
+            validatedData.staffPreference?.type === "specific"
+              ? "specific"
+              : "available_priority";
+          const preferredStaffId =
+            validatedData.staffPreference?.staffId || null;
+          const preferredStaffName =
+            validatedData.staffPreference?.staffName || "";
+          const slots = await getAvailableSlots({
+            supabase,
+            selectedServices,
+            dateString: targetDate,
+            preferredStaffMode,
+            preferredStaffId,
+            minimumStartMinutes: validatedData.timeRange?.start
+              ? timeToMinutes(validatedData.timeRange.start)
+              : null,
+            maximumStartMinutes: validatedData.timeRange?.end
+              ? timeToMinutes(validatedData.timeRange.end)
+              : null,
+            timeMode: validatedData.timePreference || "any",
+            allowMissingTimeBlocks: true,
+          });
+          const feedback = getAvailabilityFeedback(slots);
+          return {
+            response: buildSlotsMessage(
+              slots,
+              selectedServices,
+              targetDate,
+              preferredStaffMode === "specific" ? preferredStaffName : ""
+            ),
+            options: slots,
+            parsedDate: targetDate,
+            reason: feedback.reason,
+            alternatives: feedback.alternatives,
+          };
+        },
+        LEGACY_RECHECK_APPOINTMENT_DRAFT: async (validatedData) => {
+          const result = await createAppointmentFromConfirmedPreview({
+            draft: validatedData.appointmentDraft,
+            repository: createReadOnlyBotAppointmentRepository({ supabase }),
+            writesEnabled: false,
+          });
+          const response =
+            result.code === "write_disabled"
+              ? "La solicitud quedó preparada correctamente en el modo de prueba. Todavía no se creó una cita real."
+              : result.code === "availability_changed"
+              ? "Ese horario ya no está disponible. Puedo volver a consultar otras opciones."
+              : result.code === "preview_expired"
+              ? "La vista previa venció. Necesito consultar nuevamente la disponibilidad."
+              : result.code === "preview_changed"
+              ? "Los datos del servicio cambiaron. Preparé una vista previa nueva para que la revises antes de confirmar."
+              : result.code === "service_unavailable"
+              ? "Uno de los servicios ya no está disponible. Revisemos las opciones vigentes."
+              : result.code === "staff_unavailable"
+              ? "La colaboradora seleccionada ya no está disponible. Revisemos otra opción."
+              : result.status === "human_review"
+              ? "El equipo necesita revisar esta solicitud antes de continuar. No se creó ninguna cita."
+              : "No pude preparar la solicitud de forma segura. No se creó ninguna cita.";
+          return {
+            response,
+            reason: result.code,
+            alternatives: result.alternatives || [],
+            appointmentDraft: result.draft,
+            orchestratorResult: {
+              ok: result.ok,
+              mode: result.mode,
+              status: result.status,
+              code: result.code,
+              reason: result.reason || null,
+              idempotencyKeyMasked: maskIdempotencyKey(
+                result.idempotencyKey
+              ),
+              transactionStatus:
+                result.transaction?.status || result.status || null,
+              appointmentId:
+                result.creation?.appointment?.id || null,
+              isReplay: result.creation?.isReplay === true,
+              safeErrorCode: result.ok ? null : result.code,
+              partialFailures: result.partialFailures || [],
+            },
+          };
+        },
+      },
+    });
+    if (
+      engineResult.contract.handled !== true ||
+      !engineResult.contract.response
+    ) {
+      throw new Error("Bot engine did not produce one final response.");
+    }
+    console.info("Bot engine decision.", {
+      messageLength: incomingMessage.length,
+      previousPendingStep: engineResult.debug.previousPendingStep,
+      intent: engineResult.debug.intent,
+      candidateCount: engineResult.debug.candidateServiceIds.length,
+      action: engineResult.debug.action,
+      delegatedAction: engineResult.contract.legacyAction,
+      humanReviewReason: engineResult.debug.humanReviewReason,
+      validationErrors: engineResult.contract.validationErrors,
+    });
+
+    if (
+      ai.intent === "unknown" &&
+      engineResult.interpretation.intent === "booking"
+    ) {
+      ai.intent = "book_appointment";
+    }
+
+    const isNumberedOptionReply =
+      isPureNumberSelection(incomingMessage) &&
+      (bookingStepAtStart === "esperando_seleccion_servicios" ||
+        bookingStepAtStart === "esperando_tecnica" ||
+        bookingStepAtStart === "esperando_opcion_horario");
+
     const requestedDate = parseRequestedDate(
       `${incomingMessage} ${ai.date_text || ""}`
     );
 
-    const timePreference = parseTimePreference(
-      `${incomingMessage} ${ai.time_text || ""} ${ai.time_preference || ""}`
-    );
+    const timePreference = isNumberedOptionReply
+      ? { mode: "any", minutes: null, maximumMinutes: null }
+      : parseTimePreference(
+          `${incomingMessage} ${ai.time_text || ""} ${
+            ai.time_preference || ""
+          }`
+        );
+    const hasNewTimePreference = timePreference.mode !== "any";
 
     const staffPreference = isServiceQuestion
       ? null
-      : detectStaffPreference(
-          `${incomingMessage} ${ai.staff_preference || ""}`,
-          staff
-        );
+      : detectStaffPreference(incomingMessage, staff) ||
+        detectStaffPreference(ai.staff_preference || "", staff);
 
     const selectedServicesFromContext = Array.isArray(context.selected_services)
-      ? context.selected_services
+      ? context.selected_services.filter(isPublicBotService)
       : [];
 
-    const bookingNotes = [
+    const bookingNotes = mergeBookingNotes(
       context.booking_notes,
-      extractBookingNotes(incomingMessage, ai.notes),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+      extractBookingNotes(incomingMessage)
+    );
 
-    let reply = "";
-    let matchedSource = "fallback";
+    let reply = engineResult.contract.response;
+    let matchedSource = engineResult.contract.legacyAction
+      ? engineResult.contract.legacyAction.toLowerCase()
+      : `engine_${engineResult.contract.action.toLowerCase()}`;
+    let appointmentPreview = null;
+    let availabilityReason = null;
+    let availabilityAlternatives =
+      engineResult.contract.execution?.alternatives || [];
 
     let nextContext = {
       ...context,
+      selected_services: selectedServicesFromContext,
+      pending_service_options: Array.isArray(context.pending_service_options)
+        ? context.pending_service_options.filter(isPublicBotService)
+        : [],
       active_topic:
         detectActiveConversationTopic(incomingMessage, context, recentMessages) ||
         context.active_topic ||
@@ -3697,28 +4633,53 @@ export async function POST(request) {
       booking_notes: bookingNotes,
       requested_date: requestedDate || context.requested_date || null,
       minimum_start_minutes:
-        timePreference.minutes ?? context.minimum_start_minutes ?? null,
-      time_mode: timePreference.mode || context.time_mode || "any",
+        hasNewTimePreference
+          ? timePreference.minutes ?? null
+          : context.minimum_start_minutes ?? null,
+      maximum_start_minutes:
+        hasNewTimePreference
+          ? timePreference.maximumMinutes ?? null
+          : context.maximum_start_minutes ?? null,
+      time_mode: hasNewTimePreference
+        ? timePreference.mode
+        : context.time_mode || "any",
     };
+    const parsedEngineDate =
+      engineResult.contract.nextState.parsedDate ||
+      parseRequestedDate(
+        engineResult.contract.nextState.datePreference || incomingMessage
+      );
+    if (parsedEngineDate) {
+      engineResult.contract.nextState.parsedDate = parsedEngineDate;
+      engineResult.state.parsedDate = parsedEngineDate;
+    }
+    nextContext = applyEngineStateToLegacyContext({
+      context: nextContext,
+      state: engineResult.contract.nextState,
+      allServices,
+      execution: engineResult.contract.execution,
+    });
+    let nextStep = mapEngineStepToLegacy(
+      engineResult.contract.nextState.pendingStep
+    );
+    availabilityReason = engineResult.contract.execution?.reason || null;
 
     const incomingMultiPersonRequests =
       getInitialMultiPersonRequests(incomingMessage);
 
-    if (incomingMultiPersonRequests.length > 0) {
+    if (!engineResult.contract.handled && incomingMultiPersonRequests.length > 0) {
       nextContext.multi_person_requests = mergeMultiPersonRequests(
         nextContext.multi_person_requests || [],
         incomingMultiPersonRequests
       );
     }
 
-    let nextStep = conversation?.booking_step || null;
     const pendingOptions = Array.isArray(nextContext.pending_service_options)
       ? nextContext.pending_service_options
       : [];
-    const isFirstMessage = isFirstConversationMessage(
-      conversation,
-      recentMessages
-    );
+    const isFirstMessage =
+      resetStateForNewBooking ||
+      isFirstConversationMessage(conversation, recentMessages);
     const matchedKnowledge = findBestKnowledgeAnswer({
       incomingMessage,
       recentMessages,
@@ -3726,6 +4687,11 @@ export async function POST(request) {
       knowledgeItems,
     });
 
+    // Compatibilidad conservada para migración progresiva. El coordinador
+    // exige un contrato resuelto, por lo que este bloque no reinterpreta
+    // mensajes manejados por el motor. Las únicas delegaciones activas son
+    // los ejecutores explícitos definidos al invocar executeBotTurn().
+    if (!engineResult.contract.handled) {
     if (!reply && ai.says_paid) {
       const anticipoAsset = getAssetByKey(mediaAssets, "datos_anticipo");
 
@@ -3738,16 +4704,115 @@ export async function POST(request) {
     }
 
     if (!reply && incomingMultiPersonRequests.length > 0) {
-      const pedicureOptions = getPedicureOptions(services);
+      if (isTwoPersonGelHandsRequests(incomingMultiPersonRequests)) {
+        nextContext.multi_person_booking = {
+          person_count: 2,
+          service_query: "gelish manos",
+          requires_separate_appointments: true,
+          status: "needs_arrangement",
+        };
+        nextContext.selected_services = [];
+        nextContext.pending_service_options = [];
+        nextContext.available_options = [];
+        nextContext.active_topic = "gelish manos para dos personas";
+        nextContext.active_service_focus = "gelish manos";
 
-      nextContext.pending_service_options = pedicureOptions;
-      nextContext.adding_service_mode = false;
-      nextContext.active_topic = "pedicure";
-      nextContext.active_service_focus = "gelish manos y pedicure";
+        reply = buildTwoPersonGelHandsReply();
+        matchedSource = "multi_person_gel_hands";
+        nextStep = "esperando_multipersona_modalidad";
+      } else if (isGenericTwoPersonRequest(incomingMultiPersonRequests)) {
+        nextContext.multi_person_booking = {
+          person_count: 2,
+          requires_separate_appointments: true,
+          status: "needs_service_and_arrangement",
+        };
+        nextContext.selected_services = [];
+        nextContext.pending_service_options = [];
+        nextContext.available_options = [];
+        nextContext.active_topic = "cita para dos personas";
+        nextContext.active_service_focus = null;
 
-      reply = buildMultiPersonGelPedicureReply(services);
-      matchedSource = "multi_person_services";
-      nextStep = "esperando_seleccion_servicios";
+        reply =
+          "Claro, serían dos citas. ¿Quieren horarios seguidos? También dime qué servicio desean.";
+        matchedSource = "multi_person_generic";
+        nextStep = "esperando_multipersona_servicio";
+      } else {
+        const pedicureOptions = getPedicureOptions(services);
+
+        nextContext.pending_service_options = pedicureOptions;
+        nextContext.adding_service_mode = false;
+        nextContext.active_topic = "pedicure";
+        nextContext.active_service_focus = "gelish manos y pedicure";
+
+        reply = buildMultiPersonGelPedicureReply(services);
+        matchedSource = "multi_person_services";
+        nextStep = "esperando_seleccion_servicios";
+      }
+    }
+
+    if (!reply && nextStep === "esperando_multipersona_modalidad") {
+      const preference = normalizeText(incomingMessage);
+      const together =
+        preference.includes("junta") ||
+        preference.includes("seguido") ||
+        preference.includes("mismo dia");
+      const reviewBoth =
+        preference.includes("ambas") ||
+        preference.includes("para las dos") ||
+        preference.includes("revisar espacio");
+
+      if (together || reviewBoth) {
+        nextContext.multi_person_booking = {
+          ...(nextContext.multi_person_booking || {}),
+          arrangement: together ? "consecutive" : "review_both",
+          status: "needs_names_and_schedule",
+        };
+        reply =
+          "Perfecto. Para preparar las dos solicitudes necesito los nombres de ambas y el día que prefieren. No crearé una sola cita mezclada.";
+        matchedSource = "multi_person_arrangement_selected";
+        nextStep = "esperando_multipersona_datos";
+      } else {
+        reply = buildTwoPersonGelHandsReply();
+        matchedSource = "multi_person_arrangement_retry";
+      }
+    }
+
+    if (
+      !reply &&
+      context.requires_service_confirmation === true &&
+      !asksAcrylicFillReview(incomingMessage)
+    ) {
+      if (
+        nextStep === "esperando_confirmacion_solicitud_relleno" &&
+        isAffirmativeReply(incomingMessage)
+      ) {
+        reply =
+          "Perfecto. Para preparar la solicitud de revisión, dime tu nombre y qué día te gustaría venir.";
+        matchedSource = "acrylic_fill_request_details";
+        nextStep = "esperando_datos_revision_relleno";
+      } else if (isAffirmativeReply(incomingMessage)) {
+        reply =
+          "¿Quieres que prepare la solicitud para que el equipo te confirme el servicio y la disponibilidad?";
+        matchedSource = "acrylic_fill_review_confirmation";
+        nextStep = "esperando_confirmacion_solicitud_relleno";
+      } else {
+        reply =
+          "El relleno de acrílico necesita revisión del equipo. ¿Quieres que prepare la solicitud para confirmar el servicio correcto?";
+        matchedSource = "acrylic_fill_review_pending";
+        nextStep = "esperando_confirmacion_solicitud_relleno";
+      }
+    }
+
+    if (!reply && asksAcrylicFillReview(incomingMessage)) {
+      reply =
+        "Para relleno de acrílico lo revisamos según el trabajo que traigas y el tiempo desde tu última aplicación. Puedo pasar tu solicitud al equipo para confirmar el servicio correcto.";
+      matchedSource = "acrylic_fill_requires_team_review";
+      nextContext.active_topic = "relleno de acrílico";
+      nextContext.active_service_focus = "relleno de acrílico";
+      nextContext.requires_service_confirmation = true;
+      nextContext.selected_services = [];
+      nextContext.pending_service_options = [];
+      nextStep = "esperando_confirmacion_equipo";
     }
 
     if (!reply && asksGelishRemovalQuestion(incomingMessage)) {
@@ -3796,6 +4861,9 @@ export async function POST(request) {
           contextualServiceReply.serviceFocus ||
           nextContext.active_service_focus ||
           null;
+        if (contextualServiceReply.topic === "pestañas") {
+          nextStep = "esperando_tipo_pestanas";
+        }
         if (contextualServiceReply.selectedService) {
           nextContext.selected_services = mergeServices(
             nextContext.selected_services || selectedServicesFromContext,
@@ -3807,6 +4875,81 @@ export async function POST(request) {
             ]);
         }
       }
+    }
+
+    const lashesCatalogChoice =
+      nextStep === "esperando_tipo_pestanas"
+        ? getLashesCatalogChoice(incomingMessage)
+        : null;
+
+    if (!reply && lashesCatalogChoice) {
+      nextContext.requested_lash_service = {
+        name: lashesCatalogChoice.name,
+        price: lashesCatalogChoice.price,
+      };
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = lashesCatalogChoice.name;
+      reply = nextContext.requested_date
+        ? `Perfecto. Tomaré ${lashesCatalogChoice.name} — $${lashesCatalogChoice.price} para revisar disponibilidad el ${formatDate(
+            nextContext.requested_date
+          )}. Prepararé la solicitud para confirmación del equipo.`
+        : `Perfecto. Tomaré ${lashesCatalogChoice.name} — $${lashesCatalogChoice.price}. ¿Qué día te gustaría venir?`;
+      matchedSource = "lashes_catalog_choice";
+      nextStep = nextContext.requested_date
+        ? "revision_equipo_pestanas"
+        : "esperando_fecha_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      asksNaturalLashes(incomingMessage)
+    ) {
+      reply = buildNaturalLashesRecommendation();
+      matchedSource = "lashes_natural_recommendation";
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = "pestañas naturales";
+      nextStep = "esperando_tipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      isAffirmativeReply(incomingMessage)
+    ) {
+      reply = buildLashesPriceCatalog();
+      matchedSource = "lashes_catalog_followup";
+      nextContext.active_topic = "pestañas";
+      nextContext.active_service_focus = "pestañas";
+      nextStep = "esperando_tipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      nextContext.requested_lash_service &&
+      requestedDate
+    ) {
+      nextContext.requested_date = requestedDate;
+      reply = `Perfecto. Conservo ${formatDate(
+        requestedDate
+      )} para ${nextContext.requested_lash_service.name}. Prepararé la solicitud para que el equipo confirme disponibilidad.`;
+      matchedSource = "lashes_selected_date";
+      nextStep = "revision_equipo_pestanas";
+    }
+
+    if (
+      !reply &&
+      hasLashesConversationContext(nextContext) &&
+      requestedDate &&
+      selectedServicesFromContext.length === 0
+    ) {
+      nextContext.requested_date = requestedDate;
+      reply = `Conservo ${formatDate(
+        requestedDate
+      )} como el día que prefieres.\n\n${buildNaturalLashesRecommendation()}`;
+      matchedSource = "lashes_date_needs_type";
+      nextStep = "esperando_tipo_pestanas";
     }
 
     if (
@@ -3952,64 +5095,77 @@ export async function POST(request) {
       const selectedSlot = nextContext.selected_slot;
       const selectedServices = nextContext.selected_services || [];
 
-      if (!selectedSlot || selectedServices.length === 0) {
+      if (nextContext.multi_person_booking?.requires_separate_appointments) {
+        reply =
+          "Para dos personas prepararé solicitudes separadas. Antes necesito confirmar los nombres de ambas y si buscan horarios seguidos.";
+        matchedSource = "multi_person_real_write_blocked";
+        nextStep = "esperando_multipersona_datos";
+      } else if (!selectedSlot || selectedServices.length === 0) {
         reply =
           "Me faltó un dato de la cita para registrarla. Escribe “agendar” y lo revisamos de nuevo, por favor 💕";
 
         matchedSource = "missing_booking_data";
         nextStep = null;
       } else {
-        const client = await upsertClient({
+        const revalidation = await revalidateSelectedSlot({
           supabase,
-          fullName,
-          phone,
-          birthday: nextContext.client_birthday,
-        });
-
-        const created = await createAppointmentWithPayment({
-          supabase,
-          client,
           selectedServices,
           selectedSlot,
-          bookingNotes: nextContext.booking_notes || "",
+          allowMissingTimeBlocks: !allowRealWrite,
         });
+        const revalidatedOptions = revalidation.options;
+        const revalidatedSlot = revalidation.slot;
 
-        nextContext.created_appointment_id = created.appointment.id;
-        nextContext.created_payment_id = created.payment.id;
+        if (!revalidatedSlot) {
+          availabilityReason =
+            "El horario seleccionado ya no está disponible.";
+          availabilityAlternatives = revalidatedOptions;
+          nextContext.available_options = revalidatedOptions;
+          delete nextContext.selected_slot;
+          delete nextContext.appointment_preview;
+          delete nextContext.created_appointment_id;
+          delete nextContext.created_payment_id;
 
-        const servicesText = selectedServices
-          .map((service) => service.name)
-          .join(" + ");
+          reply = buildSlotsMessage(
+            revalidatedOptions,
+            selectedServices,
+            selectedSlot.date,
+            selectedSlot.staff_name
+          );
+          matchedSource = "appointment_slot_revalidation_failed";
+          nextStep =
+            revalidatedOptions.length > 0
+              ? "esperando_opcion_horario"
+              : "esperando_fecha";
+        } else {
+          nextContext.selected_slot = revalidatedSlot;
+          appointmentPreview = buildAppointmentPreview({
+            fullName,
+            phone,
+            birthday: nextContext.client_birthday,
+            services: selectedServices,
+            slot: revalidatedSlot,
+            notes: nextContext.booking_notes || "",
+          });
 
-        const notesText = nextContext.booking_notes
-          ? `\nNota: ${nextContext.booking_notes}`
-          : "";
+          nextContext.appointment_preview = appointmentPreview;
+          delete nextContext.created_appointment_id;
+          delete nextContext.created_payment_id;
 
-        reply = `Listo ${getFirstName(
-          fullName
-        )} 💕 Tu cita quedó registrada como pendiente de anticipo para:\n\n${servicesText}${notesText}\n\nFecha: ${formatDate(
-          selectedSlot.date
-        )}\nHora: ${formatTime12(selectedSlot.start_time)}\nTécnica: ${
-          selectedSlot.staff_name
-        }\n\nPara confirmar tu cita solicitamos anticipo de $100 por servicio.\nTotal de anticipo requerido: $${
-          created.depositAmount
-        }.\nEse anticipo se descuenta del total a pagar el día de tu cita.\n\n${mediaText(
-          getAssetByKey(mediaAssets, "datos_anticipo")
-        )}\n\n${mediaText(
-          getAssetByKey(mediaAssets, "politicas_salon")
-        )}\n\n${mediaText(
-          getAssetByKey(mediaAssets, "ubicacion_maps"),
-          buildLocationResponse({
-            settings,
-            faqs,
-            knowledgeItems,
-            mediaAssets,
-            isFirstMessage: false,
-          })
-        )}`;
+          const servicesText = selectedServices
+            .map((service) => service.name)
+            .join(" + ");
+          const depositMessage = takeDepositMessage(nextContext);
+          const depositText = depositMessage ? `\n\n${depositMessage}` : "";
 
-        matchedSource = "appointment_created_with_payment";
-        nextStep = "esperando_comprobante";
+          reply = `Puedo preparar esta cita para revisión.\n\nServicios: ${servicesText}\nFecha: ${formatDate(
+            revalidatedSlot.date
+          )}\nHora: ${formatTime12(revalidatedSlot.start_time)}\nTécnica: ${
+            revalidatedSlot.staff_name
+          }${depositText}\n\nNo se creó ninguna cita, cliente ni pago real.`;
+          matchedSource = "appointment_preview";
+          nextStep = "preview_cita";
+        }
       }
     }
 
@@ -4035,7 +5191,7 @@ export async function POST(request) {
         nextContext.multi_person_requests =
           updateMultiPersonRequestsWithSelectedServices(nextContext, selected);
 
-        reply = buildSelectedServicesMessage(merged, bookingNotes);
+        reply = buildSelectedServicesMessage(merged);
         matchedSource = "service_options_selected";
         nextStep = "esperando_tecnica";
       }
@@ -4097,12 +5253,14 @@ export async function POST(request) {
       (ai.intent === "book_appointment" ||
         ai.intent === "ask_services" ||
         nextStep === "esperando_servicios" ||
+        nextStep === "esperando_multipersona_servicio" ||
         nextStep === "esperando_tecnica" ||
         nextStep === "esperando_fecha" ||
         nextStep === "esperando_opcion_horario")
     ) {
       if (
         serviceQueries.length === 0 &&
+        selectedServicesFromContext.length === 0 &&
         !asksNearestAvailabilityBot(incomingMessage) &&
         (ai.intent === "book_appointment" || nextStep === "esperando_servicios")
       ) {
@@ -4156,35 +5314,91 @@ export async function POST(request) {
           const targetDate = requestedDate || nextContext.requested_date;
           const targetStaff = staffPreference;
 
-          if (targetStaff && targetDate) {
+          if (asksNearestAvailabilityBot(incomingMessage)) {
+            const nearestStaffMode =
+              targetStaff?.mode ||
+              nextContext.preferred_staff_mode ||
+              "available_priority";
+            const nearestStaffId =
+              targetStaff?.staffId || nextContext.preferred_staff_id || null;
+            const nearestStaffName =
+              targetStaff?.staffName || nextContext.preferred_staff_name || "";
+            const nearest = await findNextAvailableSlotsBot({
+              supabase,
+              selectedServices: mergedServices,
+              preferredStaffMode: nearestStaffMode,
+              preferredStaffId: nearestStaffId,
+              minimumStartMinutes: nextContext.minimum_start_minutes,
+              maximumStartMinutes: nextContext.maximum_start_minutes,
+              timeMode: "earliest",
+              allowMissingTimeBlocks: !allowRealWrite,
+            });
+
+            nextContext.preferred_staff_mode = nearestStaffMode;
+            nextContext.preferred_staff_id = nearestStaffId;
+            nextContext.preferred_staff_name = nearestStaffName;
+            nextContext.requested_date = nearest.dateString;
+            nextContext.available_options = nearest.slots;
+            const nearestFeedback = getAvailabilityFeedback(nearest.slots);
+            availabilityReason = nearestFeedback.reason;
+            availabilityAlternatives = nearestFeedback.alternatives;
+
+            reply = buildNearestSlotsMessageBot(
+              nearest,
+              mergedServices,
+              nearestStaffMode === "specific" ? nearestStaffName : ""
+            );
+            matchedSource = "nearest_safe_availability";
+            nextStep =
+              nearest.slots.length > 0
+                ? "esperando_opcion_horario"
+                : "esperando_fecha";
+          } else if (targetDate) {
+            const targetStaffMode =
+              targetStaff?.mode ||
+              nextContext.preferred_staff_mode ||
+              "available_priority";
+            const targetStaffId =
+              targetStaff?.staffId || nextContext.preferred_staff_id || null;
+            const targetStaffName =
+              targetStaff?.staffName || nextContext.preferred_staff_name || "";
             const slots = await getAvailableSlots({
               supabase,
               selectedServices: mergedServices,
               dateString: targetDate,
-              preferredStaffMode: targetStaff.mode,
-              preferredStaffId: targetStaff.staffId,
+              preferredStaffMode: targetStaffMode,
+              preferredStaffId: targetStaffId,
               minimumStartMinutes: nextContext.minimum_start_minutes,
+              maximumStartMinutes: nextContext.maximum_start_minutes,
               timeMode: nextContext.time_mode,
+              allowMissingTimeBlocks: !allowRealWrite,
             });
 
-            nextContext.preferred_staff_mode = targetStaff.mode;
-            nextContext.preferred_staff_id = targetStaff.staffId;
-            nextContext.preferred_staff_name = targetStaff.staffName;
+            nextContext.preferred_staff_mode = targetStaffMode;
+            nextContext.preferred_staff_id = targetStaffId;
+            nextContext.preferred_staff_name = targetStaffName;
             nextContext.requested_date = targetDate;
             nextContext.available_options = slots;
+            const slotFeedback = getAvailabilityFeedback(slots);
+            availabilityReason = slotFeedback.reason;
+            availabilityAlternatives = slotFeedback.alternatives;
 
-            reply = buildSlotsMessage(
+            const slotsReply = buildSlotsMessage(
               slots,
               mergedServices,
               targetDate,
-              targetStaff.mode === "specific" ? targetStaff.staffName : ""
+              targetStaffMode === "specific" ? targetStaffName : ""
             );
+            reply = nextContext.multi_person_booking
+              ?.requires_separate_appointments
+              ? `Para preparar las dos citas por separado, estos son espacios iniciales para revisar:\n\n${slotsReply}\n\nDime si prefieren horarios seguidos y confirmaré cada cita por separado.`
+              : slotsReply;
 
             matchedSource = "services_staff_date_availability";
             nextStep =
               slots.length > 0 ? "esperando_opcion_horario" : "esperando_fecha";
           } else {
-            reply = buildSelectedServicesMessage(mergedServices, bookingNotes);
+            reply = buildSelectedServicesMessage(mergedServices);
             matchedSource = "services_selected";
             nextStep = "esperando_tecnica";
           }
@@ -4249,11 +5463,16 @@ export async function POST(request) {
           preferredStaffMode: staffPreference.mode,
           preferredStaffId: staffPreference.staffId,
           minimumStartMinutes: nextContext.minimum_start_minutes,
+          maximumStartMinutes: nextContext.maximum_start_minutes,
           timeMode: nextContext.time_mode,
+          allowMissingTimeBlocks: !allowRealWrite,
         });
 
         nextContext.requested_date = targetDate;
         nextContext.available_options = slots;
+        const slotFeedback = getAvailabilityFeedback(slots);
+        availabilityReason = slotFeedback.reason;
+        availabilityAlternatives = slotFeedback.alternatives;
 
         reply = buildSlotsMessage(
           slots,
@@ -4276,13 +5495,15 @@ export async function POST(request) {
       }
     }
 
+    const availabilityDate =
+      requestedDate ||
+      (hasNewTimePreference ? nextContext.requested_date || null : null);
+
     if (
       !reply &&
-      requestedDate &&
+      availabilityDate &&
       selectedServicesNow.length > 0 &&
-      (nextStep === "esperando_fecha" ||
-        nextStep === "esperando_opcion_horario" ||
-        context.preferred_staff_mode)
+      !nextContext.multi_person_booking?.requires_separate_appointments
     ) {
       const preferredStaffMode =
         nextContext.preferred_staff_mode ||
@@ -4298,20 +5519,28 @@ export async function POST(request) {
       const slots = await getAvailableSlots({
         supabase,
         selectedServices: selectedServicesNow,
-        dateString: requestedDate,
+        dateString: availabilityDate,
         preferredStaffMode,
         preferredStaffId,
         minimumStartMinutes: nextContext.minimum_start_minutes,
+        maximumStartMinutes: nextContext.maximum_start_minutes,
         timeMode: nextContext.time_mode,
+        allowMissingTimeBlocks: !allowRealWrite,
       });
 
-      nextContext.requested_date = requestedDate;
+      nextContext.preferred_staff_mode = preferredStaffMode;
+      nextContext.preferred_staff_id = preferredStaffId;
+      nextContext.preferred_staff_name = preferredStaffName;
+      nextContext.requested_date = availabilityDate;
       nextContext.available_options = slots;
+      const slotFeedback = getAvailabilityFeedback(slots);
+      availabilityReason = slotFeedback.reason;
+      availabilityAlternatives = slotFeedback.alternatives;
 
       reply = buildSlotsMessage(
         slots,
         selectedServicesNow,
-        requestedDate,
+        availabilityDate,
         preferredStaffMode === "specific" ? preferredStaffName : ""
       );
 
@@ -4326,7 +5555,7 @@ export async function POST(request) {
       !nextContext.preferred_staff_mode &&
       nextStep !== "esperando_seleccion_servicios"
     ) {
-      reply = buildSelectedServicesMessage(selectedServicesNow, bookingNotes);
+      reply = buildSelectedServicesMessage(selectedServicesNow);
       matchedSource = "request_staff_preference";
       nextStep = "esperando_tecnica";
     }
@@ -4471,8 +5700,22 @@ export async function POST(request) {
         "Disculpa, no logré entenderte bien. Puedes escribir “menú” para ver las opciones disponibles.";
       matchedSource = "fallback";
     }
+    }
 
     reply = sanitizeBotReply(reply);
+    delete nextContext.recent_messages;
+    nextContext = applyEngineStateToLegacyContext({
+      context: nextContext,
+      state: engineResult.contract.nextState,
+      allServices,
+      execution: engineResult.contract.execution,
+    });
+    nextContext.conversation_engine_state = serializeEngineState(
+      engineResult.contract.nextState
+    );
+    nextStep = mapEngineStepToLegacy(
+      engineResult.contract.nextState.pendingStep
+    );
 
     const savedConversation = await saveConversation(
       supabase,
@@ -4492,20 +5735,13 @@ export async function POST(request) {
         deposit_required:
           Array.isArray(nextContext.selected_services) &&
           nextContext.selected_services.length > 0
-            ? nextContext.selected_services.length * 100
+            ? APPOINTMENT_DEPOSIT_AMOUNT
             : null,
         conversation_context: nextContext,
       }
     );
 
-    const appointmentRequestSaved = await saveAppointmentRequest(supabase, {
-      conversationId: savedConversation.id,
-      clientPhone: clientPhoneFromTest,
-      clientName: clientNameFromTest,
-      context: nextContext,
-      ai,
-      incomingMessage,
-    });
+    const appointmentRequestSaved = false;
 
     await saveBotMessages(
       supabase,
@@ -4528,13 +5764,56 @@ export async function POST(request) {
       matchedSource,
       ai,
       step: nextStep,
+      dryRun: !allowRealWrite,
+      realWriteEnabled: allowRealWrite,
+      realWriteRequested,
+      appointmentPreview,
+      availabilityReason,
+      availabilityAlternatives,
       appointmentRequestSaved: Boolean(appointmentRequestSaved),
+      engineDebug: {
+        action: engineResult.contract.action,
+        pendingStep: engineResult.contract.nextState.pendingStep,
+        lastOfferedMenu:
+          engineResult.contract.nextState.lastOfferedMenu || null,
+        selectedServices:
+          engineResult.contract.validatedData.selectedServices,
+        participants: engineResult.contract.nextState.participants || [],
+        pendingData: engineResult.contract.nextState.pendingData || [],
+        humanReviewReason:
+          engineResult.contract.nextState.humanReviewReason || null,
+        delegatedAction:
+          engineResult.contract.execution?.legacyAction || null,
+        validationErrors: engineResult.contract.validationErrors,
+        appointmentDraft:
+          engineResult.contract.nextState.appointmentDraft || null,
+        draftStatus:
+          engineResult.contract.nextState.appointmentDraft?.status || null,
+        previewId:
+          engineResult.contract.nextState.appointmentDraft?.previewId || null,
+        previewExpiresAt:
+          engineResult.contract.nextState.appointmentDraft?.expiresAt || null,
+        confirmation:
+          engineResult.contract.nextState.appointmentDraft?.confirmation ||
+          null,
+        writeMode: "simulation",
+        repositoryMode: "test_read_only",
+        productionWritesEnabled: botAppointmentWritesEnabled(),
+        testWritesEnabled: false,
+        whatsappConnected: false,
+        revalidation:
+          engineResult.contract.nextState.appointmentDraft?.lastValidation ||
+          null,
+        orchestratorResult:
+          engineResult.contract.nextState.orchestratorResult || null,
+      },
     });
   } catch (error) {
+    console.error("Bot test request error:", error);
     return NextResponse.json(
       {
         ok: false,
-        error: error.message || "Error inesperado al probar el bot.",
+        error: "No se pudo completar la prueba del bot.",
       },
       { status: 500 }
     );
