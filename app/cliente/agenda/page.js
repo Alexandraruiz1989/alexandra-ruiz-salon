@@ -90,6 +90,12 @@ export default function ClienteAgendaPage() {
     );
   };
 
+  const handleAppointmentDateChange = (value) => {
+    setAppointmentDate(value);
+    setSlots([]);
+    setSelectedSlot(null);
+  };
+
   const findAvailability = async () => {
     setSearching(true);
     setMessage("");
@@ -256,13 +262,16 @@ export default function ClienteAgendaPage() {
                 </label>
                 <input
                   type="date"
+                  id="client-appointment-date"
+                  name="appointment_date"
                   min={todayISO()}
                   value={appointmentDate}
-                  onChange={(event) => {
-                    setAppointmentDate(event.target.value);
-                    setSlots([]);
-                    setSelectedSlot(null);
-                  }}
+                  onChange={(event) =>
+                    handleAppointmentDateChange(event.target.value)
+                  }
+                  onInput={(event) =>
+                    handleAppointmentDateChange(event.currentTarget.value)
+                  }
                   className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
                 />
               </div>

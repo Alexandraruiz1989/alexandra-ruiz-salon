@@ -89,7 +89,7 @@ insert into public.services (
   'servicio',
   false,
   'Precio ficticio local',
-  false,
+  true,
   true
 ),
 (
@@ -106,7 +106,7 @@ insert into public.services (
   'servicio',
   false,
   'Precio ficticio local',
-  false,
+  true,
   true
 ) on conflict (id) do nothing;
 

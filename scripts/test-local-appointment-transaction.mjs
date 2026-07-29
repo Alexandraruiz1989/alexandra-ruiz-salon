@@ -713,6 +713,12 @@ test("26 force_created desde bot rechazado", () => {
   assertAtomicFailure("26");
 });
 
+test("27 Anticipo desconocido permite crear sin pago", () => {
+  resetCase();
+  const result = callRpc(makePayload("27", { week: 27, depositStatus: "unknown" }));
+  assertCreated("27", result, 1);
+});
+
 assertLocalSafety();
 
 const results = [];

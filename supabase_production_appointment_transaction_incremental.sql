@@ -1,7 +1,11 @@
--- Derived from supabase_appointment_transaction.sql.
--- Contains no exported rows or production data.
--- Adds transactional appointment write operation table and RPC.
--- Dependencies: public clients, staff, services, schedules, appointments and appointment relation tables.
+-- CANDIDATO DE PRODUCCIÓN — revisión humana obligatoria antes de ejecutar.
+-- Contiene únicamente objetos incrementales para escrituras transaccionales de citas:
+-- appointment_write_operations, índices auxiliares, RPC create_appointment_transaction,
+-- grants mínimos al service_role y recarga de schema cache.
+-- No contiene seed, filas exportadas, datos reales, drops destructivos ni cambios de marca.
+-- Dependencias existentes: public.clients, public.staff, public.services,
+-- public.staff_schedules, public.appointments, appointment_services,
+-- appointment_extra_items, service_extras y bot_conversations.
 
 -- Creación transaccional e idempotente de citas para Alexandra Ruiz Salón.
 -- ARCHIVO PARA REVISIÓN: no ejecutar sin pasar primero por staging.

@@ -508,6 +508,32 @@ function ViewButtons({ activeSection, setActiveSection }) {
 const timeOptions = generateTimeOptions();
 const timeSlots = generateTimeSlots();
 
+function logLocalAppointmentEffect(event, details = {}) {
+  if (process.env.NODE_ENV === "production") return;
+  if (typeof window === "undefined") return;
+  if (!/^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)) return;
+
+  const shortId = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (text.length <= 12) return text;
+    return `${text.slice(0, 8)}…${text.slice(-4)}`;
+  };
+
+  console.info(
+    "[appointment-effects:local]",
+    JSON.stringify({
+      event,
+      appointmentId: shortId(details.appointmentId),
+      notificationCount: Number(details.notificationCount || 0),
+      followupCount: Number(details.followupCount || 0),
+      ok: details.ok !== false,
+      failed: details.failed === true,
+      code: String(details.code || ""),
+    })
+  );
+}
+
 async function triggerPushForNotificationIds(notificationIds = []) {
   const ids = [...new Set((notificationIds || []).filter(Boolean))];
 
@@ -534,6 +560,11 @@ async function triggerPushForNotificationIds(notificationIds = []) {
     const result = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      logLocalAppointmentEffect("push_failed", {
+        notificationCount: ids.length,
+        failed: true,
+        code: response.status,
+      });
       return {
         error: {
           message:
@@ -543,8 +574,16 @@ async function triggerPushForNotificationIds(notificationIds = []) {
       };
     }
 
+    logLocalAppointmentEffect("push_sent", {
+      notificationCount: ids.length,
+    });
     return { error: null, result };
   } catch (error) {
+    logLocalAppointmentEffect("push_failed", {
+      notificationCount: ids.length,
+      failed: true,
+      code: error?.name || "fetch_error",
+    });
     return { error };
   }
 }
@@ -569,6 +608,11 @@ async function triggerAdminAppointmentNotification(payload = {}) {
     const result = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      logLocalAppointmentEffect("admin_push_failed", {
+        appointmentId: payload.appointment_id,
+        failed: true,
+        code: response.status,
+      });
       return {
         error: {
           message:
@@ -578,8 +622,16 @@ async function triggerAdminAppointmentNotification(payload = {}) {
       };
     }
 
+    logLocalAppointmentEffect("admin_push_sent", {
+      appointmentId: payload.appointment_id,
+    });
     return { error: null, result };
   } catch (error) {
+    logLocalAppointmentEffect("admin_push_failed", {
+      appointmentId: payload.appointment_id,
+      failed: true,
+      code: error?.name || "fetch_error",
+    });
     return { error };
   }
 }
@@ -2451,6 +2503,11 @@ const createAppointmentFollowups = async (appointment) => {
     .eq("followup_status", "pendiente");
 
   if (deleteError) {
+    logLocalAppointmentEffect("followups_cleanup_failed", {
+      appointmentId: appointment.id,
+      failed: true,
+      code: "delete_error",
+    });
     setMessage(
       `La cita se guardó, pero no se pudieron actualizar los seguimientos pendientes: ${deleteError.message}`
     );
@@ -2504,10 +2561,22 @@ const createAppointmentFollowups = async (appointment) => {
   const { error } = await supabase.from("appointment_followups").insert(rows);
 
   if (error) {
+    logLocalAppointmentEffect("followups_create_failed", {
+      appointmentId: appointment.id,
+      followupCount: rows.length,
+      failed: true,
+      code: "insert_error",
+    });
     setMessage(
       `La cita se guardó, pero no se pudieron crear los seguimientos: ${error.message}`
     );
+    return;
   }
+
+  logLocalAppointmentEffect("followups_created", {
+    appointmentId: appointment.id,
+    followupCount: rows.length,
+  });
 };
 
 const notifyAppointmentStaff = async ({
@@ -2566,7 +2635,20 @@ const notifyAppointmentStaff = async ({
     .insert(rows)
     .select("id");
 
-  if (error) return error;
+  if (error) {
+    logLocalAppointmentEffect("staff_notification_failed", {
+      appointmentId: appointment.id,
+      notificationCount: rows.length,
+      failed: true,
+      code: "insert_error",
+    });
+    return error;
+  }
+
+  logLocalAppointmentEffect("staff_notification_created", {
+    appointmentId: appointment.id,
+    notificationCount: (data || []).length,
+  });
 
   const pushResult = await triggerPushForNotificationIds(
     (data || []).map((notification) => notification.id)
@@ -2643,6 +2725,12 @@ const runAppointmentPostSaveEffects = async ({
   if (adminNotificationResult.error) {
     notificationWarning = `${notificationWarning} No se pudo notificar al admin: ${adminNotificationResult.error.message}`;
   }
+
+  logLocalAppointmentEffect("post_save_effects_finished", {
+    appointmentId: appointment.id,
+    ok: !notificationWarning,
+    failed: Boolean(notificationWarning),
+  });
 
   return notificationWarning;
 };

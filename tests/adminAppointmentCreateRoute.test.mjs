@@ -14,6 +14,7 @@ const actorId = "11111111-1111-4111-8111-111111111111";
 const clientId = "22222222-2222-4222-8222-222222222222";
 const staffId = "33333333-3333-4333-8333-333333333333";
 const serviceId = "44444444-4444-4444-8444-444444444444";
+const secondServiceId = "44444444-4444-4444-8444-444444444445";
 const appointmentId = "55555555-5555-4555-8555-555555555555";
 
 function request(overrides = {}) {
@@ -43,14 +44,8 @@ function session(role = "admin") {
 }
 
 function selection(overrides = {}) {
-  return {
-    ok: true,
-    client: {
-      id: clientId,
-      name: "Clienta de prueba",
-      phone: "9991112233",
-    },
-    services: [
+  const services =
+    overrides.services || [
       {
         id: serviceId,
         name: "Manicure",
@@ -64,7 +59,15 @@ function selection(overrides = {}) {
         bookable: true,
         service_type: "servicio",
       },
-    ],
+    ];
+  return {
+    ok: true,
+    client: {
+      id: clientId,
+      name: "Clienta de prueba",
+      phone: "9991112233",
+    },
+    services,
     extras: [],
     date: "2026-08-01",
     startTime: "09:00",
@@ -394,5 +397,50 @@ test("ruta admin 15: la ruta no contiene escritor secuencial y Agenda la usa tra
   assert.match(
     agendaSource,
     /ADMIN_TRANSACTIONAL_APPOINTMENT_WRITES_ENABLED/
+  );
+});
+
+test("ruta admin 16: dos servicios se envían al RPC y devuelven éxito verificable", async () => {
+  const contracts = [];
+  const response = await handleAdminAppointmentCreate(
+    request({ serviceIds: [serviceId, secondServiceId] }),
+    dependencies({
+      loadSelection: async () =>
+        selection({
+          services: [
+            selection().services[0],
+            {
+              id: secondServiceId,
+              name: "Pedicure",
+              staffId,
+              participantId: "person_1",
+              durationMinutes: 30,
+              cleanupMinutes: 0,
+              price: 150,
+              priceType: "fixed",
+              active: true,
+              bookable: true,
+              service_type: "servicio",
+            },
+          ],
+          endTime: "10:30",
+          expectedPrice: 400,
+        }),
+      createRepository: () => ({
+        async createAppointmentTransaction({ contract }) {
+          contracts.push(contract);
+          return created({ servicesCreated: 2 });
+        },
+      }),
+    })
+  );
+  const output = await result(response);
+  assert.equal(output.status, 201);
+  assert.equal(output.body.success, true);
+  assert.equal(output.body.appointmentId, appointmentId);
+  assert.equal(output.body.servicesCreated, 2);
+  assert.deepEqual(
+    contracts[0].services.map((service) => service.id),
+    [serviceId, secondServiceId]
   );
 });

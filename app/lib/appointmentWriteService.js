@@ -10,6 +10,46 @@ export function exactServerFlagEnabled(name, env = process.env) {
   return env?.[name] === "true";
 }
 
+function isLocalAppointmentDebugEnabled(env = process.env) {
+  if (env?.NODE_ENV === "production") return false;
+  const candidates = [
+    env?.NEXT_PUBLIC_SITE_URL,
+    env?.NEXT_PUBLIC_APP_URL,
+    env?.NEXT_PUBLIC_SUPABASE_URL,
+  ];
+  return candidates.some((value) =>
+    /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(
+      String(value || "").trim()
+    )
+  );
+}
+
+function redactDebugId(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= 12) return text;
+  return `${text.slice(0, 8)}…${text.slice(-4)}`;
+}
+
+function logAppointmentWriteDebug(event, details = {}, env = process.env) {
+  if (!isLocalAppointmentDebugEnabled(env)) return;
+  console.info(
+    "[appointment-write:local]",
+    JSON.stringify({
+      event,
+      source: details.source || "",
+      mode: details.mode || "",
+      status: details.status || "",
+      code: details.code || "",
+      replay: details.isReplay === true,
+      requestId: redactDebugId(details.idempotencyKey || details.requestId),
+      appointmentCreated: Boolean(details.appointmentId),
+      appointmentId: redactDebugId(details.appointmentId),
+      servicesCreated: Number(details.servicesCreated || 0),
+    })
+  );
+}
+
 export function getAppointmentWriteMode(source, env = process.env) {
   const sharedEnabled = exactServerFlagEnabled(
     "APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED",
@@ -122,12 +162,21 @@ export async function executeAppointmentWrite({
 }) {
   const source = String(input?.source || "").trim();
   const mode = getAppointmentWriteMode(source, env);
+  logAppointmentWriteDebug(
+    "writer_selected",
+    {
+      source,
+      mode,
+      requestId: input?.previewId || input?.confirmationId || input?.eventId,
+    },
+    env
+  );
   const validation = validateAppointmentWriteContract(input, {
     transactional: mode === "transactional",
     now,
   });
   if (!validation.ok) {
-    return safeResult({
+    const validationResult = safeResult({
       source,
       mode,
       status: validation.code === "human_review" ? "human_review" : "failed",
@@ -137,20 +186,24 @@ export async function executeAppointmentWrite({
           ? "La solicitud requiere revisión del equipo."
           : "La solicitud de cita no es válida.",
     });
+    logAppointmentWriteDebug("validation_result", validationResult, env);
+    return validationResult;
   }
 
   const contract = normalizeAppointmentWriteContract(validation.contract);
   const idempotencyKey = buildAppointmentIdempotencyKey(contract);
   if (!idempotencyKey) {
-    return safeResult({
+    const missingIdempotencyResult = safeResult({
       source,
       mode,
       code: "idempotency_identity_required",
     });
+    logAppointmentWriteDebug("write_result", missingIdempotencyResult, env);
+    return missingIdempotencyResult;
   }
 
   if (mode === "write_disabled") {
-    return safeResult({
+    const disabledResult = safeResult({
       source,
       mode,
       status: "write_disabled",
@@ -158,16 +211,20 @@ export async function executeAppointmentWrite({
       idempotencyKey,
       errorMessage: "La creación automática de citas está desactivada.",
     });
+    logAppointmentWriteDebug("write_result", disabledResult, env);
+    return disabledResult;
   }
 
   if (mode === "transactional") {
     if (typeof transactionalRepository?.createAppointmentTransaction !== "function") {
-      return safeResult({
+      const missingRepositoryResult = safeResult({
         source,
         mode,
         code: "transactional_repository_unavailable",
         idempotencyKey,
       });
+      logAppointmentWriteDebug("write_result", missingRepositoryResult, env);
+      return missingRepositoryResult;
     }
     return executeOnce(idempotencyKey, async () => {
       try {
@@ -176,55 +233,67 @@ export async function executeAppointmentWrite({
             contract,
             idempotencyKey,
           });
-        return normalizeWriterResult(result, {
+        const writeResult = normalizeWriterResult(result, {
           source,
           mode,
           idempotencyKey,
         });
+        logAppointmentWriteDebug("write_result", writeResult, env);
+        return writeResult;
       } catch {
-        return safeResult({
+        const writeResult = safeResult({
           source,
           mode,
           code: "transactional_write_failed",
           idempotencyKey,
         });
+        logAppointmentWriteDebug("write_result", writeResult, env);
+        return writeResult;
       }
     });
   }
 
   if (source === "bot") {
-    return safeResult({
+    const botResult = safeResult({
       source,
       mode: "write_disabled",
       status: "write_disabled",
       code: "bot_legacy_writer_forbidden",
       idempotencyKey,
     });
+    logAppointmentWriteDebug("write_result", botResult, env);
+    return botResult;
   }
   if (typeof legacyWriter !== "function") {
-    return safeResult({
+    const missingLegacyResult = safeResult({
       source,
       mode,
       code: "legacy_writer_unavailable",
       idempotencyKey,
     });
+    logAppointmentWriteDebug("write_result", missingLegacyResult, env);
+    return missingLegacyResult;
   }
 
   return executeOnce(idempotencyKey, async () => {
     try {
       const result = await legacyWriter({ contract, idempotencyKey });
-      return normalizeWriterResult(result, {
+      const writeResult = normalizeWriterResult(result, {
         source,
         mode,
         idempotencyKey,
       });
+      logAppointmentWriteDebug("write_result", writeResult, env);
+      return writeResult;
     } catch {
-      return safeResult({
+      const writeResult = safeResult({
         source,
         mode,
         code: "legacy_write_failed",
         idempotencyKey,
       });
+      logAppointmentWriteDebug("write_result", writeResult, env);
+      return writeResult;
     }
   });
 }
