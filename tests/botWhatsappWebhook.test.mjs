@@ -29,18 +29,18 @@ const inboundPayload = {
           value: {
             messaging_product: "whatsapp",
             metadata: {
-              display_phone_number: "529991112233",
+              display_phone_number: "display_phone_redaction_probe",
               phone_number_id: "phone_number_id_123",
             },
             contacts: [
               {
                 profile: { name: "Nombre Personal" },
-                wa_id: "529998887766",
+                wa_id: "wa_redaction_probe",
               },
             ],
             messages: [
               {
-                from: "529998887766",
+                from: "wa_redaction_probe",
                 id: "wamid.HBgLMTIzNDU2",
                 timestamp: "1720000000",
                 text: { body: "Hola, quiero una cita" },
@@ -68,7 +68,7 @@ const statusPayload = {
             statuses: [
               {
                 id: "wamid.status.123",
-                recipient_id: "529998887766",
+                recipient_id: "wa_redaction_probe",
                 status: "delivered",
                 timestamp: "1720000010",
               },
@@ -268,8 +268,8 @@ test("whatsapp webhook POST registra mensaje entrante sin contenido sensible", a
 
   const serialized = JSON.stringify(spy.calls);
   assert.doesNotMatch(serialized, /Hola, quiero una cita/);
-  assert.doesNotMatch(serialized, /529998887766/);
-  assert.doesNotMatch(serialized, /529991112233/);
+  assert.doesNotMatch(serialized, /wa_redaction_probe/);
+  assert.doesNotMatch(serialized, /display_phone_redaction_probe/);
   assert.doesNotMatch(serialized, /Nombre Personal/);
   assert.doesNotMatch(serialized, /app_secret_de_prueba/);
 });

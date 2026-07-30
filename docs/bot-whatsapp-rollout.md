@@ -92,7 +92,11 @@ reintentos innecesarios de Meta sin guardar ni procesar eventos.
 
 ## Activar recepción sin responder
 
-Solo después de desplegar el código y aplicar la migración:
+Solo después de desplegar el código y aplicar el SQL incremental:
+
+```txt
+supabase_production_bot_whatsapp_webhook_incremental.sql
+```
 
 1. Agregar variables privadas en Vercel.
 2. Mantener:
@@ -143,6 +147,19 @@ BOT_WEBHOOK_RECEIVE_ENABLED=false
 Después hacer redeploy. Con la bandera apagada, el endpoint sigue validando la
 firma y responde `200 receive_disabled`, pero no guarda eventos.
 
+## Rollback preparado
+
+Si se autoriza revertir únicamente la infraestructura de recepción del webhook,
+usar:
+
+```txt
+supabase_production_bot_whatsapp_webhook_rollback.sql
+```
+
+Ese rollback elimina solo `public.bot_webhook_events` y sus objetos dependientes.
+No toca citas, pagos, clientas, servicios, conversaciones ni configuración de
+Meta.
+
 ## Banderas que deben permanecer apagadas
 
 Hasta autorización explícita:
@@ -170,4 +187,3 @@ La siguiente fase debería agregar, en otro commit separado:
 - cola de reintentos;
 - revisión humana;
 - pruebas con número de prueba.
-
