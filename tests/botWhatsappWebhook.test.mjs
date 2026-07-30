@@ -15,6 +15,7 @@ const env = {
   META_WEBHOOK_VERIFY_TOKEN: "verify_token_de_prueba",
   META_APP_SECRET: "app_secret_de_prueba",
   BOT_WEBHOOK_RECEIVE_ENABLED: "true",
+  BOT_INBOUND_PROCESSING_ENABLED: "false",
   BOT_WEBHOOK_MAX_BODY_BYTES: "200000",
 };
 
@@ -106,8 +107,29 @@ function repositorySpy() {
           duplicate: 0,
           events: events.map((event) => ({
             status: "received",
+            eventStatus: "received",
             eventType: event.eventType,
+            providerMessageId: event.providerMessageId,
+            providerEventId: event.providerEventId,
           })),
+        };
+      },
+    },
+  };
+}
+
+function inboundProcessorSpy() {
+  const calls = [];
+  return {
+    calls,
+    inboundProcessor: {
+      async process(payload) {
+        calls.push(payload);
+        return {
+          ok: true,
+          processed: 1,
+          duplicate: 0,
+          skipped: 0,
         };
       },
     },
@@ -254,16 +276,20 @@ test("whatsapp webhook POST con recepcion apagada responde 200 sin guardar", asy
 test("whatsapp webhook POST registra mensaje entrante sin contenido sensible", async () => {
   const rawBody = JSON.stringify(inboundPayload);
   const spy = repositorySpy();
+  const processorSpy = inboundProcessorSpy();
   const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
     env,
     repository: spy.repository,
+    inboundProcessor: processorSpy.inboundProcessor,
     now: "2026-07-29T12:00:00.000Z",
   });
   const result = await readJson(response);
 
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.eventTypes, ["message_inbound"]);
+  assert.equal(result.body.inboundProcessing.enabled, false);
   assert.equal(spy.calls.length, 1);
+  assert.equal(processorSpy.calls.length, 0);
   assert.equal(spy.calls[0][0].providerMessageId, "wamid.HBgLMTIzNDU2");
 
   const serialized = JSON.stringify(spy.calls);
@@ -272,6 +298,25 @@ test("whatsapp webhook POST registra mensaje entrante sin contenido sensible", a
   assert.doesNotMatch(serialized, /display_phone_redaction_probe/);
   assert.doesNotMatch(serialized, /Nombre Personal/);
   assert.doesNotMatch(serialized, /app_secret_de_prueba/);
+});
+
+test("whatsapp webhook POST con procesamiento encendido invoca procesador entrante", async () => {
+  const rawBody = JSON.stringify(inboundPayload);
+  const spy = repositorySpy();
+  const processorSpy = inboundProcessorSpy();
+  const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
+    repository: spy.repository,
+    inboundProcessor: processorSpy.inboundProcessor,
+    now: "2026-07-29T12:00:00.000Z",
+  });
+  const result = await readJson(response);
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.inboundProcessing.enabled, true);
+  assert.equal(result.body.inboundProcessing.processed, 1);
+  assert.equal(processorSpy.calls.length, 1);
+  assert.deepEqual(processorSpy.calls[0].recordResult.events[0].eventType, "message_inbound");
 });
 
 test("whatsapp webhook POST clasifica status de entrega", async () => {
@@ -317,13 +362,15 @@ test("whatsapp webhook POST clasifica evento desconocido valido", async () => {
   assert.deepEqual(result.body.eventTypes, ["unknown"]);
 });
 
-test("la fase local no envia mensajes, no conversa, no consulta disponibilidad ni crea citas", () => {
+test("la fase local no envia mensajes, no llama motor, no consulta disponibilidad ni crea citas", () => {
   const files = [
     "../app/api/bot/whatsapp/webhook/route.js",
     "../app/lib/whatsapp/verifyMetaWebhook.js",
     "../app/lib/whatsapp/parseMetaWebhookEvent.js",
     "../app/lib/whatsapp/redactWebhookPayload.js",
     "../app/lib/whatsapp/botWebhookEventRepository.js",
+    "../app/lib/whatsapp/botInboundMessageProcessor.js",
+    "../app/lib/whatsapp/metaInboundMessageExtractor.js",
   ];
 
   const source = files
