@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:bot": "node --test tests/botConversationEngine.test.mjs tests/botConversationIntegration.test.mjs tests/botAppointmentOrchestrator.test.mjs tests/botConversationRegression.test.mjs tests/botAppointmentSql.test.mjs tests/botAppointmentProductionRepository.test.mjs tests/botAppointmentEndpoint.test.mjs tests/botAppointmentProductionIntegration.test.mjs tests/appointmentWriteService.test.mjs tests/clientPortalAppointmentFlow.test.mjs tests/adminAppointmentAdapter.test.mjs tests/adminAppointmentCreateRoute.test.mjs tests/adminAppointmentClientMode.test.mjs tests/appointmentChannelIntegration.test.mjs tests/botWhatsappWebhook.test.mjs tests/botWhatsappIdempotency.test.mjs"
+    "test:bot": "node --test tests/botConversationEngine.test.mjs tests/botConversationIntegration.test.mjs tests/botAppointmentOrchestrator.test.mjs tests/botConversationRegression.test.mjs tests/botAppointmentSql.test.mjs tests/botAppointmentProductionRepository.test.mjs tests/botAppointmentEndpoint.test.mjs tests/botAppointmentProductionIntegration.test.mjs tests/appointmentWriteService.test.mjs tests/clientPortalAppointmentFlow.test.mjs tests/adminAppointmentAdapter.test.mjs tests/adminAppointmentCreateRoute.test.mjs tests/adminAppointmentClientMode.test.mjs tests/appointmentChannelIntegration.test.mjs tests/botWhatsappWebhook.test.mjs tests/botWhatsappIdempotency.test.mjs tests/botWhatsappInboundProcessing.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

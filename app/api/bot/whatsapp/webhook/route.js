@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server.js";
 import { createAdminClient } from "../../../../lib/pushServer.js";
+import {
+  createBotInboundMessageProcessor,
+  isInboundProcessingEnabled,
+} from "../../../../lib/whatsapp/botInboundMessageProcessor.js";
 import { createBotWebhookEventRepository } from "../../../../lib/whatsapp/botWebhookEventRepository.js";
 import { buildRedactedWebhookEvents } from "../../../../lib/whatsapp/redactWebhookPayload.js";
 import {
@@ -112,18 +116,53 @@ export async function handleMetaWhatsappWebhookPost(
         (dependencies.createSupabase || createAdminClient)(),
     });
 
+  let result;
+
   try {
-    const result = await repository.recordEvents(events, { now });
-    return json({
-      ok: true,
-      status: "received",
-      received: result.received,
-      duplicate: result.duplicate,
-      eventTypes: events.map((event) => event.eventType),
-    });
+    result = await repository.recordEvents(events, { now });
   } catch {
     return safeError(503, "webhook_event_store_failed");
   }
+
+  let inboundProcessing = {
+    enabled: false,
+    processed: 0,
+    duplicate: 0,
+    skipped: 0,
+  };
+
+  if (isInboundProcessingEnabled(env)) {
+    const processor =
+      dependencies.inboundProcessor ||
+      createBotInboundMessageProcessor({
+        supabase:
+          dependencies.supabase ||
+          (dependencies.createSupabase || createAdminClient)(),
+      });
+
+    try {
+      inboundProcessing = {
+        enabled: true,
+        ...(await processor.process({
+          payload: parsed.payload,
+          recordResult: result,
+          appSecret: env.META_APP_SECRET,
+          now,
+        })),
+      };
+    } catch {
+      return safeError(503, "webhook_inbound_processing_failed");
+    }
+  }
+
+  return json({
+    ok: true,
+    status: "received",
+    received: result.received,
+    duplicate: result.duplicate,
+    eventTypes: events.map((event) => event.eventType),
+    inboundProcessing,
+  });
 }
 
 export async function GET(request) {

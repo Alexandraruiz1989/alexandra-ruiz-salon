@@ -41,7 +41,7 @@ async function findExistingBy(supabase, criteria) {
 
   const { data, error } = await supabase
     .from(TABLE_NAME)
-    .select("id, status")
+    .select("id, status, event_type")
     .match(normalizedCriteria)
     .limit(1);
 
@@ -89,7 +89,10 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
           results.push({
             status: "duplicate",
             id: existing.id,
-            eventType: row.event_type,
+            eventStatus: existing.status || null,
+            eventType: existing.event_type || row.event_type,
+            providerMessageId: row.provider_message_id,
+            providerEventId: row.provider_event_id,
           });
           continue;
         }
@@ -106,6 +109,8 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
               status: "duplicate",
               id: null,
               eventType: row.event_type,
+              providerMessageId: row.provider_message_id,
+              providerEventId: row.provider_event_id,
             });
             continue;
           }
@@ -116,7 +121,10 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
         results.push({
           status: "received",
           id: data?.id || null,
+          eventStatus: data?.status || "received",
           eventType: row.event_type,
+          providerMessageId: row.provider_message_id,
+          providerEventId: row.provider_event_id,
         });
       }
 
