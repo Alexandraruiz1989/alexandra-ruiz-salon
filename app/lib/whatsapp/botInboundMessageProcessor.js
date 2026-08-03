@@ -59,13 +59,16 @@ async function findConversationByPhone(supabase, inbound) {
 }
 
 function conversationPayload(inbound, now, existing = null) {
+  const isExistingConversation = Boolean(existing?.id);
   const requiresHumanReview =
     Boolean(existing?.requires_human_review) ||
     Boolean(inbound.requiresHumanReview);
-  const handoffToHuman =
-    existing?.handoff_to_human === true || Boolean(inbound.requiresHumanReview);
-  const botEnabled =
-    existing?.bot_enabled === false || handoffToHuman ? false : true;
+  const handoffToHuman = isExistingConversation
+    ? existing?.handoff_to_human === true
+    : true;
+  const botEnabled = isExistingConversation
+    ? existing?.bot_enabled === true
+    : false;
 
   return {
     provider: inbound.provider,
@@ -78,7 +81,9 @@ function conversationPayload(inbound, now, existing = null) {
     requires_human_review: requiresHumanReview,
     bot_enabled: botEnabled,
     handoff_to_human: handoffToHuman,
-    status: handoffToHuman ? "human" : existing?.status || "abierta",
+    status: isExistingConversation
+      ? existing?.status || (handoffToHuman ? "human" : "abierta")
+      : "human",
     unread_count: Number(existing?.unread_count || 0) + 1,
     updated_at: now,
   };
@@ -109,21 +114,27 @@ async function createConversation(supabase, inbound, now) {
   return data;
 }
 
+async function updateConversation(supabase, inbound, now, existing) {
+  const { data, error } = await supabase
+    .from(CONVERSATIONS_TABLE)
+    .update(conversationPayload(inbound, now, existing))
+    .eq("id", existing.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data || existing;
+}
+
 async function getOrCreateConversation(supabase, inbound, now) {
   const byProvider = await findConversationByProviderKey(supabase, inbound);
-  if (byProvider) return byProvider;
+  if (byProvider) {
+    return updateConversation(supabase, inbound, now, byProvider);
+  }
 
   const byPhone = await findConversationByPhone(supabase, inbound);
   if (byPhone) {
-    const { data, error } = await supabase
-      .from(CONVERSATIONS_TABLE)
-      .update(conversationPayload(inbound, now, byPhone))
-      .eq("id", byPhone.id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    return data || byPhone;
+    return updateConversation(supabase, inbound, now, byPhone);
   }
 
   return createConversation(supabase, inbound, now);

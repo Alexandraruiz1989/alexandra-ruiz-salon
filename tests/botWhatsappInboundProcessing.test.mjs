@@ -6,8 +6,13 @@ import {
   createBotInboundMessageProcessor,
   isInboundProcessingEnabled,
 } from "../app/lib/whatsapp/botInboundMessageProcessor.js";
+import { hashWebhookValue } from "../app/lib/whatsapp/verifyMetaWebhook.js";
 
 const now = "2026-07-30T12:00:00.000Z";
+const testProviderConversationKey = hashWebhookValue(
+  "5219991234567",
+  "app_secret_de_prueba"
+);
 
 function inboundPayload(overrides = {}) {
   return {
@@ -258,6 +263,10 @@ test("texto nuevo crea una conversacion y un mensaje entrante", async () => {
   assert.equal(supabase.store.bot_messages[0].direction, "incoming");
   assert.equal(supabase.store.bot_messages[0].message_type, "text");
   assert.equal(supabase.store.bot_messages[0].created_at, now);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, false);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, true);
+  assert.equal(supabase.store.bot_conversations[0].requires_human_review, false);
+  assert.equal(supabase.store.bot_conversations[0].status, "human");
   assert.equal(
     supabase.store.bot_messages[0].received_at,
     "2026-07-30T12:00:00.000Z"
@@ -285,6 +294,34 @@ test("texto nuevo en conversacion existente crea solo un mensaje", async () => {
   assert.equal(supabase.store.bot_conversations.length, 1);
   assert.equal(supabase.store.bot_messages.length, 1);
   assert.equal(supabase.store.bot_conversations[0].unread_count, 1);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, true);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, false);
+});
+
+test("texto nuevo en conversacion Meta existente conserva Bot ON/OFF y handoff", async () => {
+  const supabase = fakeSupabase({
+    bot_conversations: [
+      {
+        id: "conversation_1",
+        client_phone: "5219991234567",
+        provider: "meta_whatsapp",
+        provider_conversation_key: testProviderConversationKey,
+        bot_enabled: true,
+        handoff_to_human: false,
+        requires_human_review: false,
+        unread_count: 2,
+      },
+    ],
+  });
+
+  await processMessage(supabase);
+
+  assert.equal(supabase.store.bot_conversations.length, 1);
+  assert.equal(supabase.store.bot_messages.length, 1);
+  assert.equal(supabase.store.bot_conversations[0].unread_count, 3);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, true);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, false);
+  assert.equal(supabase.store.bot_conversations[0].last_inbound_at, now);
 });
 
 test("provider_message_id duplicado no duplica mensaje ni conversacion", async () => {
@@ -321,6 +358,8 @@ test("provider_message_id duplicado no duplica mensaje ni conversacion", async (
   assert.equal(result.skipped, 1);
   assert.equal(supabase.store.bot_conversations.length, 1);
   assert.equal(supabase.store.bot_messages.length, 1);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, true);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, false);
 });
 
 test("evento duplicado ya procesado no reprocesa", async () => {
@@ -530,6 +569,38 @@ test("handoff conserva handoff_to_human=true", async () => {
   assert.equal(supabase.store.bot_conversations[0].handoff_to_human, true);
 });
 
+test("mensaje no textual en conversacion existente Bot OFF no activa el bot", async () => {
+  const supabase = fakeSupabase({
+    bot_conversations: [
+      {
+        id: "conversation_1",
+        client_phone: "5219991234567",
+        provider: "meta_whatsapp",
+        bot_enabled: false,
+        handoff_to_human: true,
+        requires_human_review: false,
+        unread_count: 0,
+      },
+    ],
+  });
+
+  await processMessage(supabase, {
+    payload: {
+      message: {
+        id: "wamid.test.1",
+        type: "image",
+        text: undefined,
+        image: { id: "media_should_not_be_stored" },
+      },
+    },
+  });
+
+  assert.equal(supabase.store.bot_conversations[0].requires_human_review, true);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, false);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, true);
+  assert.equal(supabase.store.bot_messages[0].requires_human_review, true);
+});
+
 test("mensaje no textual marca revision humana sin descargar archivo", async () => {
   const supabase = fakeSupabase();
 
@@ -546,6 +617,7 @@ test("mensaje no textual marca revision humana sin descargar archivo", async () 
 
   assert.equal(supabase.store.bot_conversations[0].requires_human_review, true);
   assert.equal(supabase.store.bot_conversations[0].handoff_to_human, true);
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, false);
   assert.equal(supabase.store.bot_messages[0].requires_human_review, true);
   assert.equal(supabase.store.bot_messages[0].message_type, "image");
   assert.doesNotMatch(
