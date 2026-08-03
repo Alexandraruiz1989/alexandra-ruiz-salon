@@ -164,6 +164,7 @@ export async function handleMetaWhatsappWebhookPost(
           payload: parsed.payload,
           recordResult: result,
           appSecret: env.META_APP_SECRET,
+          env,
           now,
         })),
       };

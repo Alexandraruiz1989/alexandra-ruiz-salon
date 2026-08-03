@@ -1,4 +1,8 @@
 import { extractMetaInboundMessages } from "./metaInboundMessageExtractor.js";
+import {
+  createBotResponseDraftOrchestrator,
+  isDraftGenerationEnabled,
+} from "./botResponseDraftGenerator.js";
 
 const CONVERSATIONS_TABLE = "bot_conversations";
 const MESSAGES_TABLE = "bot_messages";
@@ -223,6 +227,8 @@ export function createBotInboundMessageProcessor({ supabase } = {}) {
       recordResult,
       appSecret,
       now = new Date().toISOString(),
+      env = process.env,
+      draftOrchestrator = null,
     } = {}) {
       const inboundMessages = extractMetaInboundMessages({
         payload,
@@ -240,6 +246,17 @@ export function createBotInboundMessageProcessor({ supabase } = {}) {
       let processed = 0;
       let duplicate = 0;
       let skipped = 0;
+      let draftGenerated = 0;
+      let draftDuplicate = 0;
+      let draftFailed = 0;
+      let draftSkipped = 0;
+      const shouldGenerateDrafts = isDraftGenerationEnabled(env);
+      const drafts =
+        shouldGenerateDrafts && draftOrchestrator
+          ? draftOrchestrator
+          : shouldGenerateDrafts
+          ? createBotResponseDraftOrchestrator({ supabase, env })
+          : null;
 
       for (const inbound of inboundMessages) {
         const eventResult = resultsByMessageId.get(inbound.providerMessageId);
@@ -268,6 +285,38 @@ export function createBotInboundMessageProcessor({ supabase } = {}) {
             duplicate += 1;
           } else {
             processed += 1;
+
+            if (drafts) {
+              try {
+                const draftResult = await drafts.maybeGenerateDraft({
+                  conversation,
+                  inboundMessage: {
+                    id: messageResult.id,
+                    conversation_id: conversation.id,
+                    provider: inbound.provider,
+                    provider_message_id: inbound.providerMessageId,
+                    direction: "incoming",
+                    message_type: inbound.messageType,
+                    delivery_status: "received",
+                    body: inbound.body,
+                    received_at: inbound.receivedAt || now,
+                    requires_human_review: Boolean(inbound.requiresHumanReview),
+                  },
+                  webhookEventId: eventResult.id,
+                  provider: inbound.provider,
+                  now,
+                });
+
+                draftGenerated += Number(draftResult?.generated || 0);
+                draftDuplicate += Number(draftResult?.duplicate || 0);
+                draftFailed += Number(draftResult?.failed || 0);
+                draftSkipped += Number(draftResult?.skipped || 0);
+              } catch {
+                draftFailed += 1;
+              }
+            } else {
+              draftSkipped += 1;
+            }
           }
 
           await markEventProcessed(supabase, eventResult.id, now);
@@ -282,6 +331,13 @@ export function createBotInboundMessageProcessor({ supabase } = {}) {
         processed,
         duplicate,
         skipped,
+        drafts: {
+          enabled: shouldGenerateDrafts,
+          generated: draftGenerated,
+          duplicate: draftDuplicate,
+          failed: draftFailed,
+          skipped: draftSkipped,
+        },
       };
     },
   };
