@@ -32,46 +32,6 @@ function isDuplicateError(error) {
   return code === "23505" || message.includes("duplicate key");
 }
 
-async function findExistingBy(supabase, criteria) {
-  const normalizedCriteria = Object.fromEntries(
-    Object.entries(criteria).filter(([, value]) => cleanText(value))
-  );
-
-  if (Object.keys(normalizedCriteria).length === 0) return null;
-
-  const { data, error } = await supabase
-    .from(TABLE_NAME)
-    .select("id, status, event_type")
-    .match(normalizedCriteria)
-    .limit(1);
-
-  if (error) throw error;
-  return data?.[0] || null;
-}
-
-async function findExistingEvent(supabase, row) {
-  if (row.provider_message_id) {
-    const existing = await findExistingBy(supabase, {
-      provider: row.provider,
-      provider_message_id: row.provider_message_id,
-    });
-    if (existing) return existing;
-  }
-
-  if (row.provider_event_id) {
-    const existing = await findExistingBy(supabase, {
-      provider: row.provider,
-      provider_event_id: row.provider_event_id,
-    });
-    if (existing) return existing;
-  }
-
-  return findExistingBy(supabase, {
-    provider: row.provider,
-    payload_hash: row.payload_hash,
-  });
-}
-
 export function createBotWebhookEventRepository({ supabase } = {}) {
   if (!supabase?.from) {
     throw new Error("bot_webhook_repository_requires_supabase");
@@ -83,19 +43,6 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
 
       for (const event of events) {
         const row = toRow(event, now);
-        const existing = await findExistingEvent(supabase, row);
-
-        if (existing) {
-          results.push({
-            status: "duplicate",
-            id: existing.id,
-            eventStatus: existing.status || null,
-            eventType: existing.event_type || row.event_type,
-            providerMessageId: row.provider_message_id,
-            providerEventId: row.provider_event_id,
-          });
-          continue;
-        }
 
         const { data, error } = await supabase
           .from(TABLE_NAME)
@@ -108,9 +55,12 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
             results.push({
               status: "duplicate",
               id: null,
+              created: false,
+              eventStatus: null,
               eventType: row.event_type,
               providerMessageId: row.provider_message_id,
               providerEventId: row.provider_event_id,
+              payloadHash: row.payload_hash,
             });
             continue;
           }
@@ -121,10 +71,12 @@ export function createBotWebhookEventRepository({ supabase } = {}) {
         results.push({
           status: "received",
           id: data?.id || null,
+          created: true,
           eventStatus: data?.status || "received",
           eventType: row.event_type,
           providerMessageId: row.provider_message_id,
           providerEventId: row.provider_event_id,
+          payloadHash: row.payload_hash,
         });
       }
 

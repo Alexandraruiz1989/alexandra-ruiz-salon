@@ -135,6 +135,9 @@ test("idempotencia: mensaje duplicado no crea una segunda fila", async () => {
   assert.equal(first.duplicate, 0);
   assert.equal(second.received, 0);
   assert.equal(second.duplicate, 1);
+  assert.equal(first.events[0].created, true);
+  assert.equal(second.events[0].created, false);
+  assert.equal(second.events[0].id, null);
   assert.equal(supabase.store.rows.length, 1);
 });
 
@@ -152,6 +155,8 @@ test("idempotencia: evento duplicado por provider_event_id no crea una segunda f
 
   assert.equal(first.received, 1);
   assert.equal(second.duplicate, 1);
+  assert.equal(second.events[0].created, false);
+  assert.equal(second.events[0].id, null);
   assert.equal(supabase.store.rows.length, 1);
 });
 
@@ -170,6 +175,8 @@ test("idempotencia: hash deterministico es respaldo cuando no hay ids", async ()
 
   assert.equal(replay.received, 0);
   assert.equal(replay.duplicate, 1);
+  assert.equal(replay.events[0].created, false);
+  assert.equal(replay.events[0].id, null);
   assert.equal(supabase.store.rows.length, 1);
 });
 
@@ -181,6 +188,24 @@ test("idempotencia: una violacion unique por carrera se trata como duplicado", a
 
   assert.equal(result.received, 0);
   assert.equal(result.duplicate, 1);
+  assert.equal(result.events[0].created, false);
+  assert.equal(result.events[0].id, null);
   assert.equal(supabase.store.rows.length, 0);
 });
 
+test("idempotencia: duplicado con payload distinto no recupera ni expone fila historica", async () => {
+  const supabase = fakeSupabase();
+  const repository = createBotWebhookEventRepository({ supabase });
+
+  await repository.recordEvents([makeEvent({ payloadHash: "hash_payload_1" })]);
+  const replay = await repository.recordEvents([
+    makeEvent({ payloadHash: "hash_payload_2" }),
+  ]);
+
+  assert.equal(replay.received, 0);
+  assert.equal(replay.duplicate, 1);
+  assert.equal(replay.events[0].created, false);
+  assert.equal(replay.events[0].id, null);
+  assert.equal(replay.events[0].payloadHash, "hash_payload_2");
+  assert.equal(supabase.store.rows.length, 1);
+});

@@ -17,11 +17,8 @@ function isDuplicateError(error) {
 function shouldProcessEventResult(result) {
   if (!result?.id) return false;
   if (result.eventType !== "message_inbound") return false;
-  if (result.status === "received") return true;
-  return (
-    result.status === "duplicate" &&
-    ["received", "failed"].includes(cleanText(result.eventStatus).toLowerCase())
-  );
+  if (result.created !== true) return false;
+  return result.status === "received";
 }
 
 async function findExistingMessage(supabase, inbound) {
@@ -146,7 +143,7 @@ async function insertInboundMessage(supabase, conversation, inbound, now) {
     raw_payload: inbound.safeMetadata,
     received_at: inbound.receivedAt || now,
     requires_human_review: Boolean(inbound.requiresHumanReview),
-    created_at: inbound.receivedAt || now,
+    created_at: now,
   };
 
   const { data, error } = await supabase
@@ -177,7 +174,8 @@ async function markEventProcessed(supabase, eventId, now) {
       error_code: null,
       error_message: null,
     })
-    .eq("id", eventId);
+    .eq("id", eventId)
+    .eq("status", "received");
 
   if (error) throw error;
 }
