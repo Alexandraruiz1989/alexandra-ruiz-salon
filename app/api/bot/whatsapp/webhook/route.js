@@ -41,6 +41,15 @@ function parseJson(rawBody) {
   }
 }
 
+function hasNewInboundEvent(result) {
+  return (result?.events || []).some(
+    (event) =>
+      event?.created === true &&
+      event.status === "received" &&
+      event.eventType === "message_inbound"
+  );
+}
+
 export async function handleMetaWhatsappWebhookGet(request, dependencies = {}) {
   const env = dependencies.env || process.env;
   const verification = validateMetaWebhookChallenge({
@@ -92,6 +101,14 @@ export async function handleMetaWhatsappWebhookPost(
     });
   }
 
+  if (!isInboundProcessingEnabled(env)) {
+    return json({
+      ok: true,
+      status: "ignored",
+      code: "inbound_processing_disabled",
+    });
+  }
+
   const parsed = parseJson(rawBody);
   if (!parsed.ok) {
     return safeError(400, parsed.code);
@@ -125,13 +142,13 @@ export async function handleMetaWhatsappWebhookPost(
   }
 
   let inboundProcessing = {
-    enabled: false,
+    enabled: true,
     processed: 0,
     duplicate: 0,
     skipped: 0,
   };
 
-  if (isInboundProcessingEnabled(env)) {
+  if (hasNewInboundEvent(result)) {
     const processor =
       dependencies.inboundProcessor ||
       createBotInboundMessageProcessor({

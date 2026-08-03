@@ -107,10 +107,13 @@ function repositorySpy() {
           duplicate: 0,
           events: events.map((event) => ({
             status: "received",
+            created: true,
             eventStatus: "received",
+            id: `event_${calls.length}`,
             eventType: event.eventType,
             providerMessageId: event.providerMessageId,
             providerEventId: event.providerEventId,
+            payloadHash: event.payloadHash,
           })),
         };
       },
@@ -240,7 +243,7 @@ test("la firma se calcula sobre el body crudo exacto", () => {
 test("whatsapp webhook POST con JSON invalido y firma valida devuelve 400", async () => {
   const rawBody = "{ no es json";
   const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
-    env,
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
   });
   const result = await readJson(response);
 
@@ -273,7 +276,7 @@ test("whatsapp webhook POST con recepcion apagada responde 200 sin guardar", asy
   assert.equal(spy.calls.length, 0);
 });
 
-test("whatsapp webhook POST registra mensaje entrante sin contenido sensible", async () => {
+test("whatsapp webhook POST con procesamiento apagado responde 200 sin guardar", async () => {
   const rawBody = JSON.stringify(inboundPayload);
   const spy = repositorySpy();
   const processorSpy = inboundProcessorSpy();
@@ -286,10 +289,28 @@ test("whatsapp webhook POST registra mensaje entrante sin contenido sensible", a
   const result = await readJson(response);
 
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body.eventTypes, ["message_inbound"]);
-  assert.equal(result.body.inboundProcessing.enabled, false);
-  assert.equal(spy.calls.length, 1);
+  assert.equal(result.body.code, "inbound_processing_disabled");
+  assert.equal(spy.calls.length, 0);
   assert.equal(processorSpy.calls.length, 0);
+});
+
+test("whatsapp webhook POST con ambas banderas encendidas registra sin contenido sensible y procesa", async () => {
+  const rawBody = JSON.stringify(inboundPayload);
+  const spy = repositorySpy();
+  const processorSpy = inboundProcessorSpy();
+  const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
+    repository: spy.repository,
+    inboundProcessor: processorSpy.inboundProcessor,
+    now: "2026-07-29T12:00:00.000Z",
+  });
+  const result = await readJson(response);
+
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.eventTypes, ["message_inbound"]);
+  assert.equal(result.body.inboundProcessing.enabled, true);
+  assert.equal(spy.calls.length, 1);
+  assert.equal(processorSpy.calls.length, 1);
   assert.equal(spy.calls[0][0].providerMessageId, "wamid.HBgLMTIzNDU2");
 
   const serialized = JSON.stringify(spy.calls);
@@ -319,11 +340,50 @@ test("whatsapp webhook POST con procesamiento encendido invoca procesador entran
   assert.deepEqual(processorSpy.calls[0].recordResult.events[0].eventType, "message_inbound");
 });
 
+test("whatsapp webhook POST duplicado no entrega id historico para procesamiento", async () => {
+  const rawBody = JSON.stringify(inboundPayload);
+  const calls = [];
+  const processorSpy = inboundProcessorSpy();
+  const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
+    repository: {
+      async recordEvents(events) {
+        calls.push(events);
+        return {
+          ok: true,
+          received: 0,
+          duplicate: 1,
+          events: [
+            {
+              status: "duplicate",
+              created: false,
+              id: null,
+              eventStatus: "received",
+              eventType: "message_inbound",
+              providerMessageId: "wamid.HBgLMTIzNDU2",
+              providerEventId: "entry_123",
+              payloadHash: "hash_payload_distinto",
+            },
+          ],
+        };
+      },
+    },
+    inboundProcessor: processorSpy.inboundProcessor,
+    now: "2026-07-29T12:00:00.000Z",
+  });
+  const result = await readJson(response);
+
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(processorSpy.calls.length, 0);
+  assert.equal(result.body.inboundProcessing.processed, 0);
+});
+
 test("whatsapp webhook POST clasifica status de entrega", async () => {
   const rawBody = JSON.stringify(statusPayload);
   const spy = repositorySpy();
   const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
-    env,
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
     repository: spy.repository,
   });
   const result = await readJson(response);
@@ -340,7 +400,7 @@ test("whatsapp webhook POST clasifica evento sin mensajes", async () => {
   });
   const spy = repositorySpy();
   const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
-    env,
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
     repository: spy.repository,
   });
   const result = await readJson(response);
@@ -353,7 +413,7 @@ test("whatsapp webhook POST clasifica evento desconocido valido", async () => {
   const rawBody = JSON.stringify({ object: "whatsapp_business_account" });
   const spy = repositorySpy();
   const response = await handleMetaWhatsappWebhookPost(signedPost(rawBody), {
-    env,
+    env: { ...env, BOT_INBOUND_PROCESSING_ENABLED: "true" },
     repository: spy.repository,
   });
   const result = await readJson(response);

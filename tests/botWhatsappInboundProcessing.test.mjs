@@ -54,6 +54,7 @@ function recordResult(overrides = {}) {
       {
         id: "event_1",
         status: "received",
+        created: true,
         eventStatus: "received",
         eventType: "message_inbound",
         providerMessageId: "wamid.test.1",
@@ -74,6 +75,7 @@ function makeStore(seed = {}) {
       },
       ...(seed.bot_webhook_events || []),
     ],
+    failBotMessageSelect: Boolean(seed.failBotMessageSelect),
   };
 }
 
@@ -174,6 +176,18 @@ class FakeQuery {
         return;
       }
 
+      if (
+        this.mode === "select" &&
+        this.table === "bot_messages" &&
+        this.store.failBotMessageSelect
+      ) {
+        resolve({
+          data: null,
+          error: { code: "select_failed", message: "forced select failure" },
+        });
+        return;
+      }
+
       resolve({
         data: rows.filter((row) => matches(row, this.filters)),
         error: null,
@@ -243,6 +257,11 @@ test("texto nuevo crea una conversacion y un mensaje entrante", async () => {
   assert.equal(supabase.store.bot_messages.length, 1);
   assert.equal(supabase.store.bot_messages[0].direction, "incoming");
   assert.equal(supabase.store.bot_messages[0].message_type, "text");
+  assert.equal(supabase.store.bot_messages[0].created_at, now);
+  assert.equal(
+    supabase.store.bot_messages[0].received_at,
+    "2026-07-30T12:00:00.000Z"
+  );
   assert.equal(supabase.store.bot_webhook_events[0].status, "processed");
 });
 
@@ -290,10 +309,16 @@ test("provider_message_id duplicado no duplica mensaje ni conversacion", async (
   });
 
   const result = await processMessage(supabase, {
-    result: { status: "duplicate", eventStatus: "received" },
+    result: {
+      id: null,
+      status: "duplicate",
+      created: false,
+      eventStatus: "received",
+    },
   });
 
-  assert.equal(result.duplicate, 1);
+  assert.equal(result.duplicate, 0);
+  assert.equal(result.skipped, 1);
   assert.equal(supabase.store.bot_conversations.length, 1);
   assert.equal(supabase.store.bot_messages.length, 1);
 });
@@ -301,7 +326,12 @@ test("provider_message_id duplicado no duplica mensaje ni conversacion", async (
 test("evento duplicado ya procesado no reprocesa", async () => {
   const supabase = fakeSupabase();
   const result = await processMessage(supabase, {
-    result: { status: "duplicate", eventStatus: "processed" },
+    result: {
+      id: null,
+      status: "duplicate",
+      created: false,
+      eventStatus: "processed",
+    },
   });
 
   assert.equal(result.processed, 0);
@@ -316,14 +346,148 @@ test("telefono nuevo crea una sola conversacion logica", async () => {
   await processMessage(supabase);
   await processMessage(supabase, {
     result: {
-      id: "event_2",
+      id: null,
       status: "duplicate",
+      created: false,
       eventStatus: "received",
     },
   });
 
   assert.equal(supabase.store.bot_conversations.length, 1);
   assert.equal(supabase.store.bot_messages.length, 1);
+});
+
+test("evento historico received y POST nuevo distinto procesa solo el evento nuevo", async () => {
+  const supabase = fakeSupabase({
+    bot_webhook_events: [
+      {
+        id: "event_2",
+        status: "received",
+      },
+    ],
+  });
+
+  const result = await processMessage(supabase, {
+    payload: {
+      message: {
+        id: "wamid.test.2",
+        text: { body: "Mensaje nuevo distinto" },
+      },
+    },
+    result: {
+      id: "event_2",
+      status: "received",
+      created: true,
+      eventStatus: "received",
+      providerMessageId: "wamid.test.2",
+    },
+  });
+
+  assert.equal(result.processed, 1);
+  assert.equal(supabase.store.bot_webhook_events[0].status, "received");
+  assert.equal(supabase.store.bot_webhook_events[1].status, "processed");
+  assert.equal(supabase.store.bot_messages.length, 1);
+  assert.equal(
+    supabase.store.bot_messages[0].provider_message_id,
+    "wamid.test.2"
+  );
+});
+
+test("evento historico received y POST duplicado no cambia evento historico", async () => {
+  const supabase = fakeSupabase();
+
+  const result = await processMessage(supabase, {
+    result: {
+      id: null,
+      status: "duplicate",
+      created: false,
+      eventStatus: "received",
+    },
+  });
+
+  assert.equal(result.processed, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(supabase.store.bot_webhook_events[0].status, "received");
+  assert.equal(supabase.store.bot_conversations.length, 0);
+  assert.equal(supabase.store.bot_messages.length, 0);
+});
+
+test("fallo parcial marca evento failed sin conversacion ni mensaje y replay no procesa historicos", async () => {
+  const supabase = fakeSupabase({ failBotMessageSelect: true });
+
+  await assert.rejects(
+    processMessage(supabase, {
+      result: {
+        id: "event_1",
+        status: "received",
+        created: true,
+        eventStatus: "received",
+      },
+    }),
+    (error) =>
+      error?.code === "select_failed" &&
+      error?.message === "forced select failure"
+  );
+
+  assert.equal(supabase.store.bot_webhook_events[0].status, "failed");
+  assert.equal(
+    supabase.store.bot_webhook_events[0].error_code,
+    "select_failed"
+  );
+  assert.equal(supabase.store.bot_conversations.length, 0);
+  assert.equal(supabase.store.bot_messages.length, 0);
+
+  supabase.store.failBotMessageSelect = false;
+
+  const replay = await processMessage(supabase, {
+    result: {
+      id: null,
+      status: "duplicate",
+      created: false,
+      eventStatus: "failed",
+    },
+  });
+
+  assert.equal(replay.processed, 0);
+  assert.equal(replay.skipped, 1);
+  assert.equal(supabase.store.bot_webhook_events[0].status, "failed");
+  assert.equal(supabase.store.bot_conversations.length, 0);
+  assert.equal(supabase.store.bot_messages.length, 0);
+});
+
+test("dos POST simultaneos del mismo mensaje producen un solo bot_message", async () => {
+  const supabase = fakeSupabase({
+    bot_webhook_events: [
+      {
+        id: "event_2",
+        status: "received",
+      },
+    ],
+  });
+
+  const [first, second] = await Promise.all([
+    processMessage(supabase, {
+      result: {
+        id: "event_1",
+        status: "received",
+        created: true,
+        eventStatus: "received",
+      },
+    }),
+    processMessage(supabase, {
+      result: {
+        id: "event_2",
+        status: "received",
+        created: true,
+        eventStatus: "received",
+      },
+    }),
+  ]);
+
+  assert.equal(first.processed + second.processed, 1);
+  assert.equal(first.duplicate + second.duplicate, 1);
+  assert.equal(supabase.store.bot_messages.length, 1);
+  assert.equal(supabase.store.bot_conversations.length, 1);
 });
 
 test("Bot OFF conserva bot_enabled=false", async () => {
