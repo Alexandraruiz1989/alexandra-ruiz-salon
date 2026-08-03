@@ -431,6 +431,7 @@ test("la fase local no envia mensajes, no llama motor, no consulta disponibilida
     "../app/lib/whatsapp/botWebhookEventRepository.js",
     "../app/lib/whatsapp/botInboundMessageProcessor.js",
     "../app/lib/whatsapp/metaInboundMessageExtractor.js",
+    "../app/lib/whatsapp/botResponseDraftGenerator.js",
   ];
 
   const source = files
