@@ -48,6 +48,36 @@ const SENSITIVE_REQUEST_PATTERNS = [
 const PRICE_PATTERNS = [
   /\b(precio|cuesta|costo|vale|sale|cuánto|cuanto)\b/i,
 ];
+const PRICE_QUERY_STOPWORDS = new Set([
+  "buen",
+  "buena",
+  "buenas",
+  "buenos",
+  "cuanto",
+  "cuesta",
+  "costo",
+  "decir",
+  "del",
+  "dias",
+  "el",
+  "en",
+  "favor",
+  "hola",
+  "la",
+  "las",
+  "los",
+  "me",
+  "por",
+  "precio",
+  "puede",
+  "pueden",
+  "puedes",
+  "que",
+  "sale",
+  "saber",
+  "tardes",
+  "vale",
+]);
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -224,6 +254,94 @@ function money(value) {
   })} MXN`;
 }
 
+function splitAliases(value) {
+  if (Array.isArray(value)) return value.map(cleanText).filter(Boolean);
+
+  return cleanText(value)
+    .split(/[,;|\n]/)
+    .map(cleanText)
+    .filter(Boolean);
+}
+
+function uniqueNormalizedList(values) {
+  const seen = new Set();
+  const result = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+function buildControlledServiceAliases(service) {
+  const name = normalizeText(service?.name);
+  const category = normalizeText(service?.category);
+  const group = normalizeText(service?.bot_service_group);
+  const keywords = normalizeText(service?.bot_keywords);
+  const text = `${name} ${category} ${group} ${keywords}`;
+  const aliases = [
+    service?.name,
+    service?.category,
+    ...splitAliases(service?.bot_keywords),
+    ...splitAliases(service?.bot_service_group),
+    ...splitAliases(service?.aliases),
+  ];
+
+  const mentionsGelSemi =
+    text.includes("gelish") ||
+    text.includes("gel semi") ||
+    text.includes("semipermanente") ||
+    text.includes("semi permanente");
+  const isNaturalNail =
+    text.includes("una natural") ||
+    text.includes("uña natural") ||
+    text.includes("servicios sobre una natural");
+
+  if (mentionsGelSemi && isNaturalNail) {
+    aliases.push(
+      "gel en uña natural",
+      "gel en una natural",
+      "gel uña natural",
+      "gel una natural",
+      "gelish uña natural",
+      "gelish una natural",
+      "gel semipermanente uña natural",
+      "gel semi permanente uña natural",
+      "aplicación de gel uña natural",
+      "aplicacion de gel una natural"
+    );
+  }
+
+  return uniqueNormalizedList(aliases);
+}
+
+function normalizeServiceForDraftCatalog(service) {
+  const price = Number(service?.base_price ?? service?.price ?? 0);
+
+  return {
+    id: cleanText(service?.id),
+    name: cleanText(service?.name),
+    category: cleanText(service?.category),
+    price: Number.isFinite(price) ? price : null,
+    active: service?.active !== false,
+    bot_active: service?.bot_active !== false,
+    aliases: buildControlledServiceAliases(service),
+    searchText: serviceSearchText(service),
+  };
+}
+
+function normalizeDraftServiceCatalog(services = []) {
+  return safeArray(services)
+    .map(normalizeServiceForDraftCatalog)
+    .filter(
+      (service) => service.name && service.active && service.bot_active
+    );
+}
+
 function serviceSearchText(service) {
   return normalizeText(
     [
@@ -239,33 +357,80 @@ function serviceSearchText(service) {
   );
 }
 
-function findMentionedService(message, services = []) {
+function relevantPriceQueryTokens(message) {
   const normalized = normalizeText(message);
-  if (!normalized) return null;
+  if (!normalized) return [];
 
-  const words = normalized
+  return normalized
     .split(" ")
     .filter(
       (word) =>
-        word.length >= 4 &&
-        ![
-          "quiero",
-          "saber",
-          "precio",
-          "cuanto",
-          "cuesta",
-          "costo",
-          "vale",
-          "sale",
-        ].includes(word)
+        word.length >= 3 &&
+        !PRICE_QUERY_STOPWORDS.has(word)
     );
+}
 
-  return safeArray(services).find((service) => {
-    const text = serviceSearchText(service);
-    const name = normalizeText(service?.name);
-    if (name && normalized.includes(name)) return true;
-    return words.length > 0 && words.every((word) => text.includes(word));
-  });
+function uniqueServicesByIdOrName(services = []) {
+  return Array.from(
+    new Map(
+      services.map((service) => [
+        service.id || `${service.name}|${service.category}|${service.price}`,
+        service,
+      ])
+    ).values()
+  );
+}
+
+function serviceMatchesPriceQuery(service, normalizedMessage, tokens) {
+  if (!service?.searchText) return false;
+
+  const name = normalizeText(service.name);
+  if (name && normalizedMessage.includes(name)) return true;
+
+  if (
+    service.aliases.some(
+      (alias) =>
+        normalizedMessage.includes(alias) ||
+        (alias.length >= 8 && alias.includes(normalizedMessage))
+    )
+  ) {
+    return true;
+  }
+
+  if (tokens.length === 0) return false;
+  return tokens.every((word) => service.searchText.includes(word));
+}
+
+function findMentionedServices(message, services = []) {
+  const normalized = normalizeText(message);
+  if (!normalized) return [];
+  const tokens = relevantPriceQueryTokens(message);
+  const catalog = normalizeDraftServiceCatalog(services);
+
+  return uniqueServicesByIdOrName(
+    catalog.filter((service) =>
+      serviceMatchesPriceQuery(service, normalized, tokens)
+    )
+  );
+}
+
+function resolvePriceQuestionService(message, services = []) {
+  const matches = findMentionedServices(message, services);
+
+  if (matches.length === 0) {
+    return { status: "none", service: null, matches };
+  }
+
+  if (matches.length > 1) {
+    return { status: "ambiguous", service: null, matches };
+  }
+
+  const service = matches[0];
+  const formattedPrice = money(service.price);
+
+  return formattedPrice
+    ? { status: "unique", service, formattedPrice, matches }
+    : { status: "invalid_price", service, matches };
 }
 
 function shouldRequireHumanReviewForMessage(message) {
@@ -331,14 +496,22 @@ export function generateSafeDraftReply({
   }
 
   if (isPriceQuestion(body)) {
-    const service = findMentionedService(body, services);
-    const formattedPrice = money(service?.base_price || service?.price);
+    const priceMatch = resolvePriceQuestionService(body, services);
 
-    if (service && formattedPrice) {
+    if (priceMatch.status === "unique") {
       return {
-        body: `El precio configurado de ${service.name} es ${formattedPrice}. Si necesitas revisar detalles o combinarlo con otro servicio, una persona del equipo puede confirmarlo antes de agendar.`,
+        body: `El precio configurado de ${priceMatch.service.name} es ${priceMatch.formattedPrice}. Si necesitas revisar detalles o combinarlo con otro servicio, una persona del equipo puede confirmarlo antes de agendar.`,
         requiresHumanReview: false,
         reason: "configured_service_price",
+      };
+    }
+
+    if (priceMatch.status === "ambiguous") {
+      return {
+        body:
+          "Encontré más de un servicio que podría coincidir. Para darte el precio correcto necesito que una persona del equipo confirme el servicio exacto antes de responder.",
+        requiresHumanReview: true,
+        reason: "price_ambiguous_service",
       };
     }
 
@@ -437,7 +610,7 @@ export async function loadBotDraftContext({ supabase, conversationId } = {}) {
     supabase
       .from("services")
       .select(
-        "id,name,category,base_price,description,bot_description,bot_keywords,bot_service_group,active,bot_active"
+        "id,name,category,base_price,bot_keywords,bot_service_group,active,bot_active"
       )
       .eq("active", true)
       .limit(80),
@@ -468,9 +641,7 @@ export async function loadBotDraftContext({ supabase, conversationId } = {}) {
 
   return {
     recentMessages: safeArray(messagesResult.data).reverse(),
-    services: safeArray(servicesResult.data).filter(
-      (service) => service.active !== false && service.bot_active !== false
-    ),
+    services: normalizeDraftServiceCatalog(servicesResult.data),
     settings: settingsResult.data || {},
     faqs: safeArray(faqsResult.data).filter((faq) => faq.active !== false),
     knowledgeItems: safeArray(knowledgeResult.data).filter(
