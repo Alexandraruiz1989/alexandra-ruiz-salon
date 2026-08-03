@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata = {
   title: "Alexandra Ruiz Salón",
-  description: "Calculadora y sitio web de Alexandra Ruiz Salón Spa",
+  description: "Sitio web, agenda y servicios de Alexandra Ruiz Salón",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,

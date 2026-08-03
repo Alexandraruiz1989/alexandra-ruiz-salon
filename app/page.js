@@ -137,7 +137,7 @@ export default function Home() {
           <a href="#inicio" className="flex items-center">
   <img
     src="/logo-alexandra-ruiz.png"
-    alt="Alexandra Ruiz Salón Spa"
+    alt="Alexandra Ruiz Salón"
     className="h-14 w-auto md:h-16"
   />
 </a>
@@ -323,8 +323,22 @@ export default function Home() {
 
       <footer className="border-t border-[#ead2cf] bg-[#f8ebe8] px-5 py-10 text-center text-[#6d5a58]">
         <div className="text-3xl font-light tracking-[0.12em] text-[#bd7b83]">Alexandra Ruiz</div>
-        <p className="mt-2 text-sm uppercase tracking-[0.35em]">Salón Spa</p>
+        <p className="mt-2 text-sm uppercase tracking-[0.35em]">Salón</p>
         <p className="mt-5">El lujo de consentirte en un espacio muy tuyo</p>
+        <nav
+          aria-label="Enlaces legales"
+          className="mx-auto mt-6 flex max-w-3xl flex-wrap justify-center gap-x-6 gap-y-3 text-sm"
+        >
+          <a href="/politica-de-privacidad" className="hover:text-[#bd7b83]">
+            Política de privacidad
+          </a>
+          <a href="/terminos-y-condiciones" className="hover:text-[#bd7b83]">
+            Términos y condiciones
+          </a>
+          <a href="/eliminacion-de-datos" className="hover:text-[#bd7b83]">
+            Eliminación de datos
+          </a>
+        </nav>
         <p className="mt-6 text-sm">© 2026 Alexandra Ruiz Salón. Todos los derechos reservados.</p>
       </footer>
 
