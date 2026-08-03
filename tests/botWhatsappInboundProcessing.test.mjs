@@ -284,6 +284,20 @@ function makeDraftOrchestrator(supabase, options = {}) {
   });
 }
 
+function gelNaturalService(overrides = {}) {
+  return {
+    id: "service_gel_natural",
+    name: "Aplicación de Gel Semi Permanente Manos",
+    category: "Servicios sobre Uña Natural",
+    base_price: 173,
+    active: true,
+    bot_active: true,
+    bot_keywords: "gel en uña natural; gelish uña natural",
+    bot_service_group: "uña natural",
+    ...overrides,
+  };
+}
+
 function seededDraftStore(options = {}) {
   return fakeSupabase({
     bot_conversations: [
@@ -548,6 +562,70 @@ test("conversacion con handoff conserva handoff y deja borrador para revision", 
   assert.equal(supabase.store.bot_conversations[0].bot_enabled, false);
 });
 
+test("conversacion historica insegura conserva estado pero borrador informativo clasifica independiente", async () => {
+  const supabase = fakeSupabase({
+    bot_conversations: [
+      {
+        id: "conversation_1",
+        client_phone: "5219991234567",
+        provider: "meta_whatsapp",
+        provider_conversation_key: testProviderConversationKey,
+        bot_enabled: true,
+        handoff_to_human: false,
+        status: "abierta",
+        requires_human_review: false,
+        unread_count: 0,
+      },
+    ],
+  });
+
+  await processMessage(supabase, {
+    env: draftEnv(),
+    payload: {
+      message: {
+        text: { body: "Cuanto cuesta el gel en uña natural?" },
+      },
+    },
+    draftOrchestrator: makeDraftOrchestrator(supabase, {
+      services: [gelNaturalService({ base_price: 160 })],
+    }),
+  });
+
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, true);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, false);
+  assert.equal(supabase.store.bot_conversations[0].status, "abierta");
+  assert.equal(supabase.store.bot_response_drafts.length, 1);
+  assert.equal(
+    supabase.store.bot_response_drafts[0].requires_human_review,
+    false
+  );
+  assert.match(supabase.store.bot_response_drafts[0].body, /\$160 MXN/);
+});
+
+test("conversacion nueva segura conserva handoff humano y genera borrador informativo", async () => {
+  const supabase = fakeSupabase();
+
+  await processMessage(supabase, {
+    env: draftEnv(),
+    payload: {
+      message: {
+        text: { body: "Cuanto cuesta el gel en uña natural?" },
+      },
+    },
+    draftOrchestrator: makeDraftOrchestrator(supabase, {
+      services: [gelNaturalService({ base_price: 160 })],
+    }),
+  });
+
+  assert.equal(supabase.store.bot_conversations[0].bot_enabled, false);
+  assert.equal(supabase.store.bot_conversations[0].handoff_to_human, true);
+  assert.equal(supabase.store.bot_conversations[0].status, "human");
+  assert.equal(
+    supabase.store.bot_response_drafts[0].requires_human_review,
+    false
+  );
+});
+
 test("pregunta de precio usa precio existente y no inventa informacion", () => {
   const draft = generateSafeDraftReply({
     inboundMessage: {
@@ -566,6 +644,165 @@ test("pregunta de precio usa precio existente y no inventa informacion", () => {
   assert.equal(draft.requiresHumanReview, false);
   assert.match(draft.body, /Lifting de pestañas/);
   assert.match(draft.body, /\$450 MXN/);
+});
+
+test("precio de gel en una natural usa coincidencia unica del catalogo y no hardcodea importe", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Hola, cuanto cuesta el gel en una natural?",
+      message_type: "text",
+    },
+    services: [
+      gelNaturalService({ base_price: 173 }),
+      {
+        id: "service_gel_pies",
+        name: "Aplicación de Gel Semi Permanente Pies",
+        category: "Cuidado y Belleza de Pies",
+        base_price: 160,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel pies",
+      },
+      {
+        id: "service_rubber",
+        name: "Rubber Base",
+        category: "Servicios sobre Uña Natural",
+        base_price: 280,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Aplicación de Gel Semi Permanente Manos/);
+  assert.match(draft.body, /\$173 MXN/);
+  assert.doesNotMatch(draft.body, /\$160 MXN/);
+});
+
+test("precio de gel en uña natural normaliza acentos y mayusculas", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "¿CUÁNTO cuesta GEL EN UÑA NATURAL?",
+      message_type: "text",
+    },
+    services: [gelNaturalService({ base_price: 181 })],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /\$181 MXN/);
+});
+
+test("precio de gel generico queda ambiguo y no elige arbitrariamente", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta el gel?",
+      message_type: "text",
+    },
+    services: [
+      gelNaturalService({ base_price: 160 }),
+      {
+        id: "service_gel_pies",
+        name: "Aplicación de Gel Semi Permanente Pies",
+        category: "Pies",
+        base_price: 160,
+        active: true,
+        bot_active: true,
+      },
+      {
+        id: "service_gel_construccion",
+        name: "Gel de Construcción",
+        category: "Uñas",
+        base_price: 350,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$\d+/);
+  assert.match(draft.body, /más de un servicio/i);
+});
+
+test("dos servicios con el mismo alias no se eligen arbitrariamente", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel en uña natural?",
+      message_type: "text",
+    },
+    services: [
+      gelNaturalService({
+        id: "service_gel_natural_1",
+        base_price: 160,
+        bot_keywords: "gel en uña natural",
+      }),
+      gelNaturalService({
+        id: "service_gel_natural_2",
+        name: "Gel Semipermanente sobre Uña Natural",
+        base_price: 190,
+        bot_keywords: "gel en uña natural",
+      }),
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$160|\$190/);
+  assert.match(draft.body, /más de un servicio/i);
+});
+
+test("precio de servicio inexistente no inventa precio", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta el servicio lunar galactico?",
+      message_type: "text",
+    },
+    services: [gelNaturalService({ base_price: 160 })],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$\d+/);
+});
+
+test("servicio inactivo no se ofrece como disponible ni inventa precio", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta el gel en uña natural?",
+      message_type: "text",
+    },
+    services: [gelNaturalService({ base_price: 160, active: false })],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$160/);
+});
+
+test("servicio bot_active=false no se ofrece ni muestra precio", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta el gel en uña natural?",
+      message_type: "text",
+    },
+    services: [gelNaturalService({ base_price: 160, bot_active: false })],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$\d+/);
+});
+
+test("precio nulo, cero, negativo, texto invalido o NaN requiere revision humana", () => {
+  for (const invalidPrice of [null, 0, -10, "precio variable", Number.NaN]) {
+    const draft = generateSafeDraftReply({
+      inboundMessage: {
+        body: "Cuanto cuesta el gel en uña natural?",
+        message_type: "text",
+      },
+      services: [gelNaturalService({ base_price: invalidPrice })],
+    });
+
+    assert.equal(draft.requiresHumanReview, true);
+    assert.doesNotMatch(draft.body, /\$\d+/);
+  }
 });
 
 test("pregunta de precio sin precio configurado requiere revision humana", () => {
@@ -680,6 +917,41 @@ test("fallo del motor deja borrador failed sin salida, citas, pagos ni source bo
   assert.equal(
     supabase.store.bot_response_drafts[0].error_message,
     "No se pudo generar el borrador interno de forma segura."
+  );
+  assert.equal(
+    supabase.store.bot_messages.filter((message) => message.direction === "outgoing")
+      .length,
+    0
+  );
+});
+
+test("fallo del repositorio de catalogo deja evento processed y borrador failed sin salida", async () => {
+  const supabase = fakeSupabase();
+
+  const result = await processMessage(supabase, {
+    env: draftEnv(),
+    payload: {
+      message: {
+        text: { body: "Cuanto cuesta el gel en uña natural?" },
+      },
+    },
+    draftOrchestrator: makeDraftOrchestrator(supabase, {
+      contextProvider: async () => {
+        const error = new Error("catalog repository failed");
+        error.code = "draft_context_failed";
+        throw error;
+      },
+    }),
+  });
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.drafts.failed, 1);
+  assert.equal(supabase.store.bot_webhook_events[0].status, "processed");
+  assert.equal(supabase.store.bot_response_drafts.length, 1);
+  assert.equal(supabase.store.bot_response_drafts[0].status, "failed");
+  assert.equal(
+    supabase.store.bot_response_drafts[0].error_code,
+    "draft_context_failed"
   );
   assert.equal(
     supabase.store.bot_messages.filter((message) => message.direction === "outgoing")
@@ -949,11 +1221,16 @@ test("webhook_event_id ajeno se rechaza de forma controlada sin crear borrador",
 
 test("bandera apagada no consulta bot_response_drafts aunque la tabla no exista", async () => {
   let draftsTouched = false;
+  let servicesTouched = false;
   const supabase = {
     from(table) {
       if (table === "bot_response_drafts") {
         draftsTouched = true;
         throw new Error("draft_table_should_not_be_touched");
+      }
+      if (table === "services") {
+        servicesTouched = true;
+        throw new Error("services_should_not_be_touched");
       }
       throw new Error("unexpected_table_access");
     },
@@ -978,6 +1255,7 @@ test("bandera apagada no consulta bot_response_drafts aunque la tabla no exista"
 
   assert.equal(result.enabled, false);
   assert.equal(draftsTouched, false);
+  assert.equal(servicesTouched, false);
 });
 
 test("importar generador no requiere tabla, Meta, OpenAI ni efectos secundarios", () => {
