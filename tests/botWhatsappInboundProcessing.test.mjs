@@ -626,6 +626,42 @@ test("conversacion nueva segura conserva handoff humano y genera borrador inform
   );
 });
 
+test("evento local con precio actual del gel genera borrador exacto sin efectos externos", async () => {
+  const supabase = fakeSupabase();
+
+  const result = await processMessage(supabase, {
+    env: draftEnv(),
+    payload: {
+      message: {
+        text: {
+          body: "Hola, ¿cuál es el precio actual del gel en uña natural?",
+        },
+      },
+    },
+    draftOrchestrator: makeDraftOrchestrator(supabase, {
+      services: [gelNaturalService({ base_price: 160 })],
+    }),
+  });
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.drafts.generated, 1);
+  assert.equal(supabase.store.bot_messages.length, 1);
+  assert.equal(supabase.store.bot_messages[0].direction, "incoming");
+  assert.equal(supabase.store.bot_response_drafts.length, 1);
+  assert.equal(supabase.store.bot_response_drafts[0].status, "generated");
+  assert.equal(supabase.store.bot_response_drafts[0].requires_human_review, false);
+  assert.match(supabase.store.bot_response_drafts[0].body, /\$160 MXN/);
+  assert.match(
+    supabase.store.bot_response_drafts[0].body,
+    /Aplicación de Gel Semi Permanente Manos/
+  );
+  assert.equal(
+    supabase.store.bot_messages.filter((message) => message.direction === "outgoing")
+      .length,
+    0
+  );
+});
+
 test("pregunta de precio usa precio existente y no inventa informacion", () => {
   const draft = generateSafeDraftReply({
     inboundMessage: {
@@ -846,7 +882,7 @@ test("precedencia: alias explicito exacto unico gana sobre parciales", () => {
   assert.match(draft.body, /\$244 MXN/);
 });
 
-test("precedencia: alias derivado por keyword y grupo no es alias explicito", () => {
+test("precedencia: coincidencia estructurada usa el contexto del catálogo sin alias hardcodeado", () => {
   const services = [
     gelNaturalService({
       id: "derived_hands",
@@ -874,8 +910,10 @@ test("precedencia: alias derivado por keyword y grupo no es alias explicito", ()
     services,
   });
 
-  assert.equal(draft.requiresHumanReview, true);
-  assert.doesNotMatch(draft.body, /\$211|\$233/);
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Aplicación de Gel Semi Permanente Manos/);
+  assert.match(draft.body, /\$211 MXN/);
+  assert.doesNotMatch(draft.body, /\$233/);
 });
 
 test("precedencia: coincidencia estructurada unica puede resolver sin alias exacto", () => {

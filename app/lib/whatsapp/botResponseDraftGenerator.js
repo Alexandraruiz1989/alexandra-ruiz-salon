@@ -22,30 +22,61 @@ const SAFE_ERROR_CODES = new Set([
 const SENSITIVE_TEXT_PATTERN =
   /\b(bearer|access[_-]?token|app\s*secret|x-hub-signature|authorization|service[_-]?role|jwt|payload\s*crudo|raw\s*payload)\b/i;
 
-const BUSINESS_PROFILE = {
-  name: "el negocio",
-  mainServices: [
-    "uñas manos y pies",
-    "manicure",
-    "pedicure",
-    "pedicure medicado",
-    "lifting de pestañas",
-    "planchado y depilación de cejas",
-    "extensiones de pestañas",
-    "keratina",
-    "botox capilar",
-    "cirugía capilar",
-  ],
-};
+const DEFAULT_BUSINESS_NAME = "el negocio";
 
-const SENSITIVE_REQUEST_PATTERNS = [
-  /\b(disponible|disponibilidad|horario|hora|espacio|agenda|agendar|cita|reservar|mañana|manana|hoy|sábado|sabado|fecha)\b/i,
-  /\b(reagendar|mover|cambiar|cancelar|cancela)\b/i,
-  /\b(pago|pagar|anticipo|deposito|depósito|transferencia|comprobante|tarjeta)\b/i,
-];
+const DRAFT_INTENTS = Object.freeze({
+  GREETING: "greeting",
+  SERVICE_INFORMATION: "service_information",
+  SERVICE_PRICE: "service_price",
+  SERVICE_COMPARISON: "service_comparison",
+  AVAILABILITY: "availability",
+  BOOKING: "booking",
+  RESCHEDULE: "reschedule",
+  CANCELLATION: "cancellation",
+  PAYMENT: "payment",
+  DEPOSIT: "deposit",
+  PAYMENT_RECEIPT: "payment_receipt",
+  PROMOTION: "promotion",
+  POLICY: "policy",
+  MULTIPLE_SERVICES: "multiple_services",
+  UNSUPPORTED_MEDIA: "unsupported_media",
+  AMBIGUOUS: "ambiguous",
+  UNKNOWN: "unknown",
+});
+
+const SERVICE_RESOLUTION_STATUSES = Object.freeze({
+  MATCHED: "matched",
+  AMBIGUOUS: "ambiguous",
+  NOT_FOUND: "not_found",
+  INACTIVE: "inactive",
+  INVALID_PRICE: "invalid_price",
+});
+
+const NO_AUTOMATIC_ACTION_INTENTS = new Set([
+  DRAFT_INTENTS.AVAILABILITY,
+  DRAFT_INTENTS.BOOKING,
+  DRAFT_INTENTS.RESCHEDULE,
+  DRAFT_INTENTS.CANCELLATION,
+  DRAFT_INTENTS.SERVICE_COMPARISON,
+  DRAFT_INTENTS.PAYMENT,
+  DRAFT_INTENTS.DEPOSIT,
+  DRAFT_INTENTS.PAYMENT_RECEIPT,
+  DRAFT_INTENTS.PROMOTION,
+  DRAFT_INTENTS.POLICY,
+  DRAFT_INTENTS.MULTIPLE_SERVICES,
+  DRAFT_INTENTS.AMBIGUOUS,
+  DRAFT_INTENTS.UNKNOWN,
+]);
 
 const PRICE_PATTERNS = [
-  /\b(precio|cuesta|costo|vale|sale|cuánto|cuanto)\b/i,
+  /\b(precio|precios|costo|costos)\b/i,
+  /\b(precio|costo)\s+(actual|vigente)\b/i,
+  /\bcu[aá]nto\s+(cuesta|sale|vale)\b/i,
+  /\bcu[aá]l\s+es\s+(el\s+)?(precio|costo)\b/i,
+  /\bqu[eé]\s+(precio|costo)\s+tiene\b/i,
+  /\bme\s+(confirmas|dices|puedes\s+confirmar|puedes\s+decir)\s+(el\s+)?(precio|costo)\b/i,
+  /\bquisiera\s+saber\s+(el\s+)?(precio|costo)\b/i,
+  /\bquiero\s+saber\s+(el\s+)?(precio|costo)\b/i,
 ];
 const PRICE_QUERY_STOPWORDS = new Set([
   "buen",
@@ -74,43 +105,53 @@ const PRICE_QUERY_STOPWORDS = new Set([
   "que",
   "sale",
   "saber",
+  "servicio",
+  "servicios",
   "tardes",
   "vale",
 ]);
-const PRICE_SUBJECT_STOPWORDS = new Set([
-  "buen",
-  "buena",
-  "buenas",
-  "buenos",
-  "confirmame",
-  "confirmar",
-  "confirmas",
-  "confirma",
-  "cuanto",
-  "cuesta",
-  "costo",
-  "decir",
-  "del",
-  "dias",
-  "el",
-  "favor",
-  "hola",
-  "la",
-  "las",
-  "los",
-  "me",
-  "podrias",
-  "por",
-  "precio",
-  "puede",
-  "pueden",
-  "puedes",
-  "que",
-  "sale",
-  "saber",
-  "tardes",
-  "vale",
-]);
+const SERVICE_QUERY_TRAILING_PATTERNS = [
+  /\bpor\s+favor\b/g,
+  /\bporfa\b/g,
+  /\bgracias\b/g,
+  /\bme\s+ayudas\b/g,
+  /\bpuedes\s+ayudarme\b/g,
+  /\bme\s+apoyas\b/g,
+];
+const PRICE_SERVICE_PREFIX_PATTERNS = [
+  /^(?:hola|buenos dias|buenas tardes|buenas noches|buenas)\s*,?\s*/i,
+  /^(?:me\s+podrias|me\s+podrian|me\s+puedes|me\s+pueden|podrias|podrian|puedes|pueden)\s+(?:confirmar|decir|dar|compartir)\s+(?:el\s+)?(?:precio|costo)(?:\s+(?:actual|vigente))?(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+  /^(?:me\s+confirmas|me\s+dices)\s+(?:el\s+)?(?:precio|costo)(?:\s+(?:actual|vigente))?(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+  /^(?:quisiera|quiero|queria|me\s+gustaria)\s+(?:saber|preguntar)\s+(?:el\s+)?(?:precio|costo)(?:\s+(?:actual|vigente))?(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+  /^(?:cual|cuál)\s+es\s+(?:el\s+)?(?:precio|costo)(?:\s+(?:actual|vigente))?(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+  /^(?:que|qué)\s+(?:precio|costo)\s+tiene(?:\s+(?:el|la|los|las|un|una|unos|unas))?\s+/i,
+  /^(?:cuanto|cuánto)\s+(?:cuesta|sale|vale)(?:\s+(?:el|la|los|las|un|una|unos|unas))?\s+/i,
+  /^(?:precio|precios|costo|costos)(?:\s+(?:actual|vigente))?(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+  /^(?:actual|vigente)(?:\s+(?:de|del|para|por|sobre|en))?\s+/i,
+];
+const SERVICE_INFORMATION_PREFIX_PATTERNS = [
+  /^(?:hola|buenos dias|buenas tardes|buenas noches|buenas)\s*,?\s*/i,
+  /^(?:que|qué)\s+(?:incluye|es)(?:\s+(?:el|la|los|las|un|una|unos|unas))?\s+/i,
+  /^(?:cuanto|cuánto)\s+dura(?:\s+(?:el|la|los|las|un|una|unos|unas))?\s+/i,
+  /^(?:me\s+podrias|me\s+podrian|me\s+puedes|me\s+pueden|podrias|podrian|puedes|pueden)\s+(?:explicar|contar|decir|dar|compartir)\s+(?:informacion\s+)?(?:de|del|sobre|acerca\s+de|para)?\s*/i,
+  /^(?:quiero|quisiera|queria|me\s+gustaria)\s+(?:informacion|saber|preguntar)\s+(?:de|del|sobre|acerca\s+de|para)?\s*/i,
+  /^(?:informacion|info|detalles)\s+(?:de|del|sobre|acerca\s+de|para)?\s*/i,
+];
+const LEADING_SERVICE_ARTICLES_PATTERN = /^(?:el|la|los|las|un|una|unos|unas)\s+/i;
+
+const INTENT_PATTERNS = Object.freeze({
+  cancellation: /\b(cancelar|cancela|cancelacion|cancelación)\b/i,
+  reschedule: /\b(reagendar|reagenda|mover|cambiar)\b.*\b(cita|horario|hora|fecha)\b|\b(cambiar|mover)\s+(mi\s+)?cita\b/i,
+  booking: /\b(agendar|agenda|reservar|reserva|hacer\s+cita|programar\s+cita|quiero\s+cita|apartarme)\b/i,
+  availability: /\b(disponible|disponibilidad|horario|horarios|hora|espacio|cupo|cupos|fecha|manana|mañana|hoy|sabado|sábado|domingo|lunes|martes|miercoles|miércoles|jueves|viernes)\b/i,
+  paymentReceipt: /\b(comprobante|recibo|ticket|factura)\b/i,
+  deposit: /\b(anticipo|deposito|depósito|apartado|sena|seña)\b/i,
+  payment: /\b(pagar|pago|pagos|transferencia|tarjeta|efectivo|liquidar|saldo)\b/i,
+  promotion: /\b(promo|promocion|promoción|promociones|descuento|descuentos|oferta|ofertas|paquete|paquetes)\b/i,
+  policy: /\b(politica|política|garantia|garantía|reembolso|devolucion|devolución|tolerancia|terminos|términos|condiciones)\b/i,
+  comparison: /\b(diferencia|comparar|comparacion|comparación|mejor|conviene|recomiendas|recomiendan)\b/i,
+  serviceInfo: /\b(informacion|información|info|detalles|incluye|dura|duracion|duración|como\s+es|qué\s+es|que\s+es)\b/i,
+});
 const PRICE_MATCH_LEVELS = {
   NAME_EXACT: "name_exact",
   EXPLICIT_ALIAS_EXACT: "explicit_alias_exact",
@@ -317,48 +358,75 @@ function uniqueNormalizedList(values) {
   return result;
 }
 
+function applyPrefixCleanup(value, patterns = []) {
+  let next = normalizeText(value);
+  let changed = true;
+  let attempts = 0;
+
+  while (changed && attempts < 8) {
+    changed = false;
+    attempts += 1;
+
+    for (const pattern of patterns) {
+      const cleaned = next.replace(pattern, "").trim();
+      if (cleaned !== next) {
+        next = cleaned;
+        changed = true;
+      }
+    }
+  }
+
+  return next;
+}
+
+function stripServiceQueryTrailingNoise(value) {
+  let next = normalizeText(value);
+
+  for (const pattern of SERVICE_QUERY_TRAILING_PATTERNS) {
+    next = next.replace(pattern, " ").replace(/\s+/g, " ").trim();
+  }
+
+  return next.replace(LEADING_SERVICE_ARTICLES_PATTERN, "").trim();
+}
+
+function extractServiceQueryForIntent(message, intent = DRAFT_INTENTS.SERVICE_PRICE) {
+  const normalized = normalizeText(message);
+  if (!normalized) return "";
+
+  const patterns =
+    intent === DRAFT_INTENTS.SERVICE_PRICE
+      ? PRICE_SERVICE_PREFIX_PATTERNS
+      : SERVICE_INFORMATION_PREFIX_PATTERNS;
+
+  return stripServiceQueryTrailingNoise(applyPrefixCleanup(normalized, patterns));
+}
+
 function normalizePriceSubject(message) {
-  const words = normalizeText(message)
-    .split(" ")
-    .filter(Boolean)
-    .filter((word) => !PRICE_SUBJECT_STOPWORDS.has(word));
-
-  while (words[0] === "de") words.shift();
-
-  return words.join(" ");
+  return extractServiceQueryForIntent(message, DRAFT_INTENTS.SERVICE_PRICE);
 }
 
 function buildDerivedServiceAliases(service) {
-  const name = normalizeText(service?.name);
   const category = normalizeText(service?.category);
   const group = normalizeText(service?.bot_service_group);
-  const keywords = normalizeText(service?.bot_keywords);
-  const text = `${name} ${category} ${group} ${keywords}`;
-  const aliases = [];
+  const keywords = splitAliases(service?.bot_keywords);
+  const existingAliases = safeArray(service?.derivedAliases);
+  const aliases = [...existingAliases];
 
-  const mentionsGelSemi =
-    text.includes("gelish") ||
-    text.includes("gel semi") ||
-    text.includes("semipermanente") ||
-    text.includes("semi permanente");
-  const isNaturalNail =
-    text.includes("una natural") ||
-    text.includes("uña natural") ||
-    text.includes("servicios sobre una natural");
+  for (const keyword of keywords) {
+    const normalizedKeyword = normalizeText(keyword);
+    if (!normalizedKeyword || normalizedKeyword.length < 3) continue;
 
-  if (mentionsGelSemi && isNaturalNail) {
-    aliases.push(
-      "gel en uña natural",
-      "gel en una natural",
-      "gel uña natural",
-      "gel una natural",
-      "gelish uña natural",
-      "gelish una natural",
-      "gel semipermanente uña natural",
-      "gel semi permanente uña natural",
-      "aplicación de gel uña natural",
-      "aplicacion de gel una natural"
-    );
+    if (group) {
+      aliases.push(
+        `${normalizedKeyword} ${group}`,
+        `${normalizedKeyword} en ${group}`,
+        `${normalizedKeyword} de ${group}`
+      );
+    }
+
+    if (category) {
+      aliases.push(`${normalizedKeyword} ${category}`);
+    }
   }
 
   return uniqueNormalizedList(aliases);
@@ -366,6 +434,7 @@ function buildDerivedServiceAliases(service) {
 
 function buildExplicitServiceAliases(service) {
   return uniqueNormalizedList([
+    ...safeArray(service?.explicitAliases),
     ...splitAliases(service?.bot_keywords),
     ...splitAliases(service?.aliases),
   ]);
@@ -373,6 +442,7 @@ function buildExplicitServiceAliases(service) {
 
 function buildPartialServiceAliases(service) {
   return uniqueNormalizedList([
+    ...safeArray(service?.partialAliases),
     service?.category,
     ...splitAliases(service?.bot_service_group),
   ]);
@@ -385,13 +455,15 @@ function normalizeServiceForDraftCatalog(service) {
     id: cleanText(service?.id),
     name: cleanText(service?.name),
     category: cleanText(service?.category),
+    bot_keywords: cleanText(service?.bot_keywords),
+    bot_service_group: cleanText(service?.bot_service_group),
     price: Number.isFinite(price) ? price : null,
     active: service?.active !== false,
     bot_active: service?.bot_active !== false,
     explicitAliases: buildExplicitServiceAliases(service),
     derivedAliases: buildDerivedServiceAliases(service),
     partialAliases: buildPartialServiceAliases(service),
-    searchText: serviceSearchText(service),
+    searchText: normalizeText(service?.searchText) || serviceSearchText(service),
   };
 }
 
@@ -406,6 +478,9 @@ function serviceSearchText(service) {
     [
       service?.name,
       service?.category,
+      ...(Array.isArray(service?.explicitAliases) ? service.explicitAliases : []),
+      ...(Array.isArray(service?.derivedAliases) ? service.derivedAliases : []),
+      ...(Array.isArray(service?.partialAliases) ? service.partialAliases : []),
       service?.bot_keywords,
       service?.bot_service_group,
       service?.bot_description,
@@ -591,8 +666,8 @@ function findMentionedServices(message, services = []) {
   return resolution.matches || [];
 }
 
-function buildPriceMatchResolution(message, services = []) {
-  const subject = normalizePriceSubject(message);
+function buildServiceMatchResolution(serviceQuery, services = []) {
+  const subject = stripServiceQueryTrailingNoise(serviceQuery);
   if (!subject) {
     return { resolution: "none", service: null, matches: [], level: null };
   }
@@ -632,6 +707,10 @@ function buildPriceMatchResolution(message, services = []) {
   return { resolution: "none", service: null, matches: [], level: null };
 }
 
+function buildPriceMatchResolution(message, services = []) {
+  return buildServiceMatchResolution(normalizePriceSubject(message), services);
+}
+
 function resolvePriceQuestionService(message, services = []) {
   const resolution = buildPriceMatchResolution(message, services);
   const matches = resolution.matches || [];
@@ -656,8 +735,60 @@ function resolvePriceQuestionService(message, services = []) {
     : { status: "invalid_price", service, matches };
 }
 
-function shouldRequireHumanReviewForMessage(message) {
-  return SENSITIVE_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+function mapServiceResolution({ serviceQuery, services = [], needsPrice = false }) {
+  const resolution = buildServiceMatchResolution(serviceQuery, services);
+  const matches = resolution.matches || [];
+
+  if (resolution.resolution === "none") {
+    return {
+      status: SERVICE_RESOLUTION_STATUSES.NOT_FOUND,
+      service: null,
+      matches,
+      level: resolution.level || null,
+    };
+  }
+
+  if (
+    resolution.resolution === "ambiguous" ||
+    resolution.resolution === "partial"
+  ) {
+    return {
+      status: SERVICE_RESOLUTION_STATUSES.AMBIGUOUS,
+      service: null,
+      matches,
+      level: resolution.level || null,
+    };
+  }
+
+  if (resolution.resolution === "inactive_exact_match") {
+    return {
+      status: SERVICE_RESOLUTION_STATUSES.INACTIVE,
+      service: null,
+      matches,
+      level: resolution.level || null,
+    };
+  }
+
+  const service = resolution.service;
+  const formattedPrice = money(service?.price);
+
+  if (needsPrice && !formattedPrice) {
+    return {
+      status: SERVICE_RESOLUTION_STATUSES.INVALID_PRICE,
+      service,
+      matches,
+      level: resolution.level || null,
+      formattedPrice: null,
+    };
+  }
+
+  return {
+    status: SERVICE_RESOLUTION_STATUSES.MATCHED,
+    service,
+    matches,
+    level: resolution.level || null,
+    formattedPrice,
+  };
 }
 
 function isPriceQuestion(message) {
@@ -671,6 +802,359 @@ function buildFallbackDraft() {
     requiresHumanReview: true,
     reason: "general_review_required",
   };
+}
+
+function hasPattern(pattern, value) {
+  return pattern.test(value);
+}
+
+function isGreetingOnly(normalized) {
+  if (!normalized) return false;
+  return /^(hola|buenos dias|buenas tardes|buenas noches|buenas|hello|hi)(\s+(gracias|que tal|como estan|como estas))*$/.test(
+    normalized
+  );
+}
+
+function detectDraftIntent(body) {
+  const normalized = normalizeText(body);
+  if (!normalized) return DRAFT_INTENTS.UNKNOWN;
+
+  const hasPrice = isPriceQuestion(body);
+  const hasBooking =
+    hasPattern(INTENT_PATTERNS.booking, body) ||
+    hasPattern(INTENT_PATTERNS.availability, body);
+
+  if (hasPrice && hasBooking) return DRAFT_INTENTS.AMBIGUOUS;
+  if (hasPattern(INTENT_PATTERNS.cancellation, body)) return DRAFT_INTENTS.CANCELLATION;
+  if (hasPattern(INTENT_PATTERNS.reschedule, body)) return DRAFT_INTENTS.RESCHEDULE;
+  if (hasPattern(INTENT_PATTERNS.paymentReceipt, body)) return DRAFT_INTENTS.PAYMENT_RECEIPT;
+  if (hasPattern(INTENT_PATTERNS.deposit, body)) return DRAFT_INTENTS.DEPOSIT;
+  if (hasPattern(INTENT_PATTERNS.payment, body)) return DRAFT_INTENTS.PAYMENT;
+  if (hasPattern(INTENT_PATTERNS.promotion, body)) return DRAFT_INTENTS.PROMOTION;
+  if (hasPattern(INTENT_PATTERNS.policy, body)) return DRAFT_INTENTS.POLICY;
+  if (hasPattern(INTENT_PATTERNS.comparison, body)) return DRAFT_INTENTS.SERVICE_COMPARISON;
+  if (hasPrice) return DRAFT_INTENTS.SERVICE_PRICE;
+  if (hasPattern(INTENT_PATTERNS.booking, body)) return DRAFT_INTENTS.BOOKING;
+  if (hasPattern(INTENT_PATTERNS.availability, body)) return DRAFT_INTENTS.AVAILABILITY;
+  if (hasPattern(INTENT_PATTERNS.serviceInfo, body)) return DRAFT_INTENTS.SERVICE_INFORMATION;
+  if (isGreetingOnly(normalized)) return DRAFT_INTENTS.GREETING;
+
+  return DRAFT_INTENTS.UNKNOWN;
+}
+
+function shouldResolveService(intent) {
+  return [
+    DRAFT_INTENTS.SERVICE_PRICE,
+    DRAFT_INTENTS.SERVICE_INFORMATION,
+    DRAFT_INTENTS.SERVICE_COMPARISON,
+  ].includes(intent);
+}
+
+function hasMultipleServiceMarkers(serviceQuery) {
+  return /\b(y|tambien|también|ademas|además|con|mas|más)\b/i.test(
+    serviceQuery
+  );
+}
+
+function publicServiceResolution(resolution) {
+  return {
+    status: resolution.status,
+    level: resolution.level || null,
+    matches_count: safeArray(resolution.matches).length,
+    service:
+      resolution.service?.name
+        ? {
+            name: resolution.service.name,
+            category: resolution.service.category || null,
+            price: resolution.service.price ?? null,
+          }
+        : null,
+  };
+}
+
+function determineReviewReason({ intent, serviceResolution }) {
+  if (NO_AUTOMATIC_ACTION_INTENTS.has(intent)) {
+    return "intent_requires_human_review";
+  }
+
+  if (intent === DRAFT_INTENTS.SERVICE_PRICE) {
+    if (serviceResolution.status === SERVICE_RESOLUTION_STATUSES.MATCHED) {
+      return "configured_service_price";
+    }
+    if (serviceResolution.status === SERVICE_RESOLUTION_STATUSES.AMBIGUOUS) {
+      return "price_ambiguous_service";
+    }
+    if (serviceResolution.status === SERVICE_RESOLUTION_STATUSES.INACTIVE) {
+      return "price_inactive_service";
+    }
+    if (serviceResolution.status === SERVICE_RESOLUTION_STATUSES.INVALID_PRICE) {
+      return "price_invalid_service";
+    }
+    return "price_service_not_found";
+  }
+
+  if (intent === DRAFT_INTENTS.UNSUPPORTED_MEDIA) return "non_textual_message";
+  if (intent === DRAFT_INTENTS.UNKNOWN) return "general_review_required";
+  return "safe_information_request";
+}
+
+export function analyzeDraftRequest({
+  inboundMessage = {},
+  services = [],
+} = {}) {
+  const body = cleanText(inboundMessage.body);
+  const messageType = cleanText(inboundMessage.message_type || inboundMessage.messageType);
+
+  if (messageType && messageType !== "text") {
+    return {
+      intent: DRAFT_INTENTS.UNSUPPORTED_MEDIA,
+      normalized_query: normalizeText(body),
+      service_query: "",
+      service_resolution: {
+        status: SERVICE_RESOLUTION_STATUSES.NOT_FOUND,
+        service: null,
+        matches_count: 0,
+        level: null,
+      },
+      confidence: "high",
+      requires_human_review: true,
+      reason: "non_textual_message",
+      response_data: {},
+    };
+  }
+
+  if (!body) {
+    return {
+      intent: DRAFT_INTENTS.UNKNOWN,
+      normalized_query: "",
+      service_query: "",
+      service_resolution: {
+        status: SERVICE_RESOLUTION_STATUSES.NOT_FOUND,
+        service: null,
+        matches_count: 0,
+        level: null,
+      },
+      confidence: "low",
+      requires_human_review: true,
+      reason: "empty_text",
+      response_data: {},
+    };
+  }
+
+  const normalizedQuery = normalizeText(body);
+  let intent = detectDraftIntent(body);
+  let serviceQuery = "";
+  let serviceResolution = {
+    status: SERVICE_RESOLUTION_STATUSES.NOT_FOUND,
+    service: null,
+    matches: [],
+    level: null,
+    formattedPrice: null,
+  };
+
+  if (shouldResolveService(intent)) {
+    serviceQuery = extractServiceQueryForIntent(body, intent);
+    serviceResolution = mapServiceResolution({
+      serviceQuery,
+      services,
+      needsPrice: intent === DRAFT_INTENTS.SERVICE_PRICE,
+    });
+
+    if (
+      intent === DRAFT_INTENTS.SERVICE_PRICE &&
+      serviceResolution.status === SERVICE_RESOLUTION_STATUSES.AMBIGUOUS &&
+      hasMultipleServiceMarkers(serviceQuery)
+    ) {
+      intent = DRAFT_INTENTS.MULTIPLE_SERVICES;
+    }
+  }
+
+  const requiresHumanReview =
+    NO_AUTOMATIC_ACTION_INTENTS.has(intent) ||
+    (intent === DRAFT_INTENTS.SERVICE_PRICE &&
+      serviceResolution.status !== SERVICE_RESOLUTION_STATUSES.MATCHED) ||
+    intent === DRAFT_INTENTS.UNSUPPORTED_MEDIA ||
+    intent === DRAFT_INTENTS.UNKNOWN;
+  const reason = determineReviewReason({ intent, serviceResolution });
+  const responseData =
+    serviceResolution.status === SERVICE_RESOLUTION_STATUSES.MATCHED
+      ? {
+          service_name: serviceResolution.service.name,
+          service_category: serviceResolution.service.category || null,
+          base_price: serviceResolution.service.price ?? null,
+          formatted_price: serviceResolution.formattedPrice || null,
+        }
+      : {};
+
+  return {
+    intent,
+    normalized_query: normalizedQuery,
+    service_query: serviceQuery,
+    service_resolution: publicServiceResolution(serviceResolution),
+    confidence: requiresHumanReview ? "medium" : "high",
+    requires_human_review: requiresHumanReview,
+    reason,
+    response_data: responseData,
+  };
+}
+
+function configuredServicesSummary(services = []) {
+  const catalog = normalizeDraftServiceCatalog(services).filter(serviceHasValidBotOffer);
+  const names = uniqueNormalizedList(catalog.map((service) => service.name))
+    .map((name) => catalog.find((service) => normalizeText(service.name) === name)?.name)
+    .filter(Boolean)
+    .slice(0, 6);
+
+  if (names.length === 0) return "";
+  return names.join(", ");
+}
+
+function buildDraftFromAnalysis({ analysis, settings = {}, faqs = [], knowledgeItems = [], inboundBody = "" }) {
+  if (analysis.intent === DRAFT_INTENTS.UNSUPPORTED_MEDIA) {
+    return {
+      body:
+        "Se recibió un mensaje no textual. Requiere revisión humana antes de responder.",
+      requiresHumanReview: true,
+      reason: analysis.reason,
+    };
+  }
+
+  if (analysis.reason === "empty_text") {
+    return {
+      body:
+        "Se recibió un mensaje sin texto claro. Requiere revisión humana antes de responder.",
+      requiresHumanReview: true,
+      reason: analysis.reason,
+    };
+  }
+
+  if (
+    analysis.intent === DRAFT_INTENTS.SERVICE_PRICE &&
+    analysis.service_resolution.status === SERVICE_RESOLUTION_STATUSES.MATCHED
+  ) {
+    return {
+      body: `El precio configurado de ${analysis.response_data.service_name} es ${analysis.response_data.formatted_price}. Si necesitas revisar detalles o combinarlo con otro servicio, una persona del equipo puede confirmarlo.`,
+      requiresHumanReview: false,
+      reason: analysis.reason,
+      analysis,
+    };
+  }
+
+  if (
+    analysis.intent === DRAFT_INTENTS.SERVICE_PRICE &&
+    analysis.service_resolution.status === SERVICE_RESOLUTION_STATUSES.AMBIGUOUS
+  ) {
+    return {
+      body:
+        "Encontré más de un servicio que podría coincidir. Para darte el precio correcto necesito que una persona del equipo confirme el servicio exacto antes de responder.",
+      requiresHumanReview: true,
+      reason: analysis.reason,
+      analysis,
+    };
+  }
+
+  if (analysis.intent === DRAFT_INTENTS.SERVICE_PRICE) {
+    return {
+      body:
+        "Para darte un precio correcto necesito que una persona del equipo revise el servicio exacto. No debo inventar precios ni confirmar importes no configurados.",
+      requiresHumanReview: true,
+      reason: analysis.reason,
+      analysis,
+    };
+  }
+
+  if (NO_AUTOMATIC_ACTION_INTENTS.has(analysis.intent)) {
+    return {
+      body:
+        "Puedo sugerir apoyo, pero esta solicitud requiere revisión humana. No debo confirmar disponibilidad, horarios, citas, pagos ni cambios desde un borrador.",
+      requiresHumanReview: true,
+      reason: analysis.reason,
+      analysis,
+    };
+  }
+
+  const normalized = normalizeText(inboundBody);
+  const matchedFaq = safeArray(faqs).find((faq) => {
+    const haystack = normalizeText([faq.question, faq.keywords].filter(Boolean).join(" "));
+    return haystack && normalized.includes(haystack);
+  });
+
+  if (matchedFaq?.answer) {
+    return {
+      body: cleanText(matchedFaq.answer).slice(0, 900),
+      requiresHumanReview: false,
+      reason: "matched_faq",
+      analysis,
+    };
+  }
+
+  const matchedKnowledge = safeArray(knowledgeItems).find((item) => {
+    const haystack = normalizeText([item.title, item.keywords].filter(Boolean).join(" "));
+    return haystack && normalized.includes(haystack);
+  });
+
+  if (matchedKnowledge?.content) {
+    return {
+      body: cleanText(matchedKnowledge.content).slice(0, 900),
+      requiresHumanReview: false,
+      reason: "matched_knowledge",
+      analysis,
+    };
+  }
+
+  if (/\b(instagram|ig|redes)\b/i.test(inboundBody)) {
+    const instagram = getConfiguredInstagram(settings);
+    if (!instagram) {
+      return {
+        body:
+          "Una persona del equipo puede confirmarte las redes oficiales antes de responder.",
+        requiresHumanReview: true,
+        reason: "instagram_requires_review",
+        analysis,
+      };
+    }
+
+    return {
+      body: `Claro. En Instagram nos encuentras como ${instagram}.`,
+      requiresHumanReview: false,
+      reason: "instagram_info",
+      analysis,
+    };
+  }
+
+  if (/\b(servicios|hacen|ofrecen)\b/i.test(inboundBody)) {
+    const businessName = getConfiguredBusinessName(settings) || DEFAULT_BUSINESS_NAME;
+    const summary = configuredServicesSummary(analysis.catalogServices || []);
+    return {
+      body: summary
+        ? `${businessName} tiene servicios configurados como ${summary}. Para precios o detalles específicos, el equipo debe revisar el servicio exacto antes de confirmar.`
+        : `Una persona del equipo puede confirmarte los servicios disponibles de ${businessName}.`,
+      requiresHumanReview: !summary,
+      reason: summary ? "services_info" : "services_info_requires_review",
+      analysis,
+    };
+  }
+
+  if (analysis.intent === DRAFT_INTENTS.GREETING) {
+    return {
+      body:
+        "Gracias por escribir. Con gusto podemos ayudarte con información general del negocio.",
+      requiresHumanReview: false,
+      reason: "greeting",
+      analysis,
+    };
+  }
+
+  if (settings?.fallback_message) {
+    return {
+      body: cleanText(settings.fallback_message).slice(0, 900),
+      requiresHumanReview: true,
+      reason: "configured_fallback",
+      analysis,
+    };
+  }
+
+  return { ...buildFallbackDraft(), analysis };
 }
 
 function getConfiguredInstagram(settings = {}) {
@@ -708,127 +1192,14 @@ export function generateSafeDraftReply({
   faqs = [],
   knowledgeItems = [],
 } = {}) {
-  const body = cleanText(inboundMessage.body);
-  const messageType = cleanText(inboundMessage.message_type || inboundMessage.messageType);
-
-  if (messageType && messageType !== "text") {
-    return {
-      body:
-        "Se recibió un mensaje no textual. Requiere revisión humana antes de responder.",
-      requiresHumanReview: true,
-      reason: "non_textual_message",
-    };
-  }
-
-  if (!body) {
-    return {
-      body:
-        "Se recibió un mensaje sin texto claro. Requiere revisión humana antes de responder.",
-      requiresHumanReview: true,
-      reason: "empty_text",
-    };
-  }
-
-  if (shouldRequireHumanReviewForMessage(body)) {
-    return {
-      body:
-        "Puedo sugerir apoyo, pero esta solicitud requiere revisión humana. No debo confirmar disponibilidad, horarios, citas, pagos ni cambios desde un borrador.",
-      requiresHumanReview: true,
-      reason: "sensitive_or_booking_request",
-    };
-  }
-
-  if (isPriceQuestion(body)) {
-    const priceMatch = resolvePriceQuestionService(body, services);
-
-    if (priceMatch.status === "unique") {
-      return {
-        body: `El precio configurado de ${priceMatch.service.name} es ${priceMatch.formattedPrice}. Si necesitas revisar detalles o combinarlo con otro servicio, una persona del equipo puede confirmarlo antes de agendar.`,
-        requiresHumanReview: false,
-        reason: "configured_service_price",
-      };
-    }
-
-    if (priceMatch.status === "ambiguous") {
-      return {
-        body:
-          "Encontré más de un servicio que podría coincidir. Para darte el precio correcto necesito que una persona del equipo confirme el servicio exacto antes de responder.",
-        requiresHumanReview: true,
-        reason: "price_ambiguous_service",
-      };
-    }
-
-    return {
-      body:
-        "Para darte un precio correcto necesito que una persona del equipo revise el servicio exacto. No debo inventar precios ni confirmar importes no configurados.",
-      requiresHumanReview: true,
-      reason: "price_requires_review",
-    };
-  }
-
-  const normalized = normalizeText(body);
-  const matchedFaq = safeArray(faqs).find((faq) => {
-    const haystack = normalizeText([faq.question, faq.keywords].filter(Boolean).join(" "));
-    return haystack && normalized.includes(haystack);
+  const analysis = analyzeDraftRequest({ inboundMessage, services });
+  return buildDraftFromAnalysis({
+    analysis: { ...analysis, catalogServices: services },
+    settings,
+    faqs,
+    knowledgeItems,
+    inboundBody: inboundMessage.body,
   });
-
-  if (matchedFaq?.answer) {
-    return {
-      body: cleanText(matchedFaq.answer).slice(0, 900),
-      requiresHumanReview: false,
-      reason: "matched_faq",
-    };
-  }
-
-  const matchedKnowledge = safeArray(knowledgeItems).find((item) => {
-    const haystack = normalizeText([item.title, item.keywords].filter(Boolean).join(" "));
-    return haystack && normalized.includes(haystack);
-  });
-
-  if (matchedKnowledge?.content) {
-    return {
-      body: cleanText(matchedKnowledge.content).slice(0, 900),
-      requiresHumanReview: false,
-      reason: "matched_knowledge",
-    };
-  }
-
-  if (/\b(instagram|ig|redes)\b/i.test(body)) {
-    const instagram = getConfiguredInstagram(settings);
-    if (!instagram) {
-      return {
-        body:
-          "Una persona del equipo puede confirmarte las redes oficiales antes de responder.",
-        requiresHumanReview: true,
-        reason: "instagram_requires_review",
-      };
-    }
-
-    return {
-      body: `Claro. En Instagram nos encuentras como ${instagram}.`,
-      requiresHumanReview: false,
-      reason: "instagram_info",
-    };
-  }
-
-  if (/\b(servicios|hacen|ofrecen)\b/i.test(body)) {
-    const businessName = getConfiguredBusinessName(settings) || BUSINESS_PROFILE.name;
-    return {
-      body: `${businessName} ofrece servicios de ${BUSINESS_PROFILE.mainServices.join(", ")}. Para precios o disponibilidad específicos, el equipo debe revisar el servicio exacto antes de confirmar.`,
-      requiresHumanReview: false,
-      reason: "services_info",
-    };
-  }
-
-  if (settings?.fallback_message) {
-    return {
-      body: cleanText(settings.fallback_message).slice(0, 900),
-      requiresHumanReview: true,
-      reason: "configured_fallback",
-    };
-  }
-
-  return buildFallbackDraft();
 }
 
 async function selectMaybeSingle(query) {
