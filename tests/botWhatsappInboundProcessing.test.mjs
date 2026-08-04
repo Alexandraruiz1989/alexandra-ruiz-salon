@@ -751,6 +751,457 @@ test("dos servicios con el mismo alias no se eligen arbitrariamente", () => {
   assert.match(draft.body, /más de un servicio/i);
 });
 
+test("precedencia: nombre exacto unico gana sobre candidatas parciales", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta servicio alfa?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Servicio Alfa",
+        category: "Categoria Principal",
+        base_price: 211,
+        active: true,
+        bot_active: true,
+      },
+      {
+        name: "Servicio Beta",
+        category: "Categoria Secundaria",
+        base_price: 322,
+        active: true,
+        bot_active: true,
+        bot_keywords: "alfa, variante alfa",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Servicio Alfa/);
+  assert.match(draft.body, /\$211 MXN/);
+  assert.doesNotMatch(draft.body, /\$322 MXN/);
+});
+
+test("precedencia: dos nombres exactos iguales quedan ambiguos", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta servicio duplicado?",
+      message_type: "text",
+    },
+    services: [
+      {
+        id: "duplicated_name_1",
+        name: "Servicio Duplicado",
+        category: "Categoria A",
+        base_price: 211,
+        active: true,
+        bot_active: true,
+      },
+      {
+        id: "duplicated_name_2",
+        name: "Servicio Duplicado",
+        category: "Categoria B",
+        base_price: 322,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$211|\$322/);
+});
+
+test("precedencia: alias explicito exacto unico gana sobre parciales", () => {
+  const partials = Array.from({ length: 20 }, (_, index) => ({
+    id: `partial_${index}`,
+    name: `Candidata Parcial ${index}`,
+    category: "Categoria Parcial",
+    base_price: 300 + index,
+    active: true,
+    bot_active: true,
+    bot_keywords: "gel, natural, referencia parcial",
+  }));
+
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel alfa premium?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Servicio Alfa Premium",
+        category: "Categoria Principal",
+        base_price: 244,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel alfa premium",
+      },
+      ...partials,
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Servicio Alfa Premium/);
+  assert.match(draft.body, /\$244 MXN/);
+});
+
+test("precedencia: alias derivado por keyword y grupo no es alias explicito", () => {
+  const services = [
+    gelNaturalService({
+      id: "derived_hands",
+      bot_keywords: "gel semi, gelish, gel semipermanente",
+      bot_service_group: "una_natural_refuerzo",
+      base_price: 211,
+    }),
+    {
+      id: "derived_feet",
+      name: "Gel Semi Permanente Pies",
+      category: "Cuidado y Belleza de Pies",
+      base_price: 233,
+      active: true,
+      bot_active: true,
+      bot_keywords: "gel semi, gelish, gel semipermanente",
+      bot_service_group: "una_natural_refuerzo",
+    },
+  ];
+
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel en uña natural?",
+      message_type: "text",
+    },
+    services,
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$211|\$233/);
+});
+
+test("precedencia: coincidencia estructurada unica puede resolver sin alias exacto", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta lifting de pestanas?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Lifting de pestañas",
+        category: "Pestañas",
+        base_price: 255,
+        active: true,
+        bot_active: true,
+      },
+      {
+        name: "Diseño de cejas",
+        category: "Cejas",
+        base_price: 144,
+        active: true,
+        bot_active: true,
+        bot_keywords: "pestañas",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Lifting de pestañas/);
+  assert.match(draft.body, /\$255 MXN/);
+});
+
+test("precedencia: coincidencias estructuradas equivalentes quedan ambiguas", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta tratamiento capilar?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Tratamiento Capilar Hidratante",
+        category: "Cabello",
+        base_price: 255,
+        active: true,
+        bot_active: true,
+      },
+      {
+        name: "Tratamiento Capilar Reparador",
+        category: "Cabello",
+        base_price: 355,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$255|\$355/);
+});
+
+test("precedencia: solo candidatas parciales requieren revision sin precio", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Gel A",
+        category: "Categoria A",
+        base_price: 111,
+        active: true,
+        bot_active: true,
+      },
+      {
+        name: "Gel B",
+        category: "Categoria B",
+        base_price: 222,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$111|\$222/);
+});
+
+test("precedencia: servicio exacto inactivo no hace fallback parcial inseguro", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel alfa premium?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Servicio Inactivo",
+        category: "Categoria Principal",
+        base_price: 244,
+        active: false,
+        bot_active: true,
+        bot_keywords: "gel alfa premium",
+      },
+      {
+        name: "Servicio Parcial Activo",
+        category: "Categoria Parcial",
+        base_price: 355,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel, alfa",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$244|\$355/);
+});
+
+test("precedencia: precio exacto invalido no hace fallback a otro precio", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel alfa premium?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Servicio Sin Precio",
+        category: "Categoria Principal",
+        base_price: 0,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel alfa premium",
+      },
+      {
+        name: "Servicio Parcial Activo",
+        category: "Categoria Parcial",
+        base_price: 355,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel, alfa",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$355/);
+});
+
+test("precedencia: catalogo actual simulado conserva gel en uña natural ambiguo", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Gel en uña natural",
+      message_type: "text",
+    },
+    services: [
+      gelNaturalService({
+        id: "current_hands",
+        bot_keywords: "gel semi, gelish, gel semipermanente",
+        bot_service_group: "una_natural_refuerzo",
+        base_price: 211,
+      }),
+      {
+        id: "current_feet",
+        name: "Gel Semi Permanente Pies",
+        category: "Cuidado y Belleza de Pies",
+        base_price: 233,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel semi, gelish, gel semipermanente",
+        bot_service_group: "una_natural_refuerzo",
+      },
+      {
+        id: "current_partial",
+        name: "Gel de Construcción",
+        category: "Servicios sobre Uña Natural",
+        base_price: 344,
+        active: true,
+        bot_active: true,
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, true);
+  assert.doesNotMatch(draft.body, /\$211|\$233|\$344/);
+});
+
+test("precedencia: catalogo propuesto simulado resuelve gel en uña natural a manos", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Hola, ¿me confirmas el precio del gel en uña natural?",
+      message_type: "text",
+    },
+    services: [
+      gelNaturalService({
+        id: "proposed_hands",
+        bot_keywords:
+          "gel en uña natural, gel en una natural, gel semipermanente en uña natural, gelish uña natural, gel manos",
+        bot_service_group: "una_natural_refuerzo",
+        base_price: 211,
+      }),
+      {
+        id: "proposed_feet",
+        name: "Gel Semi Permanente Pies",
+        category: "Cuidado y Belleza de Pies",
+        base_price: 233,
+        active: true,
+        bot_active: true,
+        bot_keywords:
+          "gel en pies, gelish pies, gel semipermanente pies, gel en uñas de los pies",
+        bot_service_group: "pies_gel_semipermanente",
+      },
+      {
+        id: "proposed_partial_construction",
+        name: "Gel de Construcción",
+        category: "Servicios sobre Uña Natural",
+        base_price: 344,
+        active: true,
+        bot_active: true,
+        bot_keywords: "gel, construccion, estructura",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Aplicación de Gel Semi Permanente Manos/);
+  assert.match(draft.body, /\$211 MXN/);
+  assert.doesNotMatch(draft.body, /\$233|\$344/);
+});
+
+test("precedencia: catalogo propuesto simulado resuelve gel en pies", () => {
+  const draft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta gel en pies?",
+      message_type: "text",
+    },
+    services: [
+      {
+        id: "proposed_feet",
+        name: "Gel Semi Permanente Pies",
+        category: "Cuidado y Belleza de Pies",
+        base_price: 233,
+        active: true,
+        bot_active: true,
+        bot_keywords:
+          "gel en pies, gelish pies, gel semipermanente pies, gel en uñas de los pies",
+        bot_service_group: "pies_gel_semipermanente",
+      },
+      {
+        id: "pedicure_partial",
+        name: "Pedicure con terminado de color",
+        category: "Cuidado de pies",
+        base_price: 344,
+        active: true,
+        bot_active: true,
+        bot_keywords: "pedicure, pies, gel",
+      },
+    ],
+  });
+
+  assert.equal(draft.requiresHumanReview, false);
+  assert.match(draft.body, /Gel Semi Permanente Pies/);
+  assert.match(draft.body, /\$233 MXN/);
+  assert.doesNotMatch(draft.body, /\$344/);
+});
+
+test("precedencia: catalogo propuesto simulado resuelve rubber y relleno rubber", () => {
+  const rubberDraft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta rubber en uña natural?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Recubrimiento con Rubber Base",
+        category: "Servicios sobre Uña Natural",
+        base_price: 277,
+        active: true,
+        bot_active: true,
+        bot_keywords:
+          "rubber base, recubrimiento rubber, rubber en uña natural, nivelación rubber",
+      },
+      {
+        name: "Relleno Rubber Base",
+        category: "Mantenimiento",
+        base_price: 299,
+        active: true,
+        bot_active: true,
+        bot_keywords: "relleno rubber, mantenimiento rubber, relleno de rubber",
+      },
+    ],
+  });
+
+  const refillDraft = generateSafeDraftReply({
+    inboundMessage: {
+      body: "Cuanto cuesta relleno rubber?",
+      message_type: "text",
+    },
+    services: [
+      {
+        name: "Recubrimiento con Rubber Base",
+        category: "Servicios sobre Uña Natural",
+        base_price: 277,
+        active: true,
+        bot_active: true,
+        bot_keywords:
+          "rubber base, recubrimiento rubber, rubber en uña natural, nivelación rubber",
+      },
+      {
+        name: "Relleno Rubber Base",
+        category: "Mantenimiento",
+        base_price: 299,
+        active: true,
+        bot_active: true,
+        bot_keywords: "relleno rubber, mantenimiento rubber, relleno de rubber",
+      },
+    ],
+  });
+
+  assert.equal(rubberDraft.requiresHumanReview, false);
+  assert.match(rubberDraft.body, /Recubrimiento con Rubber Base/);
+  assert.match(rubberDraft.body, /\$277 MXN/);
+  assert.equal(refillDraft.requiresHumanReview, false);
+  assert.match(refillDraft.body, /Relleno Rubber Base/);
+  assert.match(refillDraft.body, /\$299 MXN/);
+});
+
 test("precio de servicio inexistente no inventa precio", () => {
   const draft = generateSafeDraftReply({
     inboundMessage: {

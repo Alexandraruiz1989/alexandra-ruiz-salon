@@ -23,8 +23,7 @@ const SENSITIVE_TEXT_PATTERN =
   /\b(bearer|access[_-]?token|app\s*secret|x-hub-signature|authorization|service[_-]?role|jwt|payload\s*crudo|raw\s*payload)\b/i;
 
 const BUSINESS_PROFILE = {
-  name: "Alexandra Ruiz Salón",
-  instagram: "@Alexandraruizsalon",
+  name: "el negocio",
   mainServices: [
     "uñas manos y pies",
     "manicure",
@@ -78,6 +77,47 @@ const PRICE_QUERY_STOPWORDS = new Set([
   "tardes",
   "vale",
 ]);
+const PRICE_SUBJECT_STOPWORDS = new Set([
+  "buen",
+  "buena",
+  "buenas",
+  "buenos",
+  "confirmame",
+  "confirmar",
+  "confirmas",
+  "confirma",
+  "cuanto",
+  "cuesta",
+  "costo",
+  "decir",
+  "del",
+  "dias",
+  "el",
+  "favor",
+  "hola",
+  "la",
+  "las",
+  "los",
+  "me",
+  "podrias",
+  "por",
+  "precio",
+  "puede",
+  "pueden",
+  "puedes",
+  "que",
+  "sale",
+  "saber",
+  "tardes",
+  "vale",
+]);
+const PRICE_MATCH_LEVELS = {
+  NAME_EXACT: "name_exact",
+  EXPLICIT_ALIAS_EXACT: "explicit_alias_exact",
+  GENERATED_ALIAS_EXACT: "generated_alias_exact",
+  STRUCTURED_SPECIFIC: "structured_specific",
+  PARTIAL: "partial",
+};
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -277,19 +317,24 @@ function uniqueNormalizedList(values) {
   return result;
 }
 
-function buildControlledServiceAliases(service) {
+function normalizePriceSubject(message) {
+  const words = normalizeText(message)
+    .split(" ")
+    .filter(Boolean)
+    .filter((word) => !PRICE_SUBJECT_STOPWORDS.has(word));
+
+  while (words[0] === "de") words.shift();
+
+  return words.join(" ");
+}
+
+function buildDerivedServiceAliases(service) {
   const name = normalizeText(service?.name);
   const category = normalizeText(service?.category);
   const group = normalizeText(service?.bot_service_group);
   const keywords = normalizeText(service?.bot_keywords);
   const text = `${name} ${category} ${group} ${keywords}`;
-  const aliases = [
-    service?.name,
-    service?.category,
-    ...splitAliases(service?.bot_keywords),
-    ...splitAliases(service?.bot_service_group),
-    ...splitAliases(service?.aliases),
-  ];
+  const aliases = [];
 
   const mentionsGelSemi =
     text.includes("gelish") ||
@@ -319,6 +364,20 @@ function buildControlledServiceAliases(service) {
   return uniqueNormalizedList(aliases);
 }
 
+function buildExplicitServiceAliases(service) {
+  return uniqueNormalizedList([
+    ...splitAliases(service?.bot_keywords),
+    ...splitAliases(service?.aliases),
+  ]);
+}
+
+function buildPartialServiceAliases(service) {
+  return uniqueNormalizedList([
+    service?.category,
+    ...splitAliases(service?.bot_service_group),
+  ]);
+}
+
 function normalizeServiceForDraftCatalog(service) {
   const price = Number(service?.base_price ?? service?.price ?? 0);
 
@@ -329,7 +388,9 @@ function normalizeServiceForDraftCatalog(service) {
     price: Number.isFinite(price) ? price : null,
     active: service?.active !== false,
     bot_active: service?.bot_active !== false,
-    aliases: buildControlledServiceAliases(service),
+    explicitAliases: buildExplicitServiceAliases(service),
+    derivedAliases: buildDerivedServiceAliases(service),
+    partialAliases: buildPartialServiceAliases(service),
     searchText: serviceSearchText(service),
   };
 }
@@ -337,9 +398,7 @@ function normalizeServiceForDraftCatalog(service) {
 function normalizeDraftServiceCatalog(services = []) {
   return safeArray(services)
     .map(normalizeServiceForDraftCatalog)
-    .filter(
-      (service) => service.name && service.active && service.bot_active
-    );
+    .filter((service) => service.name);
 }
 
 function serviceSearchText(service) {
@@ -381,51 +440,215 @@ function uniqueServicesByIdOrName(services = []) {
   );
 }
 
-function serviceMatchesPriceQuery(service, normalizedMessage, tokens) {
-  if (!service?.searchText) return false;
+function serviceHasValidBotOffer(service) {
+  return service?.active && service?.bot_active;
+}
 
-  const name = normalizeText(service.name);
-  if (name && normalizedMessage.includes(name)) return true;
+function buildPriceMatchCandidate(service, level, evidence = null) {
+  return {
+    service,
+    level,
+    evidence,
+  };
+}
 
-  if (
-    service.aliases.some(
-      (alias) =>
-        normalizedMessage.includes(alias) ||
-        (alias.length >= 8 && alias.includes(normalizedMessage))
-    )
-  ) {
-    return true;
+function candidateServices(candidates = []) {
+  return uniqueServicesByIdOrName(candidates.map((candidate) => candidate.service));
+}
+
+function exactNameCandidates(catalog, subject) {
+  return catalog
+    .filter((service) => normalizeText(service.name) === subject)
+    .map((service) =>
+      buildPriceMatchCandidate(service, PRICE_MATCH_LEVELS.NAME_EXACT, service.name)
+    );
+}
+
+function exactExplicitAliasCandidates(catalog, subject) {
+  return catalog
+    .filter((service) => service.explicitAliases.some((alias) => alias === subject))
+    .map((service) =>
+      buildPriceMatchCandidate(
+        service,
+        PRICE_MATCH_LEVELS.EXPLICIT_ALIAS_EXACT,
+        subject
+      )
+    );
+}
+
+function exactDerivedAliasCandidates(catalog, subject) {
+  return catalog
+    .filter((service) => service.derivedAliases.some((alias) => alias === subject))
+    .map((service) =>
+      buildPriceMatchCandidate(
+        service,
+        PRICE_MATCH_LEVELS.GENERATED_ALIAS_EXACT,
+        subject
+      )
+    );
+}
+
+function structuredSpecificCandidates(catalog, subject, tokens) {
+  if (tokens.length < 2) return [];
+
+  return catalog
+    .filter((service) => {
+      if (!service?.searchText) return false;
+      const backedTokens = tokens.filter((word) => service.searchText.includes(word));
+      const coreText = normalizeText([service.name, service.category].filter(Boolean).join(" "));
+      const coreBackedTokens = tokens.filter((word) => coreText.includes(word));
+      const hasSpecificAlias = [...service.explicitAliases, ...service.derivedAliases].some(
+        (alias) => alias.length >= 8 && (subject.includes(alias) || alias.includes(subject))
+      );
+
+      return (
+        backedTokens.length === tokens.length &&
+        (hasSpecificAlias || coreBackedTokens.length === tokens.length)
+      );
+    })
+    .map((service) =>
+      buildPriceMatchCandidate(
+        service,
+        PRICE_MATCH_LEVELS.STRUCTURED_SPECIFIC,
+        subject
+      )
+    );
+}
+
+function partialPriceCandidates(catalog, subject, tokens) {
+  return catalog
+    .filter((service) => {
+      if (!service?.searchText) return false;
+
+      const name = normalizeText(service.name);
+      const aliases = [
+        ...service.explicitAliases,
+        ...service.derivedAliases,
+        ...service.partialAliases,
+      ];
+      const partialAlias = aliases.some(
+        (alias) =>
+          (alias.length >= 4 && subject.includes(alias)) ||
+          (alias.length >= 8 && alias.includes(subject))
+      );
+      const tokenOverlap =
+        tokens.length > 0 && tokens.some((word) => service.searchText.includes(word));
+
+      return (
+        (name && (subject.includes(name) || name.includes(subject))) ||
+        partialAlias ||
+        tokenOverlap
+      );
+    })
+    .map((service) =>
+      buildPriceMatchCandidate(service, PRICE_MATCH_LEVELS.PARTIAL, subject)
+    );
+}
+
+function splitOfferableCandidates(candidates = []) {
+  return {
+    offerable: candidates.filter((candidate) => serviceHasValidBotOffer(candidate.service)),
+    inactive: candidates.filter((candidate) => !serviceHasValidBotOffer(candidate.service)),
+  };
+}
+
+function resolveCandidateLevel(candidates = []) {
+  const { offerable, inactive } = splitOfferableCandidates(candidates);
+  const services = candidateServices(offerable);
+
+  if (services.length === 1) {
+    return {
+      resolution: "unique",
+      service: services[0],
+      matches: services,
+      level: offerable[0]?.level || null,
+    };
   }
 
-  if (tokens.length === 0) return false;
-  return tokens.every((word) => service.searchText.includes(word));
+  if (services.length > 1) {
+    return {
+      resolution: "ambiguous",
+      service: null,
+      matches: services,
+      level: offerable[0]?.level || null,
+    };
+  }
+
+  if (inactive.length > 0) {
+    return {
+      resolution: "inactive_exact_match",
+      service: null,
+      matches: candidateServices(inactive),
+      level: inactive[0]?.level || null,
+    };
+  }
+
+  return null;
 }
 
 function findMentionedServices(message, services = []) {
-  const normalized = normalizeText(message);
-  if (!normalized) return [];
-  const tokens = relevantPriceQueryTokens(message);
-  const catalog = normalizeDraftServiceCatalog(services);
+  const resolution = resolvePriceQuestionService(message, services);
+  return resolution.matches || [];
+}
 
-  return uniqueServicesByIdOrName(
-    catalog.filter((service) =>
-      serviceMatchesPriceQuery(service, normalized, tokens)
+function buildPriceMatchResolution(message, services = []) {
+  const subject = normalizePriceSubject(message);
+  if (!subject) {
+    return { resolution: "none", service: null, matches: [], level: null };
+  }
+
+  const tokens = relevantPriceQueryTokens(subject);
+  const catalog = normalizeDraftServiceCatalog(services);
+  const levels = [
+    exactNameCandidates(catalog, subject),
+    exactExplicitAliasCandidates(catalog, subject),
+    exactDerivedAliasCandidates(catalog, subject),
+    structuredSpecificCandidates(catalog, subject, tokens),
+  ];
+
+  for (const levelCandidates of levels) {
+    if (levelCandidates.length === 0) continue;
+    const levelResolution = resolveCandidateLevel(levelCandidates);
+    if (levelResolution) return levelResolution;
+  }
+
+  const partialMatches = candidateServices(
+    partialPriceCandidates(
+      catalog.filter(serviceHasValidBotOffer),
+      subject,
+      tokens
     )
   );
+
+  if (partialMatches.length > 0) {
+    return {
+      resolution: "partial",
+      service: null,
+      matches: partialMatches,
+      level: PRICE_MATCH_LEVELS.PARTIAL,
+    };
+  }
+
+  return { resolution: "none", service: null, matches: [], level: null };
 }
 
 function resolvePriceQuestionService(message, services = []) {
-  const matches = findMentionedServices(message, services);
+  const resolution = buildPriceMatchResolution(message, services);
+  const matches = resolution.matches || [];
 
-  if (matches.length === 0) {
+  if (resolution.resolution === "none") {
     return { status: "none", service: null, matches };
   }
 
-  if (matches.length > 1) {
+  if (
+    resolution.resolution === "ambiguous" ||
+    resolution.resolution === "partial" ||
+    resolution.resolution === "inactive_exact_match"
+  ) {
     return { status: "ambiguous", service: null, matches };
   }
 
-  const service = matches[0];
+  const service = resolution.service;
   const formattedPrice = money(service.price);
 
   return formattedPrice
@@ -444,10 +667,30 @@ function isPriceQuestion(message) {
 function buildFallbackDraft() {
   return {
     body:
-      "Gracias por escribir a Alexandra Ruiz Salón. Podemos ayudarte con información sobre servicios, precios configurados y dudas generales. Si deseas agendar o revisar disponibilidad, una persona del equipo debe confirmarlo antes.",
+      "Gracias por escribir. Podemos ayudarte con información sobre servicios, precios configurados y dudas generales. Si deseas agendar o revisar disponibilidad, una persona del equipo debe confirmarlo antes.",
     requiresHumanReview: true,
     reason: "general_review_required",
   };
+}
+
+function getConfiguredInstagram(settings = {}) {
+  return cleanText(
+    settings.instagram ||
+      settings.instagram_url ||
+      settings.social_instagram ||
+      settings.social_instagram_url ||
+      ""
+  );
+}
+
+function getConfiguredBusinessName(settings = {}) {
+  return cleanText(
+    settings.business_name ||
+      settings.salon_name ||
+      settings.name ||
+      settings.display_name ||
+      ""
+  );
 }
 
 export function isDraftGenerationEnabled(env = process.env) {
@@ -551,16 +794,27 @@ export function generateSafeDraftReply({
   }
 
   if (/\b(instagram|ig|redes)\b/i.test(body)) {
+    const instagram = getConfiguredInstagram(settings);
+    if (!instagram) {
+      return {
+        body:
+          "Una persona del equipo puede confirmarte las redes oficiales antes de responder.",
+        requiresHumanReview: true,
+        reason: "instagram_requires_review",
+      };
+    }
+
     return {
-      body: `Claro. En Instagram nos encuentras como ${BUSINESS_PROFILE.instagram}.`,
+      body: `Claro. En Instagram nos encuentras como ${instagram}.`,
       requiresHumanReview: false,
       reason: "instagram_info",
     };
   }
 
   if (/\b(servicios|hacen|ofrecen)\b/i.test(body)) {
+    const businessName = getConfiguredBusinessName(settings) || BUSINESS_PROFILE.name;
     return {
-      body: `${BUSINESS_PROFILE.name} ofrece servicios de ${BUSINESS_PROFILE.mainServices.join(", ")}. Para precios o disponibilidad específicos, el equipo debe revisar el servicio exacto antes de confirmar.`,
+      body: `${businessName} ofrece servicios de ${BUSINESS_PROFILE.mainServices.join(", ")}. Para precios o disponibilidad específicos, el equipo debe revisar el servicio exacto antes de confirmar.`,
       requiresHumanReview: false,
       reason: "services_info",
     };
