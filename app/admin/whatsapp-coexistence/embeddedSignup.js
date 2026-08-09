@@ -7,7 +7,7 @@ const META_EMBEDDED_SIGNUP_ALLOWED_ORIGINS = new Set([
 
 const FACEBOOK_SDK_SCRIPT_ID = "facebook-jssdk";
 const FACEBOOK_SDK_SRC = "https://connect.facebook.net/es_LA/sdk.js";
-const SDK_AVAILABLE_STATUS = "available";
+const SDK_INITIALIZED_STATUS = "initialized";
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -70,35 +70,6 @@ export function buildMetaEmbeddedSignupLoginOptions(configId) {
   };
 }
 
-export function ensureFacebookSdkInitialized({
-  fb,
-  appId,
-  version = "v26.0",
-} = {}) {
-  const cleanAppId = cleanText(appId);
-  const cleanVersion = cleanText(version) || "v26.0";
-
-  if (!cleanAppId) {
-    return { ok: false, reason: "missing_app_id" };
-  }
-
-  if (!fb || typeof fb.init !== "function") {
-    return { ok: false, reason: "sdk_not_loaded" };
-  }
-
-  try {
-    fb.init({
-      appId: cleanAppId,
-      xfbml: false,
-      version: cleanVersion,
-    });
-
-    return { ok: true, fb };
-  } catch {
-    return { ok: false, reason: "init_failed" };
-  }
-}
-
 export function canStartMetaEmbeddedSignup({
   accessLoading = true,
   isAdmin = false,
@@ -122,6 +93,7 @@ export function setupFacebookSdkLoader({
   version = "v26.0",
   onScriptLoaded,
   onFbAsyncInit,
+  onSdkInitialized,
   onSdkAvailable,
   onError,
 } = {}) {
@@ -136,7 +108,7 @@ export function setupFacebookSdkLoader({
     return { ok: false, reason: "browser_unavailable" };
   }
 
-  const markOfficialSdkAvailable = () => {
+  const initializeOfficialSdk = () => {
     onFbAsyncInit?.();
 
     const fb = globalScope.FB;
@@ -146,11 +118,24 @@ export function setupFacebookSdkLoader({
       return { ok: false, reason: "sdk_not_ready" };
     }
 
+    try {
+      fb.init({
+        appId: cleanAppId,
+        cookie: true,
+        xfbml: true,
+        version: cleanVersion,
+      });
+    } catch {
+      onError?.({ reason: "init_failed" });
+      return { ok: false, reason: "init_failed" };
+    }
+
+    onSdkInitialized?.({ fb });
     onSdkAvailable?.({ fb });
-    return { ok: true, status: SDK_AVAILABLE_STATUS, fb };
+    return { ok: true, status: SDK_INITIALIZED_STATUS, fb };
   };
 
-  globalScope.fbAsyncInit = markOfficialSdkAvailable;
+  globalScope.fbAsyncInit = initializeOfficialSdk;
 
   if (hasFacebookSdkShape(globalScope.FB)) {
     onScriptLoaded?.();
@@ -158,7 +143,7 @@ export function setupFacebookSdkLoader({
       ok: true,
       alreadyLoaded: true,
       scriptInserted: false,
-      availability: markOfficialSdkAvailable(),
+      initialization: initializeOfficialSdk(),
     };
   }
 
@@ -199,38 +184,11 @@ export function setupFacebookSdkLoader({
 
 export function startMetaEmbeddedSignupLogin({
   fb,
-  appId,
-  version = "v26.0",
   configId,
   onResponse,
-  onInitAttempted,
-  onInitConfirmed,
 } = {}) {
   if (!hasFacebookSdkShape(fb)) {
     return { ok: false, reason: "sdk_not_available" };
-  }
-
-  if (typeof fb.getAuthResponse !== "function") {
-    return { ok: false, reason: "sdk_init_check_unavailable" };
-  }
-
-  const initResult = ensureFacebookSdkInitialized({
-    fb,
-    appId,
-    version,
-  });
-
-  onInitAttempted?.();
-
-  if (!initResult.ok) {
-    return initResult;
-  }
-
-  try {
-    fb.getAuthResponse();
-    onInitConfirmed?.();
-  } catch {
-    return { ok: false, reason: "sdk_init_not_confirmed" };
   }
 
   try {
@@ -290,7 +248,7 @@ export function parseMetaEmbeddedSignupPostMessage(event = {}) {
       status: "CANCEL",
       wabaIdReceived: false,
       phoneNumberIdReceived: false,
-      message: "El flujo fue cancelado. No se realizaron cambios desde esta aplicación.",
+      message: "Flujo cancelado.",
     };
   }
 
@@ -301,8 +259,7 @@ export function parseMetaEmbeddedSignupPostMessage(event = {}) {
       status: "ERROR",
       wabaIdReceived: false,
       phoneNumberIdReceived: false,
-      message:
-        "Meta no pudo completar el flujo en este momento. Revisa la configuración e inténtalo de nuevo.",
+      message: "Meta reportó un error.",
     };
   }
 

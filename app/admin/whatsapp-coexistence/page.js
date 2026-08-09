@@ -47,12 +47,11 @@ export default function WhatsAppCoexistencePage() {
     loading: true,
     isAdmin: false,
   });
+  const [fbAsyncInitExecuted, setFbAsyncInitExecuted] = useState(false);
+  const [fbInitExecuted, setFbInitExecuted] = useState(false);
   const [sdkScriptLoaded, setSdkScriptLoaded] = useState(false);
   const [sdkAvailable, setSdkAvailable] = useState(false);
   const [sdkLoadStatus, setSdkLoadStatus] = useState("idle");
-  const [initExecutedOnClick, setInitExecutedOnClick] = useState(false);
-  const [metaAcceptedInitialization, setMetaAcceptedInitialization] =
-    useState(false);
   const [launching, setLaunching] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [loginSummary, setLoginSummary] = useState(null);
@@ -86,10 +85,13 @@ export default function WhatsAppCoexistencePage() {
   useEffect(() => {
     let active = true;
 
+    if (!metaAppId) return undefined;
+
     queueMicrotask(() => {
-      if (!active || !metaAppId) return;
+      if (!active) return;
 
       setSdkLoadStatus("loading");
+      setStatusMessage((current) => current || "Preparando conexión con Meta...");
 
       const result = setupFacebookSdkLoader({
         globalScope: window,
@@ -100,10 +102,20 @@ export default function WhatsAppCoexistencePage() {
           if (!active) return;
           setSdkScriptLoaded(true);
         },
-        onSdkAvailable: () => {
+        onFbAsyncInit: () => {
           if (!active) return;
+          setFbAsyncInitExecuted(true);
+        },
+        onSdkInitialized: () => {
+          if (!active) return;
+          setFbInitExecuted(true);
           setSdkAvailable(true);
           setSdkLoadStatus("available");
+          setStatusMessage((current) =>
+            current === "Preparando conexión con Meta..."
+              ? "SDK de Meta listo."
+              : current || "SDK de Meta listo."
+          );
         },
         onError: () => {
           if (!active) return;
@@ -172,32 +184,19 @@ export default function WhatsAppCoexistencePage() {
     }
 
     setLaunching(true);
-    setInitExecutedOnClick(false);
-    setMetaAcceptedInitialization(false);
+    setStatusMessage("Abriendo configuración...");
 
     const result = startMetaEmbeddedSignupLogin({
       fb: window.FB,
-      appId: metaAppId,
-      version: metaSdkVersion,
       configId: metaEmbeddedSignupConfigId,
-      onInitAttempted: () => {
-        setInitExecutedOnClick(true);
-      },
-      onInitConfirmed: () => {
-        setMetaAcceptedInitialization(true);
-      },
       onResponse: (response) => {
         const summary = summarizeFacebookLoginResponse(response);
         setLoginSummary(summary);
 
         if (summary.authorizationCodeReceived) {
-          setStatusMessage(
-            "Authorization code recibido: Sí. No se intercambió ni se guardó."
-          );
-        } else if (summary.status !== "connected") {
-          setStatusMessage(
-            "Meta cerró el flujo sin entregar authorization code. No se realizaron cambios."
-          );
+          setStatusMessage("Authorization code recibido: Sí");
+        } else {
+          setStatusMessage("Meta no devolvió autorización.");
         }
 
         setLaunching(false);
@@ -206,12 +205,7 @@ export default function WhatsAppCoexistencePage() {
 
     if (!result.ok) {
       setLaunching(false);
-      if (result.reason === "sdk_init_not_confirmed") {
-        setStatusMessage("Meta no confirmó la inicialización del SDK.");
-      } else if (
-        result.reason === "sdk_not_available" ||
-        result.reason === "sdk_init_check_unavailable"
-      ) {
+      if (result.reason === "sdk_not_available") {
         setStatusMessage("Preparando conexión con Meta...");
       } else {
         setStatusMessage(
@@ -247,8 +241,9 @@ export default function WhatsAppCoexistencePage() {
           </h1>
 
           <p className="mt-4 max-w-3xl text-sm leading-7 text-[#68777c] md:text-base">
-            Esta herramienta solo inicia el flujo oficial de Meta. No envía
-            mensajes, no modifica citas y no activa el bot.
+            Esta herramienta inicia el flujo oficial de Meta para conectar
+            WhatsApp Business App con Cloud API. No activa el bot ni envía
+            mensajes.
           </p>
 
           <div className="mt-6 grid gap-3 rounded-[1.5rem] bg-[#fff8fa] p-4 text-sm text-[#5f4a4d] md:grid-cols-3">
@@ -286,15 +281,15 @@ export default function WhatsAppCoexistencePage() {
               </span>
             </p>
             <p>
-              FB.init ejecutado en el click:{" "}
+              fbAsyncInit ejecutado:{" "}
               <span className="font-medium text-[#263238]">
-                {initExecutedOnClick ? "Sí" : "No"}
+                {fbAsyncInitExecuted ? "Sí" : "No"}
               </span>
             </p>
             <p>
-              Meta aceptó inicialización:{" "}
+              FB.init ejecutado:{" "}
               <span className="font-medium text-[#263238]">
-                {metaAcceptedInitialization ? "Sí" : "No"}
+                {fbInitExecuted ? "Sí" : "No"}
               </span>
             </p>
           </div>
@@ -326,10 +321,10 @@ export default function WhatsAppCoexistencePage() {
               className="rounded-full bg-[#bd7b83] px-6 py-3 text-sm font-medium text-white transition hover:bg-[#a7646d] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {launching
-                ? "Abriendo Meta..."
+                ? "Abriendo configuración..."
                 : !sdkAvailable
                   ? "Preparando conexión con Meta..."
-                : "Iniciar configuración de coexistencia"}
+                  : "Iniciar configuración de coexistencia"}
             </button>
 
             <p className="text-xs leading-5 text-[#8a969a]">
@@ -375,8 +370,7 @@ export default function WhatsAppCoexistencePage() {
 
             {loginSummary?.authorizationCodeReceived && (
               <p className="mt-4 rounded-2xl border border-[#d8e8d8] bg-[#f4fbf4] p-4 text-sm text-[#38633a]">
-                Authorization code recibido: Sí. No se muestra, no se guarda y
-                no se envía al servidor.
+                Authorization code recibido: Sí
               </p>
             )}
           </div>

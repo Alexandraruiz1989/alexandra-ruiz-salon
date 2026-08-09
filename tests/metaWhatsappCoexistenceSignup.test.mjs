@@ -100,24 +100,15 @@ test("procesa FINISH sin exponer WABA ID ni Phone Number ID", () => {
   assert.doesNotMatch(serialized, /phone_number_id_de_prueba/);
 });
 
-test("procesa CANCEL con mensaje seguro", () => {
-  const result = parseMetaEmbeddedSignupPostMessage({
+test("procesa CANCEL y ERROR con mensajes seguros", () => {
+  const cancelResult = parseMetaEmbeddedSignupPostMessage({
     origin: "https://web.facebook.com",
     data: {
       type: "WA_EMBEDDED_SIGNUP",
       event: "CANCEL",
     },
   });
-
-  assert.equal(result.status, "CANCEL");
-  assert.equal(
-    result.message,
-    "El flujo fue cancelado. No se realizaron cambios desde esta aplicación."
-  );
-});
-
-test("procesa ERROR sin regresar payload crudo", () => {
-  const result = parseMetaEmbeddedSignupPostMessage({
+  const errorResult = parseMetaEmbeddedSignupPostMessage({
     origin: "https://www.facebook.com",
     data: {
       type: "WA_EMBEDDED_SIGNUP",
@@ -128,11 +119,12 @@ test("procesa ERROR sin regresar payload crudo", () => {
     },
   });
 
-  assert.equal(result.status, "ERROR");
-  assert.doesNotMatch(JSON.stringify(result), /detalle sensible/);
+  assert.equal(cancelResult.message, "Flujo cancelado.");
+  assert.equal(errorResult.message, "Meta reportó un error.");
+  assert.doesNotMatch(JSON.stringify(errorResult), /detalle sensible/);
 });
 
-test("construye FB.login con configuración de coexistencia sin hardcodear config_id", () => {
+test("construye FB.login con configuración exacta de coexistencia", () => {
   const options = buildMetaEmbeddedSignupLoginOptions("config_de_prueba");
 
   assert.deepEqual(options, {
@@ -164,168 +156,7 @@ test("resume authorization code sin exponerlo", () => {
   assert.doesNotMatch(JSON.stringify(result), /authorization_code_de_prueba/);
 });
 
-test("init, verificación y login usan exactamente el mismo objeto FB del click", () => {
-  const calls = [];
-  const fb = {
-    init(options) {
-      calls.push({ step: "init", thisValue: this, options });
-    },
-    getAuthResponse() {
-      calls.push({ step: "getAuthResponse", thisValue: this });
-      return { accessToken: "token_que_no_debe_exponerse" };
-    },
-    login(callback, options) {
-      calls.push({ step: "login", thisValue: this, options });
-      callback({ status: "connected", authResponse: { code: "code_de_prueba" } });
-    },
-    api() {},
-  };
-
-  const result = startMetaEmbeddedSignupLogin({
-    fb,
-    appId: "app_id_publico_de_prueba",
-    version: "v26.0",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(
-    calls.map((call) => call.step),
-    ["init", "getAuthResponse", "login"]
-  );
-  assert.equal(calls[0].thisValue, fb);
-  assert.equal(calls[1].thisValue, fb);
-  assert.equal(calls[2].thisValue, fb);
-  assert.equal(calls[0].options.appId, "app_id_publico_de_prueba");
-  assert.equal(calls[0].options.version, "v26.0");
-  assert.equal(calls[0].options.xfbml, false);
-  assert.equal(calls[2].options.response_type, "code");
-  assert.equal(calls[2].options.override_default_response_type, true);
-  assert.equal(calls[2].options.extras.feature_type, "COEXISTENCE");
-});
-
-test("FB.init ocurre inmediatamente antes de getAuthResponse y login", () => {
-  const order = [];
-  const fb = {
-    init() {
-      order.push("init");
-    },
-    getAuthResponse() {
-      order.push("getAuthResponse");
-      return { accessToken: "token_ignorado" };
-    },
-    login() {
-      order.push("login");
-    },
-    api() {},
-  };
-
-  const result = startMetaEmbeddedSignupLogin({
-    fb,
-    appId: "app_id_publico_de_prueba",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(order, ["init", "getAuthResponse", "login"]);
-});
-
-test("si Meta reporta before FB.init, FB.login no se ejecuta", () => {
-  const calls = [];
-  const fb = {
-    init() {
-      calls.push("init");
-    },
-    getAuthResponse() {
-      calls.push("getAuthResponse");
-      throw new Error("FB.login() called before FB.init().");
-    },
-    login() {
-      calls.push("login");
-    },
-    api() {},
-  };
-
-  const result = startMetaEmbeddedSignupLogin({
-    fb,
-    appId: "app_id_publico_de_prueba",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "sdk_init_not_confirmed");
-  assert.deepEqual(calls, ["init", "getAuthResponse"]);
-});
-
-test("no inicializa Facebook SDK con App ID vacío durante el click", () => {
-  let initCalled = false;
-  const result = startMetaEmbeddedSignupLogin({
-    fb: {
-      init() {
-        initCalled = true;
-      },
-      getAuthResponse() {},
-      login() {},
-      api() {},
-    },
-    appId: "",
-    version: "v26.0",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "missing_app_id");
-  assert.equal(initCalled, false);
-});
-
-test("FB.login no se ejecuta si falta la prueba pública de inicialización", () => {
-  let loginCalled = false;
-  const result = startMetaEmbeddedSignupLogin({
-    fb: {
-      init() {},
-      login() {
-        loginCalled = true;
-      },
-      api() {},
-    },
-    appId: "app_id_publico_de_prueba",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "sdk_init_check_unavailable");
-  assert.equal(loginCalled, false);
-});
-
-test("no expone ni almacena authResponse usado para verificar inicialización", () => {
-  const result = startMetaEmbeddedSignupLogin({
-    fb: {
-      init() {},
-      getAuthResponse() {
-        return {
-          accessToken: "access_token_de_prueba",
-          userID: "usuario_de_prueba",
-        };
-      },
-      login() {},
-      api() {},
-    },
-    appId: "app_id_publico_de_prueba",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, true);
-  assert.doesNotMatch(JSON.stringify(result), /access_token_de_prueba/);
-  assert.doesNotMatch(JSON.stringify(result), /usuario_de_prueba/);
-});
-
-test("fbAsyncInit se registra antes de insertar el script del SDK", () => {
+test("fbAsyncInit se registra antes de insertar el script oficial del SDK", () => {
   const globalScope = {};
   let registeredBeforeInsert = false;
   const documentRef = createMockDocument({
@@ -348,59 +179,136 @@ test("fbAsyncInit se registra antes de insertar el script del SDK", () => {
   assert.equal(registeredBeforeInsert, true);
 });
 
-test("el cargador reconoce el FB real entregado por el SDK oficial", () => {
+test("FB.init ocurre dentro de fbAsyncInit con cookie true y xfbml true", () => {
   const globalScope = {};
-  const documentRef = createMockDocument();
-  let availableFb = null;
-  let asyncInitExecuted = false;
+  let fbAsyncInitExecuted = false;
+  let initializedFb = null;
+  let initOptions = null;
 
   setupFacebookSdkLoader({
-    globalScope,
-    documentRef,
-    appId: "app_id_publico_de_prueba",
-    version: "v26.0",
-    onFbAsyncInit() {
-      asyncInitExecuted = true;
-    },
-    onSdkAvailable({ fb }) {
-      availableFb = fb;
-    },
-  });
-
-  const realFb = {
-    init() {},
-    getAuthResponse() {},
-    login() {},
-    api() {},
-  };
-
-  globalScope.FB = realFb;
-  globalScope.fbAsyncInit();
-
-  assert.equal(asyncInitExecuted, true);
-  assert.equal(availableFb, realFb);
-});
-
-test("un window.FB preliminar incompleto no se considera disponible", () => {
-  const globalScope = {
-    FB: {
-      init() {},
-    },
-  };
-  let available = false;
-  const result = setupFacebookSdkLoader({
     globalScope,
     documentRef: createMockDocument(),
     appId: "app_id_publico_de_prueba",
     version: "v26.0",
-    onSdkAvailable() {
-      available = true;
+    onFbAsyncInit() {
+      fbAsyncInitExecuted = true;
+    },
+    onSdkInitialized({ fb }) {
+      initializedFb = fb;
     },
   });
 
+  const realFb = {
+    init(options) {
+      initOptions = options;
+    },
+    login() {},
+  };
+
+  globalScope.FB = realFb;
+  const result = globalScope.fbAsyncInit();
+
   assert.equal(result.ok, true);
-  assert.equal(result.scriptInserted, true);
-  assert.equal(available, false);
+  assert.equal(result.status, "initialized");
+  assert.equal(fbAsyncInitExecuted, true);
+  assert.equal(initializedFb, realFb);
+  assert.deepEqual(initOptions, {
+    appId: "app_id_publico_de_prueba",
+    cookie: true,
+    xfbml: true,
+    version: "v26.0",
+  });
+});
+
+test("la versión del SDK conserva fallback v26.0", () => {
+  const globalScope = {};
+  let initOptions = null;
+
+  setupFacebookSdkLoader({
+    globalScope,
+    documentRef: createMockDocument(),
+    appId: "app_id_publico_de_prueba",
+    version: "",
+  });
+
+  globalScope.FB = {
+    init(options) {
+      initOptions = options;
+    },
+    login() {},
+  };
+
+  globalScope.fbAsyncInit();
+  assert.equal(initOptions.version, "v26.0");
+});
+
+test("el botón permanece deshabilitado hasta que el SDK quede inicializado", () => {
+  assert.equal(
+    canStartMetaEmbeddedSignup({
+      accessLoading: false,
+      isAdmin: true,
+      launching: false,
+      missingConfig: [],
+      sdkAvailable: false,
+    }),
+    false
+  );
+  assert.equal(
+    canStartMetaEmbeddedSignup({
+      accessLoading: false,
+      isAdmin: true,
+      launching: false,
+      missingConfig: [],
+      sdkAvailable: true,
+    }),
+    true
+  );
+});
+
+test("FB.login se ejecuta directamente sobre el mismo objeto FB inicializado", () => {
+  let initCalled = false;
+  let loginThis = null;
+  let loginOptions = null;
+  const fb = {
+    init() {
+      initCalled = true;
+    },
+    login(callback, options) {
+      loginThis = this;
+      loginOptions = options;
+      callback({ status: "connected", authResponse: { code: "code_de_prueba" } });
+    },
+  };
+
+  const result = startMetaEmbeddedSignupLogin({
+    fb,
+    configId: "config_de_prueba",
+    onResponse() {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(initCalled, false);
+  assert.equal(loginThis, fb);
+  assert.equal(loginOptions.response_type, "code");
+  assert.equal(loginOptions.override_default_response_type, true);
+  assert.equal(loginOptions.extras.feature_type, "COEXISTENCE");
+});
+
+test("FB.login no se ejecuta si el objeto FB no tiene forma oficial mínima", () => {
+  let loginCalled = false;
+  const result = startMetaEmbeddedSignupLogin({
+    fb: {
+      login() {
+        loginCalled = true;
+      },
+    },
+    configId: "config_de_prueba",
+    onResponse() {},
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "sdk_not_available");
+  assert.equal(loginCalled, false);
 });
 
 test("el script del SDK no se inserta dos veces", () => {
@@ -424,18 +332,41 @@ test("el script del SDK no se inserta dos veces", () => {
   assert.equal(insertCount, 0);
 });
 
-test("montaje repetido no deja SDK disponible falso antes de fbAsyncInit", () => {
+test("un window.FB preliminar incompleto no se considera inicializado", () => {
+  const globalScope = {
+    FB: {
+      init() {},
+    },
+  };
+  let initialized = false;
+
+  const result = setupFacebookSdkLoader({
+    globalScope,
+    documentRef: createMockDocument(),
+    appId: "app_id_publico_de_prueba",
+    version: "v26.0",
+    onSdkInitialized() {
+      initialized = true;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.scriptInserted, true);
+  assert.equal(initialized, false);
+});
+
+test("montaje repetido no inserta doble script ni marca listo antes de fbAsyncInit", () => {
   const globalScope = {};
   const existingScript = { id: "facebook-jssdk" };
-  let available = false;
+  let initialized = false;
 
   const first = setupFacebookSdkLoader({
     globalScope,
     documentRef: createMockDocument({ existingScript }),
     appId: "app_id_publico_de_prueba",
     version: "v26.0",
-    onSdkAvailable() {
-      available = true;
+    onSdkInitialized() {
+      initialized = true;
     },
   });
   const second = setupFacebookSdkLoader({
@@ -443,84 +374,15 @@ test("montaje repetido no deja SDK disponible falso antes de fbAsyncInit", () =>
     documentRef: createMockDocument({ existingScript }),
     appId: "app_id_publico_de_prueba",
     version: "v26.0",
-    onSdkAvailable() {
-      available = true;
+    onSdkInitialized() {
+      initialized = true;
     },
   });
 
   assert.equal(first.scriptInserted, false);
   assert.equal(second.scriptInserted, false);
-  assert.equal(available, false);
+  assert.equal(initialized, false);
   assert.equal(typeof globalScope.fbAsyncInit, "function");
-});
-
-test("FB.login usa el objeto FB actual recibido por el handler", () => {
-  let loginThis = null;
-  const currentFb = {
-    init() {},
-    getAuthResponse() {},
-    login() {
-      loginThis = this;
-    },
-    api() {},
-  };
-
-  const result = startMetaEmbeddedSignupLogin({
-    fb: currentFb,
-    appId: "app_id_publico_de_prueba",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(loginThis, currentFb);
-});
-
-test("la pantalla mantiene el botón deshabilitado antes de tener SDK disponible", () => {
-  assert.equal(
-    canStartMetaEmbeddedSignup({
-      accessLoading: false,
-      isAdmin: true,
-      launching: false,
-      missingConfig: [],
-      sdkAvailable: false,
-    }),
-    false
-  );
-  assert.equal(
-    canStartMetaEmbeddedSignup({
-      accessLoading: false,
-      isAdmin: true,
-      launching: false,
-      missingConfig: [],
-      sdkAvailable: true,
-    }),
-    true
-  );
-});
-
-test("un fallo de FB.init bloquea FB.login", () => {
-  let loginCalled = false;
-  const result = startMetaEmbeddedSignupLogin({
-    fb: {
-      init() {
-        throw new Error("fallo de prueba");
-      },
-      getAuthResponse() {},
-      login() {
-        loginCalled = true;
-      },
-      api() {},
-    },
-    appId: "app_id_publico_de_prueba",
-    version: "v26.0",
-    configId: "config_de_prueba",
-    onResponse() {},
-  });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "init_failed");
-  assert.equal(loginCalled, false);
 });
 
 test("la ruta temporal no llama registro, envío ni APIs internas sensibles", () => {
@@ -536,14 +398,34 @@ test("la ruta temporal no llama registro, envío ni APIs internas sensibles", ()
 
   assert.doesNotMatch(source, /\/register\b/);
   assert.doesNotMatch(source, /graph\.facebook\.com/i);
-  assert.doesNotMatch(source, /messages\?/i);
+  assert.doesNotMatch(source, /\/messages\b|messages\?/i);
   assert.doesNotMatch(source, /fetch\s*\(/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
   assert.doesNotMatch(source, /META_APP_SECRET/);
   assert.doesNotMatch(source, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.doesNotMatch(source, /getAuthResponse/);
   assert.doesNotMatch(source, /console\.(log|info|warn|error)/);
   assert.match(pageSource, /NEXT_PUBLIC_META_SDK_VERSION \|\| "v26\.0"/);
   assert.doesNotMatch(pageSource, /"v23\.0"/);
   assert.match(pageSource, /addEventListener\("message", handleMetaMessage\)/);
   assert.match(pageSource, /removeEventListener\("message", handleMetaMessage\)/);
+});
+
+test("la página conserva textos seguros y no expone identificadores completos", () => {
+  const pageSource = readFileSync(
+    new URL("../app/admin/whatsapp-coexistence/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(pageSource, /Configuración de coexistencia de WhatsApp/);
+  assert.match(
+    pageSource,
+    /Esta herramienta inicia el flujo oficial de Meta para conectar\s+WhatsApp Business App con Cloud API\. No activa el bot ni envía\s+mensajes\./
+  );
+  assert.match(pageSource, /Authorization code recibido: Sí/);
+  assert.match(pageSource, /WABA ID recibido/);
+  assert.match(pageSource, /Phone Number ID recibido/);
+  assert.doesNotMatch(pageSource, /authResponse\.code[^?]/);
+  assert.doesNotMatch(pageSource, /waba_id_de_prueba/);
+  assert.doesNotMatch(pageSource, /phone_number_id_de_prueba/);
 });
