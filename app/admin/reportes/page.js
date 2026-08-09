@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  buildAppointmentReportWorkbook,
+  createAppointmentReportFileName,
+  filterReportAppointments,
+} from "../../lib/reportesAppointmentExcel";
 
 const menuItems = [
   { key: "comisiones", label: "Comisiones" },
@@ -162,6 +167,7 @@ export default function ReportesPage() {
   const [message, setMessage] = useState("");
   const [salaryMessage, setSalaryMessage] = useState("");
 const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const [rangeType, setRangeType] = useState("week");
   const [baseDate, setBaseDate] = useState(todayISO());
@@ -253,7 +259,7 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
     }
   };
 
-  const loadData = async () => {
+  async function loadData() {
     setLoadingData(true);
     setMessage("");
 
@@ -312,10 +318,53 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
             clients (*),
             appointment_services (
               id,
+              service_id,
+              staff_id,
+              service_date,
+              start_time,
+              end_time,
+              duration_minutes,
+              cleanup_minutes,
+              price,
+              quantity,
+              unit_price,
+              total_price,
+              custom_name,
+              notes,
+              status,
+              services (
+                id,
+                name,
+                category,
+                base_price
+              ),
               staff (
                 id,
                 full_name
               )
+            ),
+            appointment_extra_items (
+              id,
+              extra_id,
+              name,
+              quantity,
+              unit_price,
+              total_price,
+              staff_id,
+              staff (
+                id,
+                full_name
+              )
+            ),
+            payments (
+              id,
+              payment_method,
+              total,
+              total_amount,
+              paid_amount,
+              balance_due,
+              payment_status,
+              payment_date
             )
           `
           )
@@ -369,6 +418,57 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
     }
 
     setLoadingData(false);
+  }
+
+  const appointmentExportFilters = useMemo(
+    () => ({
+      startDate,
+      endDate,
+      staffId: "",
+      staffName: "Todas",
+      serviceId: "",
+      serviceName: "Todos",
+      status: "",
+      statusLabel: "Todos",
+    }),
+    [startDate, endDate]
+  );
+
+  const appointmentExportRows = useMemo(
+    () =>
+      filterReportAppointments(attendanceAppointments, appointmentExportFilters),
+    [attendanceAppointments, appointmentExportFilters]
+  );
+
+  const downloadAppointmentsExcel = async () => {
+    setMessage("");
+    setExportingExcel(true);
+
+    try {
+      const xlsxModule = await import("xlsx");
+      const XLSX = xlsxModule.default?.utils ? xlsxModule.default : xlsxModule;
+      const workbook = buildAppointmentReportWorkbook(XLSX, {
+        appointments: appointmentExportRows,
+        filters: appointmentExportFilters,
+      });
+
+      XLSX.writeFile(
+        workbook,
+        createAppointmentReportFileName(startDate, endDate),
+        {
+          bookType: "xlsx",
+          cellDates: true,
+        }
+      );
+    } catch (error) {
+      setMessage(
+        `No se pudo generar el Excel: ${
+          error?.message || "inténtalo nuevamente"
+        }`
+      );
+    } finally {
+      setExportingExcel(false);
+    }
   };
 
   const ensurePayrollSetting = async (staffId) => {
@@ -613,7 +713,7 @@ periodDays: getDaysBetween(startDate, endDate),
         totalToPay,
       };
     });
-  }, [staff, paymentStaffTotals, adjustments, payrollSettings]);
+  }, [staff, paymentStaffTotals, adjustments, payrollSettings, startDate, endDate]);
 
   const reportTotals = useMemo(() => {
     return reportRows.reduce(
@@ -800,6 +900,28 @@ periodDays: getDaysBetween(startDate, endDate),
                 className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
               />
             </div>
+          </div>
+
+          <div className="mt-5 flex flex-col gap-3 rounded-2xl bg-[#f7f9fa] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#263238]">
+                Exportar citas del periodo
+              </p>
+              <p className="mt-1 text-xs text-[#68777c]">
+                El archivo usa las mismas citas cargadas para Reportes:{" "}
+                {appointmentExportRows.length} resultado
+                {appointmentExportRows.length === 1 ? "" : "s"}.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={downloadAppointmentsExcel}
+              disabled={loadingData || exportingExcel}
+              className="rounded-full bg-[#263238] px-6 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exportingExcel ? "Generando Excel..." : "Descargar Excel"}
+            </button>
           </div>
         </Card>
       </div>
