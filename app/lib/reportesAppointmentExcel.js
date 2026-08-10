@@ -1,3 +1,8 @@
+import {
+  getReportCommissionAmount,
+  getServiceCommissionPercent,
+} from "./paymentEconomics.js";
+
 const EXCEL_MAX_SHEET_NAME_LENGTH = 31;
 const EXCEL_INVALID_SHEET_NAME_CHARS = /[\[\]:*?/\\]/g;
 
@@ -24,8 +29,25 @@ export const appointmentReportColumns = [
     width: 16,
     format: '"$"#,##0.00',
   },
+  { key: "propina", label: "Propina total", width: 15, format: '"$"#,##0.00' },
   { key: "formaPago", label: "Forma de pago", width: 20 },
   { key: "saldo", label: "Saldo", width: 14, format: '"$"#,##0.00' },
+];
+
+export const staffAppointmentReportColumns = [
+  { key: "fecha", label: "Fecha", width: 14, format: "yyyy-mm-dd" },
+  { key: "hora", label: "Hora", width: 10, format: "hh:mm" },
+  { key: "clienta", label: "Clienta", width: 28 },
+  { key: "servicio", label: "Servicios de la colaboradora", width: 36 },
+  { key: "extras", label: "Extras de sus servicios", width: 34 },
+  { key: "serviceTotal", label: "Servicios", width: 15, format: '"$"#,##0.00' },
+  { key: "extrasTotal", label: "Extras", width: 15, format: '"$"#,##0.00' },
+  { key: "commissionBase", label: "Base comisión", width: 18, format: '"$"#,##0.00' },
+  { key: "commissionAmount", label: "Comisión", width: 15, format: '"$"#,##0.00' },
+  { key: "tipAmount", label: "Propina", width: 15, format: '"$"#,##0.00' },
+  { key: "staffTotal", label: "Servicios + extras + propina", width: 24, format: '"$"#,##0.00' },
+  { key: "formaPago", label: "Forma de pago", width: 20 },
+  { key: "estado", label: "Estado de la cita", width: 22 },
 ];
 
 const statusLabels = {
@@ -160,6 +182,13 @@ function getAppointmentPaidTotal(appointment) {
   );
 }
 
+function getAppointmentTipTotal(appointment) {
+  return getAppointmentPayments(appointment).reduce(
+    (sum, payment) => sum + toNumber(payment?.tip_amount, 0),
+    0
+  );
+}
+
 function getAppointmentServicesTotal(appointment) {
   return getAppointmentServices(appointment).reduce(
     (sum, serviceLine) => sum + getServiceTotal(serviceLine),
@@ -215,6 +244,7 @@ function getAppointmentStaffRefs(appointment) {
     refs.push({
       id: cleanText(serviceLine?.staff_id || serviceLine?.staff?.id),
       name: cleanText(serviceLine?.staff?.full_name),
+      person: serviceLine?.staff || null,
     });
   });
 
@@ -222,6 +252,7 @@ function getAppointmentStaffRefs(appointment) {
     refs.push({
       id: cleanText(appointment?.staff_id || appointment?.staff?.id),
       name: cleanText(appointment?.staff?.full_name),
+      person: appointment?.staff || null,
     });
   }
 
@@ -231,6 +262,7 @@ function getAppointmentStaffRefs(appointment) {
       id: ref.id,
       name: ref.name || "Sin técnica registrada",
       key: ref.id || ref.name || "Sin técnica registrada",
+      person: ref.person,
     }))
     .filter((ref) => {
       if (seen.has(ref.key)) return false;
@@ -258,7 +290,12 @@ function getAppointmentRow(appointment) {
   const total = getAppointmentTotal(appointment);
   const paid = getAppointmentPaidTotal(appointment);
   const serviceNames = getAppointmentServices(appointment).map(getServiceName);
-  const extraNames = getAppointmentExtras(appointment).map(getExtraName);
+  const extraNames = getAppointmentExtras(appointment).map((extraLine) => {
+    const name = getExtraName(extraLine);
+    return extraLine?.appointment_service_id
+      ? name
+      : `${name || "Extra"} (Sin servicio identificado)`;
+  });
   const paymentMethods = getAppointmentPayments(appointment).map(
     (payment) => payment?.payment_method
   );
@@ -276,6 +313,7 @@ function getAppointmentRow(appointment) {
     total,
     anticipo: toNumber(appointment?.deposit_amount, 0),
     pagado: paid,
+    propina: getAppointmentTipTotal(appointment),
     formaPago: uniqueTexts(paymentMethods).join(", "),
     saldo: Math.max(total - paid, 0),
   };
@@ -333,6 +371,92 @@ export function filterReportAppointments(appointments = [], filters = {}) {
 
 function createRowsForAppointments(appointments) {
   return appointments.map(getAppointmentRow);
+}
+
+function getPaymentStaffTotals(appointment, staffId) {
+  return getAppointmentPayments(appointment).flatMap((payment) =>
+    asArray(payment?.payment_staff_totals).filter(
+      (total) => cleanText(total?.staff_id) === cleanText(staffId)
+    )
+  );
+}
+
+function getStaffAppointmentRow(appointment, staffRef) {
+  const staffId = cleanText(staffRef?.id);
+  const serviceLines = getAppointmentServices(appointment).filter(
+    (serviceLine) =>
+      cleanText(serviceLine?.staff_id || serviceLine?.staff?.id) === staffId
+  );
+  const serviceIds = new Set(serviceLines.map((serviceLine) => serviceLine.id));
+  const extraLines = getAppointmentExtras(appointment).filter((extraLine) => {
+    const appointmentServiceId = cleanText(extraLine?.appointment_service_id);
+    if (appointmentServiceId) return serviceIds.has(appointmentServiceId);
+    return cleanText(extraLine?.staff_id || extraLine?.staff?.id) === staffId;
+  });
+  const savedTotals = getPaymentStaffTotals(appointment, staffId);
+  const fallbackPercent = getServiceCommissionPercent(staffRef?.person);
+  const cancelled = isCancelledAppointment(appointment);
+
+  const fallbackServiceTotal = serviceLines.reduce(
+    (sum, serviceLine) => sum + getServiceTotal(serviceLine),
+    0
+  );
+  const fallbackExtrasTotal = extraLines.reduce(
+    (sum, extraLine) => sum + getExtraTotal(extraLine),
+    0
+  );
+
+  const serviceTotal = cancelled
+    ? 0
+    : savedTotals.length > 0
+      ? savedTotals.reduce((sum, total) => sum + toNumber(total.service_total), 0)
+      : fallbackServiceTotal;
+  const extrasTotal = cancelled
+    ? 0
+    : savedTotals.length > 0
+      ? savedTotals.reduce((sum, total) => sum + toNumber(total.extras_total), 0)
+      : fallbackExtrasTotal;
+  const commissionBase = cancelled
+    ? 0
+    : savedTotals.length > 0
+      ? savedTotals.reduce((sum, total) => sum + toNumber(total.commission_base), 0)
+      : serviceTotal + extrasTotal;
+  const commissionAmount = cancelled
+    ? 0
+    : savedTotals.length > 0
+      ? savedTotals.reduce(
+          (sum, total) => sum + getReportCommissionAmount(total, fallbackPercent),
+          0
+        )
+      : (commissionBase * fallbackPercent) / 100;
+  const tipAmount = cancelled
+    ? 0
+    : savedTotals.reduce((sum, total) => sum + toNumber(total.tip_amount), 0);
+  const paymentMethods = getAppointmentPayments(appointment).map(
+    (payment) => payment?.payment_method
+  );
+  const extraNames = extraLines.map((extraLine) => {
+    const name = getExtraName(extraLine) || "Extra";
+    return extraLine?.appointment_service_id
+      ? name
+      : `${name} (Sin servicio identificado)`;
+  });
+
+  return {
+    fecha: toLocalDate(appointment?.appointment_date),
+    hora: timeToExcelDate(appointment?.start_time),
+    clienta: cleanText(appointment?.clients?.full_name) || "Clienta",
+    servicio: uniqueTexts(serviceLines.map(getServiceName)).join(", "),
+    extras: uniqueTexts(extraNames).join(", "),
+    serviceTotal,
+    extrasTotal,
+    commissionBase,
+    commissionAmount,
+    tipAmount,
+    staffTotal: serviceTotal + extrasTotal + tipAmount,
+    formaPago: uniqueTexts(paymentMethods).join(", "),
+    estado: getAppointmentStateText(appointment),
+  };
 }
 
 export function sanitizeWorksheetName(name, usedNames = new Set()) {
@@ -404,40 +528,18 @@ function createSummaryRows(appointments, filters) {
       const current = byStaff.get(key) || {
         name: staffRef.name,
         citas: 0,
-        total: 0,
+        serviceTotal: 0,
+        extrasTotal: 0,
+        tipAmount: 0,
+        commissionAmount: 0,
       };
-
-      const serviceTotal = getAppointmentServices(appointment)
-        .filter((serviceLine) => {
-          const serviceStaffId = cleanText(serviceLine?.staff_id || serviceLine?.staff?.id);
-          const serviceStaffName = cleanText(serviceLine?.staff?.full_name);
-          return (
-            serviceStaffId === staffRef.id ||
-            (!staffRef.id && serviceStaffName === staffRef.name)
-          );
-        })
-        .reduce((sum, serviceLine) => sum + getServiceTotal(serviceLine), 0);
-
-      const extrasTotal = getAppointmentExtras(appointment)
-        .filter((extraLine) => {
-          const extraStaffId = cleanText(extraLine?.staff_id || extraLine?.staff?.id);
-          const extraStaffName = cleanText(extraLine?.staff?.full_name);
-          return (
-            extraStaffId === staffRef.id ||
-            (!staffRef.id && extraStaffName === staffRef.name)
-          );
-        })
-        .reduce((sum, extraLine) => sum + getExtraTotal(extraLine), 0);
-
-      const isCancelled = isCancelledAppointment(appointment);
-      const assignedTotal = isCancelled ? 0 : serviceTotal + extrasTotal;
-      const fallbackTotal =
-        isCancelled || assignedTotal > 0 || staffRefs.length !== 1
-          ? assignedTotal
-          : getAppointmentTotal(appointment);
+      const staffRow = getStaffAppointmentRow(appointment, staffRef);
 
       current.citas += 1;
-      current.total += fallbackTotal;
+      current.serviceTotal += staffRow.serviceTotal;
+      current.extrasTotal += staffRow.extrasTotal;
+      current.tipAmount += staffRow.tipAmount;
+      current.commissionAmount += staffRow.commissionAmount;
       byStaff.set(key, current);
     });
   });
@@ -470,11 +572,21 @@ function createSummaryRows(appointments, filters) {
     [
       "Citas por colaboradora",
       "Total citas",
-      "Total monetario por colaboradora (sin canceladas)",
+      "Servicios",
+      "Extras",
+      "Propinas",
+      "Comisión almacenada/fallback histórico",
     ],
     ...[...byStaff.values()]
       .sort((a, b) => a.name.localeCompare(b.name, "es"))
-      .map((item) => [item.name, item.citas, item.total]),
+      .map((item) => [
+        item.name,
+        item.citas,
+        item.serviceTotal,
+        item.extrasTotal,
+        item.tipAmount,
+        item.commissionAmount,
+      ]),
     [],
     ["Estados del periodo", "Total"],
     ...[...statusCounts.entries()]
@@ -491,19 +603,28 @@ function appendSummarySheet(XLSX, workbook, appointments, filters) {
   });
   const range = XLSX.utils.decode_range(worksheet["!ref"] || "A1:A1");
 
-  worksheet["!cols"] = [{ wch: 34 }, { wch: 28 }, { wch: 32 }];
+  worksheet["!cols"] = [
+    { wch: 34 },
+    { wch: 28 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 24 },
+  ];
   worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
 
   for (let rowIndex = 1; rowIndex <= range.e.r; rowIndex += 1) {
     const valueAddress = XLSX.utils.encode_cell({ r: rowIndex, c: 1 });
-    const moneyAddress = XLSX.utils.encode_cell({ r: rowIndex, c: 2 });
 
     if (worksheet[valueAddress]?.v instanceof Date) {
       worksheet[valueAddress].z = "yyyy-mm-dd";
     }
 
-    if (worksheet[moneyAddress] && typeof worksheet[moneyAddress].v === "number") {
-      worksheet[moneyAddress].z = '"$"#,##0.00';
+    for (let columnIndex = 2; columnIndex <= 5; columnIndex += 1) {
+      const moneyAddress = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+      if (worksheet[moneyAddress] && typeof worksheet[moneyAddress].v === "number") {
+        worksheet[moneyAddress].z = '"$"#,##0.00';
+      }
     }
   }
 
@@ -523,6 +644,7 @@ function groupAppointmentsByStaff(appointments) {
     groupRefs.forEach((ref) => {
       const group = groups.get(ref.key) || {
         name: ref.name,
+        staffRef: ref,
         appointments: [],
       };
 
@@ -553,7 +675,10 @@ export function buildAppointmentReportWorkbook(XLSX, { appointments = [], filter
       XLSX,
       workbook,
       sanitizeWorksheetName(group.name, usedNames),
-      createRowsForAppointments(group.appointments)
+      group.appointments.map((appointment) =>
+        getStaffAppointmentRow(appointment, group.staffRef)
+      ),
+      staffAppointmentReportColumns
     );
   });
 

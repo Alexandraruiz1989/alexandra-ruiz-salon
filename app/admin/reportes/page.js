@@ -8,6 +8,7 @@ import {
   createAppointmentReportFileName,
   filterReportAppointments,
 } from "../../lib/reportesAppointmentExcel";
+import { getReportCommissionAmount } from "../../lib/paymentEconomics";
 
 const menuItems = [
   { key: "comisiones", label: "Comisiones" },
@@ -340,11 +341,14 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
               ),
               staff (
                 id,
-                full_name
+                full_name,
+                service_commission_percentage,
+                commission_percentage
               )
             ),
             appointment_extra_items (
               id,
+              appointment_service_id,
               extra_id,
               name,
               quantity,
@@ -364,7 +368,17 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
               paid_amount,
               balance_due,
               payment_status,
-              payment_date
+              payment_date,
+              tip_amount,
+              payment_staff_totals (
+                staff_id,
+                service_total,
+                extras_total,
+                commission_base,
+                commission_amount,
+                tip_amount,
+                commission_snapshot_complete
+              )
             )
           `
           )
@@ -601,11 +615,6 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
         0
       );
 
-      const savedCommission = staffTotals.reduce(
-        (sum, item) => sum + Number(item.commission_amount || 0),
-        0
-      );
-
       const tipTotal = staffTotals.reduce(
         (sum, item) => sum + Number(item.tip_amount || 0),
         0
@@ -614,10 +623,11 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
       const serviceCommissionPercent = getCommissionPercent(person);
       const productCommissionPercent = getProductCommissionPercent(person);
 
-      const calculatedServiceCommission =
-        savedCommission > 0
-          ? savedCommission
-          : commissionBase * (serviceCommissionPercent / 100);
+      const calculatedServiceCommission = staffTotals.reduce(
+        (sum, item) =>
+          sum + getReportCommissionAmount(item, serviceCommissionPercent),
+        0
+      );
 
       const productSalesTotal = 0;
       const productCommission =
@@ -931,7 +941,7 @@ periodDays: getDaysBetween(startDate, endDate),
           <SectionHeader
             eyebrow="Comisiones"
             title="Resumen por técnica"
-            description="Incluye servicios, extras, propinas, sueldo semanal, bonos y descuentos."
+            description="Incluye servicios, extras, propinas, sueldo semanal, bonos y descuentos. Los cobros nuevos usan la comisión guardada al cobrar; solo registros históricos incompletos usan el porcentaje actual como fallback."
             action={
               <button
                 type="button"

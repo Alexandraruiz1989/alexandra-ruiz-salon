@@ -40,6 +40,7 @@ export default function ReceiptPage() {
           ),
           payment_service_items (
             id,
+            appointment_service_id,
             name,
             staff_name,
             quantity,
@@ -48,10 +49,21 @@ export default function ReceiptPage() {
           ),
           payment_extra_items (
             id,
+            appointment_service_id,
+            appointment_extra_item_id,
             name,
             quantity,
             unit_price,
-            total_price
+            total_price,
+            staff_id
+          ),
+          payment_staff_totals (
+            staff_id,
+            tip_amount,
+            staff (
+              id,
+              full_name
+            )
           )
         `
         )
@@ -75,6 +87,25 @@ export default function ReceiptPage() {
     if (!payment?.id) return "";
     return String(payment.id).slice(0, 8).toUpperCase();
   }, [payment]);
+
+  const extrasByService = useMemo(() => {
+    const groups = new Map();
+    (payment?.payment_extra_items || []).forEach((extra) => {
+      if (!extra.appointment_service_id) return;
+      const current = groups.get(extra.appointment_service_id) || [];
+      current.push(extra);
+      groups.set(extra.appointment_service_id, current);
+    });
+    return groups;
+  }, [payment]);
+
+  const unassignedExtras = useMemo(
+    () =>
+      (payment?.payment_extra_items || []).filter(
+        (extra) => !extra.appointment_service_id
+      ),
+    [payment]
+  );
 
   if (loading) {
     return (
@@ -205,32 +236,57 @@ export default function ReceiptPage() {
                 {(payment.payment_service_items || []).length === 0 ? (
                   <EmptyText>No hay servicios registrados.</EmptyText>
                 ) : (
-                  payment.payment_service_items.map((item) => (
-                    <ReceiptLine
-                      key={item.id}
-                      title={item.name}
-                      subtitle={
-                        item.staff_name
-                          ? `Atendió: ${item.staff_name}`
-                          : "Sin técnica asignada"
-                      }
-                      quantity={item.quantity}
-                      unitPrice={item.unit_price}
-                      total={item.total_price}
-                    />
-                  ))
+                  payment.payment_service_items.map((item) => {
+                    const relatedExtras =
+                      extrasByService.get(item.appointment_service_id) || [];
+
+                    return (
+                      <div key={item.id} className="rounded-2xl bg-[#f7f9fa] p-4">
+                        <ReceiptLine
+                          title={item.name}
+                          subtitle={
+                            item.staff_name
+                              ? `Atendió: ${item.staff_name}`
+                              : "Sin técnica asignada"
+                          }
+                          quantity={item.quantity}
+                          unitPrice={item.unit_price}
+                          total={item.total_price}
+                        />
+                        {relatedExtras.length > 0 && (
+                          <div className="ml-4 mt-3 border-l-2 border-[#bd7b83]/30 pl-4">
+                            {relatedExtras.map((extra) => (
+                              <ReceiptLine
+                                key={extra.id}
+                                title={`Extra: ${extra.name}`}
+                                subtitle={`Aplicado a ${item.name}`}
+                                quantity={extra.quantity}
+                                unitPrice={extra.unit_price}
+                                total={extra.total_price}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </DetailCard>
 
-              <DetailCard title="Extras / decoraciones" subtitle="Adicionales">
-                {(payment.payment_extra_items || []).length === 0 ? (
-                  <EmptyText>No se agregaron extras en este cobro.</EmptyText>
+              <DetailCard
+                title="Extras sin servicio identificado"
+                subtitle="Compatibilidad histórica"
+              >
+                {unassignedExtras.length === 0 ? (
+                  <EmptyText>
+                    Todos los extras están ligados a su servicio o no hubo extras.
+                  </EmptyText>
                 ) : (
-                  payment.payment_extra_items.map((item) => (
+                  unassignedExtras.map((item) => (
                     <ReceiptLine
                       key={item.id}
                       title={item.name}
-                      subtitle="Extra / decoración"
+                      subtitle="Registro histórico sin servicio identificado"
                       quantity={item.quantity}
                       unitPrice={item.unit_price}
                       total={item.total_price}
@@ -260,6 +316,29 @@ export default function ReceiptPage() {
                   </p>
                 </div>
               </div>
+
+              {(payment.payment_staff_totals || []).some(
+                (total) => Number(total.tip_amount || 0) > 0
+              ) && (
+                <div className="mt-5 rounded-[1.35rem] bg-white p-5 shadow-sm">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[#bd7b83]">
+                    Distribución de propina
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {payment.payment_staff_totals
+                      .filter((total) => Number(total.tip_amount || 0) > 0)
+                      .map((total) => (
+                        <div
+                          key={total.staff_id}
+                          className="flex justify-between gap-4 text-sm text-[#68777c]"
+                        >
+                          <span>{total.staff?.full_name || "Colaboradora"}</span>
+                          <span>{formatMoney(total.tip_amount)}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {payment.notes && (

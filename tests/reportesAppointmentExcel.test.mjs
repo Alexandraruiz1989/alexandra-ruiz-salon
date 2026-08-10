@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 
 import {
   appointmentReportColumns,
+  staffAppointmentReportColumns,
   buildAppointmentReportWorkbook,
   createAppointmentReportFileName,
   filterReportAppointments,
@@ -56,6 +57,18 @@ function appointment(overrides = {}) {
         payment_method: "Efectivo",
         paid_amount: 160,
         total_amount: 160,
+        tip_amount: 0,
+        payment_staff_totals: [
+          {
+            staff_id: staffAlexandraId,
+            service_total: 160,
+            extras_total: 0,
+            commission_base: 160,
+            commission_amount: 16,
+            tip_amount: 0,
+            commission_snapshot_complete: true,
+          },
+        ],
       },
     ],
     ...overrides,
@@ -179,6 +192,18 @@ function sampleAppointments() {
           payment_method: "Transferencia",
           paid_amount: 150,
           total_amount: 150,
+          tip_amount: 0,
+          payment_staff_totals: [
+            {
+              staff_id: staffTaniaId,
+              service_total: 300,
+              extras_total: 50,
+              commission_base: 350,
+              commission_amount: 35,
+              tip_amount: 0,
+              commission_snapshot_complete: true,
+            },
+          ],
         },
       ],
     }),
@@ -195,6 +220,78 @@ function sheetRows(workbook, sheetName) {
   return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
     header: 1,
     defval: "",
+  });
+}
+
+function multiStaffAppointment() {
+  return appointment({
+    id: "appointment-multi-staff",
+    appointment_date: "2026-08-04",
+    estimated_total: 790,
+    deposit_amount: 0,
+    clients: { full_name: "Clienta multitécnica", phone: "9993333333" },
+    appointment_services: [
+      {
+        id: "appointment-service-hands",
+        service_id: serviceGelId,
+        staff_id: staffLauraId,
+        unit_price: 350,
+        total_price: 350,
+        duration_minutes: 60,
+        services: { id: serviceGelId, name: "Manos", base_price: 350 },
+        staff: { id: staffLauraId, full_name: "Laura" },
+      },
+      {
+        id: "appointment-service-pedicure",
+        service_id: servicePediId,
+        staff_id: staffTaniaId,
+        unit_price: 380,
+        total_price: 380,
+        duration_minutes: 60,
+        services: { id: servicePediId, name: "Pedicure", base_price: 380 },
+        staff: { id: staffTaniaId, full_name: "Tania" },
+      },
+    ],
+    appointment_extra_items: [
+      {
+        id: "appointment-extra-french",
+        appointment_service_id: "appointment-service-hands",
+        name: "Francés",
+        quantity: 1,
+        unit_price: 60,
+        total_price: 60,
+        staff_id: staffLauraId,
+        staff: { id: staffLauraId, full_name: "Laura" },
+      },
+    ],
+    payments: [
+      {
+        payment_method: "Efectivo",
+        paid_amount: 870,
+        total_amount: 870,
+        tip_amount: 80,
+        payment_staff_totals: [
+          {
+            staff_id: staffLauraId,
+            service_total: 350,
+            extras_total: 60,
+            commission_base: 410,
+            commission_amount: 41,
+            tip_amount: 30,
+            commission_snapshot_complete: true,
+          },
+          {
+            staff_id: staffTaniaId,
+            service_total: 380,
+            extras_total: 0,
+            commission_base: 380,
+            commission_amount: 38,
+            tip_amount: 50,
+            commission_snapshot_complete: true,
+          },
+        ],
+      },
+    ],
   });
 }
 
@@ -280,7 +377,8 @@ test("la hoja Citas contiene columnas esperadas y una fila por cita filtrada", (
   assert.equal(rows[1][5], "Gel en uña natural");
   assert.equal(rows[1][10], 50);
   assert.equal(rows[1][11], 160);
-  assert.equal(rows[1][12], "Efectivo");
+  assert.equal(rows[1][12], 0);
+  assert.equal(rows[1][13], "Efectivo");
 });
 
 test("la hoja Resumen refleja filtros, totales, estados y colaboradoras", () => {
@@ -296,9 +394,9 @@ test("la hoja Resumen refleja filtros, totales, estados y colaboradoras", () => 
   });
   const rows = sheetRows(workbook, "Resumen");
 
-  assert.deepEqual(rows[4], ["Total de citas", 3, ""]);
-  assert.deepEqual(rows[5], ["Citas canceladas", 1, ""]);
-  assert.deepEqual(rows[6], ["Citas completadas", 1, ""]);
+  assert.deepEqual(rows[4], ["Total de citas", 3, "", "", "", ""]);
+  assert.deepEqual(rows[5], ["Citas canceladas", 1, "", "", "", ""]);
+  assert.deepEqual(rows[6], ["Citas completadas", 1, "", "", "", ""]);
   assert.ok(rows.some((row) => row[0] === "Alexandra" && row[1] === 1));
   assert.ok(
     rows.some(
@@ -306,7 +404,12 @@ test("la hoja Resumen refleja filtros, totales, estados y colaboradoras", () => 
         String(row[0]).startsWith("Laura/Color") && row[1] === 1 && row[2] === 0
     )
   );
-  assert.ok(rows.some((row) => row[0] === "Tania" && row[1] === 1 && row[2] === 350));
+  assert.ok(
+    rows.some(
+      (row) =>
+        row[0] === "Tania" && row[1] === 1 && row[2] === 300 && row[3] === 50
+    )
+  );
   assert.ok(rows.some((row) => row[0] === "Cancelada" && row[1] === 1));
   assert.ok(rows.some((row) => row[0] === "Asistió" && row[1] === 1));
 });
@@ -335,6 +438,81 @@ test("cada hoja por colaboradora contiene solo sus citas y no crea hojas vacías
   assert.equal(workbook.SheetNames.includes("Sin citas"), false);
 });
 
+test("hojas multi-colaboradora conservan solo servicios, extras, propina y comisión propios", () => {
+  const workbook = buildAppointmentReportWorkbook(XLSX, {
+    appointments: [multiStaffAppointment()],
+    filters: { startDate: "2026-08-04", endDate: "2026-08-04" },
+  });
+  const lauraRows = sheetRows(workbook, "Laura");
+  const taniaRows = sheetRows(workbook, "Tania");
+  const headers = staffAppointmentReportColumns.map((column) => column.label);
+  const index = Object.fromEntries(headers.map((header, column) => [header, column]));
+
+  assert.deepEqual(lauraRows[0], headers);
+  assert.deepEqual(taniaRows[0], headers);
+  assert.equal(lauraRows[1][index["Servicios"]], 350);
+  assert.equal(lauraRows[1][index["Extras"]], 60);
+  assert.equal(lauraRows[1][index["Base comisión"]], 410);
+  assert.equal(lauraRows[1][index["Comisión"]], 41);
+  assert.equal(lauraRows[1][index["Propina"]], 30);
+  assert.equal(lauraRows[1][index["Servicios + extras + propina"]], 440);
+  assert.match(lauraRows[1][index["Servicios de la colaboradora"]], /Manos/);
+  assert.doesNotMatch(
+    lauraRows[1][index["Servicios de la colaboradora"]],
+    /Pedicure/
+  );
+
+  assert.equal(taniaRows[1][index["Servicios"]], 380);
+  assert.equal(taniaRows[1][index["Extras"]], 0);
+  assert.equal(taniaRows[1][index["Base comisión"]], 380);
+  assert.equal(taniaRows[1][index["Comisión"]], 38);
+  assert.equal(taniaRows[1][index["Propina"]], 50);
+  assert.equal(taniaRows[1][index["Servicios + extras + propina"]], 430);
+  assert.match(taniaRows[1][index["Servicios de la colaboradora"]], /Pedicure/);
+  assert.doesNotMatch(
+    taniaRows[1][index["Servicios de la colaboradora"]],
+    /Manos/
+  );
+
+  assert.equal(
+    lauraRows[1][index["Base comisión"]] + taniaRows[1][index["Base comisión"]],
+    790
+  );
+  assert.equal(
+    lauraRows[1][index["Servicios + extras + propina"]] +
+      taniaRows[1][index["Servicios + extras + propina"]],
+    870
+  );
+  assert.equal(lauraRows[1].includes(870), false);
+  assert.equal(taniaRows[1].includes(870), false);
+});
+
+test("extra histórico sin appointment_service_id se identifica sin inventar servicio", () => {
+  const historical = appointment({
+    appointment_extra_items: [
+      {
+        id: "historical-extra",
+        appointment_service_id: null,
+        name: "Decoración histórica",
+        quantity: 1,
+        unit_price: 20,
+        total_price: 20,
+        staff_id: staffAlexandraId,
+        staff: { id: staffAlexandraId, full_name: "Alexandra" },
+      },
+    ],
+  });
+  const workbook = buildAppointmentReportWorkbook(XLSX, {
+    appointments: [historical],
+    filters: { startDate: "2026-08-01", endDate: "2026-08-01" },
+  });
+  const generalRows = sheetRows(workbook, "Citas");
+  const staffRows = sheetRows(workbook, "Alexandra");
+
+  assert.match(generalRows[1][6], /Sin servicio identificado/);
+  assert.match(staffRows[1][4], /Sin servicio identificado/);
+});
+
 test("una cita con varios servicios, extras o pagos no se duplica en la hoja Citas", () => {
   const workbook = buildAppointmentReportWorkbook(XLSX, {
     appointments: sampleAppointments(),
@@ -352,8 +530,9 @@ test("una cita con varios servicios, extras o pagos no se duplica en la hoja Cit
   assert.equal(rows[1][9], 300);
   assert.equal(rows[1][10], 100);
   assert.equal(rows[1][11], 150);
-  assert.equal(rows[1][12], "Transferencia");
-  assert.equal(rows[1][13], 150);
+  assert.equal(rows[1][12], 0);
+  assert.equal(rows[1][13], "Transferencia");
+  assert.equal(rows[1][14], 150);
 });
 
 test("aplica formato legible en fechas, horas, importes, encabezados y anchos", () => {
@@ -373,7 +552,8 @@ test("aplica formato legible en fechas, horas, importes, encabezados y anchos", 
   assert.equal(worksheet.J2.z, '"$"#,##0.00');
   assert.equal(worksheet.K2.z, '"$"#,##0.00');
   assert.equal(worksheet.L2.z, '"$"#,##0.00');
-  assert.equal(worksheet.N2.z, '"$"#,##0.00');
+  assert.equal(worksheet.M2.z, '"$"#,##0.00');
+  assert.equal(worksheet.O2.z, '"$"#,##0.00');
   assert.ok(worksheet["!autofilter"]);
   assert.deepEqual(worksheet["!freeze"], { xSplit: 0, ySplit: 1 });
 });

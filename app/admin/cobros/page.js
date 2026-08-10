@@ -4,6 +4,13 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  buildPaymentExtraItems,
+  buildPaymentServiceItems,
+  calculatePaymentSummary,
+  getAppointmentStaff,
+  normalizeTipAllocations,
+} from "../../lib/paymentEconomics";
 
 const menuItems = [
   { key: "pendientes", label: "Citas por cobrar" },
@@ -133,7 +140,6 @@ function CobrosContent() {
   const [payments, setPayments] = useState([]);
   const [allPaidAppointmentIds, setAllPaidAppointmentIds] = useState([]);
   const [extras, setExtras] = useState([]);
-  const [paymentSettings, setPaymentSettings] = useState(null);
   const [storeProducts, setStoreProducts] = useState([]);
   const [staff, setStaff] = useState([]);
 
@@ -150,6 +156,7 @@ function CobrosContent() {
   });
 
   const [extraLines, setExtraLines] = useState([]);
+  const [tipAmounts, setTipAmounts] = useState({});
   const [productLines, setProductLines] = useState([]);
   const [productSearch, setProductSearch] = useState("");
   const [productSellerStaffId, setProductSellerStaffId] = useState("");
@@ -350,7 +357,6 @@ function CobrosContent() {
       paymentsResult,
       allPaymentsResult,
       extrasResult,
-      settingsResult,
       storeProductsResult,
       staffResult,
     ] = await Promise.all([
@@ -369,8 +375,6 @@ function CobrosContent() {
           .eq("active", true)
           .order("category", { ascending: true })
           .order("name", { ascending: true }),
-
-        supabase.from("payment_settings").select("*").limit(1).maybeSingle(),
 
         supabase
           .from("store_products")
@@ -407,14 +411,6 @@ function CobrosContent() {
       setMessage(`No se pudieron cargar extras: ${extrasResult.error.message}`);
     } else {
       setExtras(extrasResult.data || []);
-    }
-
-    if (settingsResult.error) {
-      setMessage(
-        `No se pudo cargar configuración de cobros: ${settingsResult.error.message}`
-      );
-    } else {
-      setPaymentSettings(settingsResult.data || null);
     }
 
     if (storeProductsResult.error) {
@@ -466,10 +462,12 @@ function CobrosContent() {
   setPaymentMessage("");
   setPaymentForm({
     discount_amount: 0,
-    tip_amount: 0,
     payment_method: "Efectivo",
     notes: "",
   });
+  setTipAmounts(
+    Object.fromEntries(getAppointmentStaff(appointment).map((person) => [person.id, 0]))
+  );
   setProductLines([]);
   setProductSearch("");
   setProductSellerStaffId(
@@ -491,6 +489,8 @@ function CobrosContent() {
     );
   } else {
     const plannedExtras = (data || []).map((item) => ({
+      appointment_extra_item_id: item.id,
+      appointment_service_id: item.appointment_service_id || "",
       extra_id: item.extra_id || "",
       name: item.name || "",
       quantity: Number(item.quantity || 1),
@@ -512,11 +512,11 @@ function CobrosContent() {
     setPaymentMessage("");
     setPaymentForm({
       discount_amount: 0,
-      tip_amount: 0,
       payment_method: "Efectivo",
       notes: "",
     });
     setExtraLines([]);
+    setTipAmounts({});
     setProductLines([]);
     setProductSearch("");
     setProductSellerStaffId("");
@@ -540,6 +540,8 @@ function CobrosContent() {
     setExtraLines((current) => [
       ...current,
       {
+        appointment_extra_item_id: null,
+        appointment_service_id: "",
         extra_id: "",
         name: "",
         quantity: 1,
@@ -577,6 +579,13 @@ function CobrosContent() {
                 ? 1
                 : updatedLine.quantity || 1;
           }
+        }
+
+        if (field === "appointment_service_id") {
+          const selectedService = selectedAppointment?.appointment_services?.find(
+            (service) => service.id === value
+          );
+          updatedLine.staff_id = selectedService?.staff_id || "";
         }
 
         const quantity = Number(updatedLine.quantity || 0);
@@ -683,182 +692,39 @@ function CobrosContent() {
   };
 
   const getPaymentTotals = () => {
-    const subtotalServices = selectedAppointment
-      ? getAppointmentTotal(selectedAppointment)
-      : 0;
+    const serviceItems = buildPaymentServiceItems(selectedAppointment);
+    let extraItems = [];
 
-    const subtotalExtras = extraLines.reduce(
-      (sum, line) => sum + Number(line.total_price || 0),
-      0
+    try {
+      extraItems = buildPaymentExtraItems(extraLines, serviceItems);
+    } catch {
+      extraItems = extraLines
+        .filter(
+          (line) =>
+            (line.extra_id || String(line.name || "").trim()) &&
+            Number(line.total_price || 0) > 0
+        )
+        .map((line) => ({ total_price: line.total_price }));
+    }
+
+    const tipAllocations = normalizeTipAllocations(
+      tipAmounts,
+      getAppointmentStaff(selectedAppointment)
     );
 
-    const depositAmount = Number(selectedAppointment?.deposit_amount || 0);
-    const discountAmount = Number(paymentForm.discount_amount || 0);
-    const tipAmount = Number(paymentForm.tip_amount || 0);
-    const subtotalProducts = productSubtotal;
-    const servicesPaymentTotal = Math.max(
-      subtotalServices + subtotalExtras - discountAmount - depositAmount + tipAmount,
-      0
-    );
-
-    const totalAmount = servicesPaymentTotal + subtotalProducts;
+    const serviceTotals = calculatePaymentSummary({
+      serviceItems,
+      extraItems,
+      tipAllocations,
+      discountAmount: paymentForm.discount_amount,
+      depositAmount: selectedAppointment?.deposit_amount,
+    });
 
     return {
-      subtotalServices,
-      subtotalExtras,
-      subtotalProducts,
-      depositAmount,
-      discountAmount,
-      tipAmount,
-      servicesPaymentTotal,
-      totalAmount: Math.max(totalAmount, 0),
+      ...serviceTotals,
+      subtotalProducts: productSubtotal,
+      totalAmount: serviceTotals.totalAmount + productSubtotal,
     };
-  };
-
-  const getUniqueAppointmentStaff = (appointment) => {
-    const services = appointment?.appointment_services || [];
-
-    return [
-      ...new Map(
-        services
-          .filter((item) => item.staff_id)
-          .map((item) => [
-            item.staff_id,
-            {
-              id: item.staff_id,
-              full_name: item.staff?.full_name || "Técnica",
-            },
-          ])
-      ).values(),
-    ];
-  };
-
-  const calculateTipDistribution = (appointment, tipAmount) => {
-    const amount = Number(tipAmount || 0);
-
-    if (amount <= 0) return [];
-
-    const rule = paymentSettings?.tip_rule || "appointment_staff";
-
-    let selectedStaff = [];
-
-    if (rule === "appointment_staff") {
-      selectedStaff = getUniqueAppointmentStaff(appointment);
-    }
-
-    if (rule === "all_active_staff") {
-      const allStaffFromAppointments = appointments.flatMap((item) =>
-        getUniqueAppointmentStaff(item)
-      );
-
-      selectedStaff = [
-        ...new Map(
-          allStaffFromAppointments.map((person) => [person.id, person])
-        ).values(),
-      ];
-    }
-
-    if (rule === "selected_staff") {
-      const selectedIds = paymentSettings?.selected_staff_ids || [];
-      const allStaffFromAppointments = appointments.flatMap((item) =>
-        getUniqueAppointmentStaff(item)
-      );
-
-      selectedStaff = [
-        ...new Map(
-          allStaffFromAppointments
-            .filter((person) => selectedIds.includes(person.id))
-            .map((person) => [person.id, person])
-        ).values(),
-      ];
-    }
-
-    if (selectedStaff.length === 0) {
-      selectedStaff = getUniqueAppointmentStaff(appointment);
-    }
-
-    if (selectedStaff.length === 0) return [];
-
-    const amountPerStaff = amount / selectedStaff.length;
-
-    return selectedStaff.map((person) => ({
-      staff_id: person.id,
-      tip_amount: Number(amountPerStaff.toFixed(2)),
-    }));
-  };
-
-  const calculateStaffTotals = (paymentId, appointment, tipDistribution) => {
-    const services = appointment?.appointment_services || [];
-    const result = {};
-
-    services.forEach((item) => {
-      if (!item.staff_id) return;
-
-      if (!result[item.staff_id]) {
-        result[item.staff_id] = {
-          payment_id: paymentId,
-          staff_id: item.staff_id,
-          service_total: 0,
-          extras_total: 0,
-          commission_base: 0,
-          commission_amount: 0,
-          tip_amount: 0,
-        };
-      }
-
-      const serviceAmount = Number(item.total_price || item.price || 0);
-
-      result[item.staff_id].service_total += serviceAmount;
-      result[item.staff_id].commission_base += serviceAmount;
-    });
-
-    extraLines.forEach((line) => {
-      if (!line.staff_id) return;
-
-      if (!result[line.staff_id]) {
-        result[line.staff_id] = {
-          payment_id: paymentId,
-          staff_id: line.staff_id,
-          service_total: 0,
-          extras_total: 0,
-          commission_base: 0,
-          commission_amount: 0,
-          tip_amount: 0,
-        };
-      }
-
-      const extraAmount = Number(line.total_price || 0);
-
-      result[line.staff_id].extras_total += extraAmount;
-      result[line.staff_id].commission_base += extraAmount;
-    });
-
-    tipDistribution.forEach((item) => {
-      if (!item.staff_id) return;
-
-      if (!result[item.staff_id]) {
-        result[item.staff_id] = {
-          payment_id: paymentId,
-          staff_id: item.staff_id,
-          service_total: 0,
-          extras_total: 0,
-          commission_base: 0,
-          commission_amount: 0,
-          tip_amount: 0,
-        };
-      }
-
-      result[item.staff_id].tip_amount += Number(item.tip_amount || 0);
-    });
-
-    return Object.values(result).map((item) => ({
-      ...item,
-      service_total: Number(item.service_total.toFixed(2)),
-      extras_total: Number(item.extras_total.toFixed(2)),
-      commission_base: Number(item.commission_base.toFixed(2)),
-      commission_amount: Number(item.commission_amount.toFixed(2)),
-      tip_amount: Number(item.tip_amount.toFixed(2)),
-    }));
   };
 
   const deletePayment = async (payment) => {
@@ -901,6 +767,7 @@ function CobrosContent() {
           );
           return;
         }
+
       }
 
       const { error: paymentError } = await supabase
@@ -926,6 +793,13 @@ function CobrosContent() {
     } finally {
       setDeletingPaymentId(null);
     }
+  };
+
+  const handleTipAmountChange = (staffId, value) => {
+    setTipAmounts((current) => ({
+      ...current,
+      [staffId]: value,
+    }));
   };
 
   const getCurrentAccessToken = async () => {
@@ -1019,118 +893,57 @@ function CobrosContent() {
       return;
     }
 
-    const paymentPayload = {
-      appointment_id: selectedAppointment.id,
-      client_id: selectedAppointment.client_id,
-      payment_date: selectedDate,
-      subtotal_services: totals.subtotalServices,
-      subtotal_extras: totals.subtotalExtras,
-      discount_amount: totals.discountAmount,
-      deposit_amount: totals.depositAmount,
-      tip_amount: totals.tipAmount,
-      total_amount: totals.totalAmount,
-      payment_method: paymentForm.payment_method,
-      payment_status: "pagado",
-      notes: paymentForm.notes?.trim() || null,
-      created_by_user_id: currentUser?.id || null,
-      created_by_email: currentUser?.email || null,
-      updated_at: new Date().toISOString(),
-    };
+    const serviceItems = buildPaymentServiceItems(selectedAppointment);
+    let extraItems = [];
 
-    const { data: payment, error: paymentError } = await supabase
-      .from("payments")
-      .insert([paymentPayload])
-      .select()
-      .single();
-
-    if (paymentError) {
-      setPaymentMessage(`No se pudo guardar el pago: ${paymentError.message}`);
+    try {
+      extraItems = buildPaymentExtraItems(extraLines, serviceItems);
+    } catch (error) {
+      setPaymentMessage(error?.message || "Cada extra debe indicar su servicio.");
       setSavingPayment(false);
       return;
     }
 
-    const serviceRows = (selectedAppointment.appointment_services || []).map(
-      (service) => ({
-        payment_id: payment.id,
-        appointment_service_id: service.id,
-        service_id: service.service_id,
-        staff_id: service.staff_id || null,
-        name: service.services?.name || "Servicio",
-        staff_name: service.staff?.full_name || null,
-        start_time: service.start_time || null,
-        end_time: service.end_time || null,
-        quantity: 1,
-        unit_price: Number(service.price || service.total_price || 0),
-        total_price: Number(service.total_price || service.price || 0),
-      })
+    const tipAllocations = normalizeTipAllocations(
+      tipAmounts,
+      getAppointmentStaff(selectedAppointment)
     );
 
-    if (serviceRows.length > 0) {
-      const { error: servicesError } = await supabase
-        .from("payment_service_items")
-        .insert(serviceRows);
-
-      if (servicesError) {
-        setPaymentMessage(
-          `El pago se guardó, pero no se pudieron guardar los servicios cobrados: ${servicesError.message}`
-        );
-        setSavingPayment(false);
-        return;
+    const { data: paymentResult, error: paymentError } = await supabase.rpc(
+      "create_payment_transaction",
+      {
+        p_appointment_id: selectedAppointment.id,
+        p_payment_date: selectedDate,
+        p_payment_method: paymentForm.payment_method,
+        p_discount_amount: totals.discountAmount,
+        p_tip_allocations: tipAllocations.map((allocation) => ({
+          staffId: allocation.staff_id,
+          amount: allocation.tip_amount,
+        })),
+        p_extra_items: extraItems.map((item) => ({
+          appointmentExtraItemId: item.appointment_extra_item_id,
+          appointmentServiceId: item.appointment_service_id,
+          extraId: item.extra_id,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          totalPrice: item.total_price,
+        })),
+        p_notes: paymentForm.notes?.trim() || null,
       }
+    );
+
+    if (paymentError || !paymentResult?.paymentId) {
+      setPaymentMessage(
+        `No se pudo guardar el cobro completo: ${
+          paymentError?.message || "respuesta transaccional inválida"
+        }`
+      );
+      setSavingPayment(false);
+      return;
     }
 
-    const validExtras = extraLines.filter(
-      (line) => line.extra_id && Number(line.total_price || 0) > 0
-    );
-
-    if (validExtras.length > 0) {
-      const extraRows = validExtras.map((line) => ({
-        payment_id: payment.id,
-        extra_id: line.extra_id || null,
-        name: line.name,
-        quantity: Number(line.quantity || 0),
-        unit_price: Number(line.unit_price || 0),
-        total_price: Number(line.total_price || 0),
-        staff_id: line.staff_id || null,
-      }));
-
-      const { error: extrasError } = await supabase
-        .from("payment_extra_items")
-        .insert(extraRows);
-
-      if (extrasError) {
-        setPaymentMessage(
-          `El pago se guardó, pero no se pudieron guardar los extras: ${extrasError.message}`
-        );
-        setSavingPayment(false);
-        return;
-      }
-    }
-
-    const tipDistribution = calculateTipDistribution(
-      selectedAppointment,
-      totals.tipAmount
-    );
-
-    const staffTotals = calculateStaffTotals(
-      payment.id,
-      selectedAppointment,
-      tipDistribution
-    );
-
-    if (staffTotals.length > 0) {
-      const { error: staffTotalsError } = await supabase
-        .from("payment_staff_totals")
-        .insert(staffTotals);
-
-      if (staffTotalsError) {
-        setPaymentMessage(
-          `El pago se guardó, pero no se pudieron guardar los totales por técnica: ${staffTotalsError.message}`
-        );
-        setSavingPayment(false);
-        return;
-      }
-    }
+    const payment = { id: paymentResult.paymentId };
 
     if (productLines.length > 0) {
       try {
@@ -1140,33 +953,6 @@ function CobrosContent() {
           `El pago se guardó, pero no se pudieron guardar productos: ${
             error?.message || "intenta nuevamente."
           }`
-        );
-        setSavingPayment(false);
-        return;
-      }
-    }
-
-    if (Number(totals.servicesPaymentTotal || 0) > 0) {
-      const { error: cashError } = await supabase.from("cash_movements").insert([
-        {
-          movement_date: selectedDate,
-          movement_type: "ingreso",
-          amount: totals.servicesPaymentTotal,
-          payment_method: paymentForm.payment_method,
-          concept: `Cobro de cita - ${
-            selectedAppointment.clients?.full_name || "Clienta"
-          }`,
-          category: "servicio",
-          notes: paymentForm.notes?.trim() || null,
-          payment_id: payment.id,
-          created_by_user_id: currentUser?.id || null,
-          created_by_email: currentUser?.email || null,
-        },
-      ]);
-
-      if (cashError) {
-        setPaymentMessage(
-          `El pago se guardó, pero no se pudo registrar en caja: ${cashError.message}`
         );
         setSavingPayment(false);
         return;
@@ -1624,9 +1410,9 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
         <PaymentModal
           appointment={selectedAppointment}
           extras={extras}
-          paymentSettings={paymentSettings}
           paymentForm={paymentForm}
           extraLines={extraLines}
+          tipAmounts={tipAmounts}
           productLines={productLines}
           productSearch={productSearch}
           productSellerStaffId={productSellerStaffId}
@@ -1639,6 +1425,7 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
           addExtraLine={addExtraLine}
           removeExtraLine={removeExtraLine}
           handleExtraLineChange={handleExtraLineChange}
+          handleTipAmountChange={handleTipAmountChange}
           setProductSearch={setProductSearch}
           setProductSellerStaffId={setProductSellerStaffId}
           addProductLine={addProductLine}
@@ -1656,9 +1443,9 @@ Gracias por tu visita, fue un gusto atenderte ✨`;
 function PaymentModal({
   appointment,
   extras,
-  paymentSettings,
   paymentForm,
   extraLines,
+  tipAmounts,
   productLines,
   productSearch,
   productSellerStaffId,
@@ -1671,6 +1458,7 @@ function PaymentModal({
   addExtraLine,
   removeExtraLine,
   handleExtraLineChange,
+  handleTipAmountChange,
   setProductSearch,
   setProductSellerStaffId,
   addProductLine,
@@ -1690,12 +1478,6 @@ function PaymentModal({
         .map((item) => [item.staff.id, item.staff])
     ).values(),
   ];
-
-  const tipRuleLabel = {
-    appointment_staff: "Técnica(s) que atendieron la cita",
-    all_active_staff: "Todos los colaboradores activos",
-    selected_staff: "Colaboradores seleccionados",
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1790,7 +1572,7 @@ function PaymentModal({
                       key={index}
                       className="rounded-2xl border border-[#dde3e6] bg-white p-4"
                     >
-                      <div className="grid gap-4 lg:grid-cols-[1fr_0.4fr_0.4fr_0.4fr_auto]">
+                      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_0.4fr_0.4fr_0.4fr_auto]">
                         <div>
                           <label className="mb-2 block text-sm text-[#68777c]">
                             Extra
@@ -1809,6 +1591,37 @@ function PaymentModal({
                               </option>
                             ))}
                           </select>
+                        </div>
+
+                        <div>
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Servicio relacionado
+                          </label>
+                          <select
+                            value={line.appointment_service_id || ""}
+                            onChange={(event) =>
+                              handleExtraLineChange(
+                                index,
+                                "appointment_service_id",
+                                event.target.value
+                              )
+                            }
+                            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                          >
+                            <option value="">Seleccionar servicio</option>
+                            {services.map((service) => (
+                              <option key={service.id} value={service.id}>
+                                {service.services?.name || "Servicio"} ·{" "}
+                                {service.staff?.full_name || "Sin técnica"}
+                              </option>
+                            ))}
+                          </select>
+                          {(line.extra_id || line.name) &&
+                            !line.appointment_service_id && (
+                              <p className="mt-2 text-xs text-red-600">
+                                Obligatorio para guardar este extra.
+                              </p>
+                            )}
                         </div>
 
                         <div>
@@ -1961,6 +1774,7 @@ function PaymentModal({
                             SKU: {line.sku || "-"} · Stock disponible: {line.stock}
                           </p>
                         </div>
+
                         <div>
                           <label className="mb-2 block text-sm text-[#68777c]">
                             Cantidad
@@ -2032,23 +1846,37 @@ function PaymentModal({
                   />
                 </div>
 
-                <div>
+                <div className="md:col-span-2">
                   <label className="mb-2 block text-sm text-[#68777c]">
-                    Propina
+                    Propina por colaboradora
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={paymentForm.tip_amount}
-                    onChange={(event) =>
-                      handlePaymentFormChange("tip_amount", event.target.value)
-                    }
-                    className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none"
-                  />
+                  {staffFromAppointment.length === 0 ? (
+                    <div className="rounded-2xl bg-white px-4 py-3 text-sm text-[#68777c]">
+                      La cita no tiene colaboradoras asociadas.
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {staffFromAppointment.map((person) => (
+                        <div key={person.id} className="rounded-2xl bg-white p-4">
+                          <label className="mb-2 block text-sm font-medium text-[#263238]">
+                            {person.full_name}
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={tipAmounts[person.id] ?? 0}
+                            onChange={(event) =>
+                              handleTipAmountChange(person.id, event.target.value)
+                            }
+                            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <p className="mt-2 text-xs text-[#8a969a]">
-                    Regla actual:{" "}
-                    {tipRuleLabel[paymentSettings?.tip_rule] ||
-                      "Técnica(s) que atendieron la cita"}
+                    La suma se conserva exactamente; la propina no genera comisión.
                   </p>
                 </div>
 
