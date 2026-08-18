@@ -11,6 +11,12 @@ import {
   getAppointmentStaff,
   normalizeTipAllocations,
 } from "../../lib/paymentEconomics";
+import {
+  buildStoreSaleIdempotencyKey,
+  buildStoreSaleProductsPayload,
+  getProductSupplierOptions,
+  resolveProductSupplierForSale,
+} from "../../lib/storeProductSale";
 
 const menuItems = [
   { key: "pendientes", label: "Citas por cobrar" },
@@ -216,7 +222,7 @@ function CobrosContent() {
     return () => clearTimeout(timer);
   }, [message]);
 
-  const loadCurrentProfile = async (user) => {
+  async function loadCurrentProfile(user) {
     const { data, error } = await supabase
       .from("user_profiles")
       .select("*")
@@ -240,9 +246,9 @@ function CobrosContent() {
       active: true,
       staff_id: null,
     };
-  };
+  }
 
-  const loadData = async (userParam = currentUser, profileParam = currentProfile) => {
+  async function loadData(userParam = currentUser, profileParam = currentProfile) {
     setLoadingData(true);
     setMessage("");
 
@@ -378,7 +384,9 @@ function CobrosContent() {
 
         supabase
           .from("store_products")
-          .select("*")
+          .select(
+            "*, store_product_suppliers(id,product_id,supplier_id,supplier_sku,reference_cost,ownership_model,active,is_default_for_sales,priority,store_suppliers(id,commercial_name,active),store_supplier_inventory(id,current_stock))"
+          )
           .eq("active", true)
           .order("name", { ascending: true }),
 
@@ -426,7 +434,7 @@ function CobrosContent() {
     }
 
     setLoadingData(false);
-  };
+  }
 
   const pendingAppointments = useMemo(() => {
     let result = appointments.filter(
@@ -457,7 +465,7 @@ function CobrosContent() {
       .reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0);
   }, [payments, selectedDate]);
 
-  const openPaymentModal = async (appointment) => {
+  async function openPaymentModal(appointment) {
   setSelectedAppointment(appointment);
   setPaymentMessage("");
   setPaymentForm({
@@ -503,7 +511,7 @@ function CobrosContent() {
   }
 
   setShowPaymentModal(true);
-};
+}
 
   const closePaymentModal = () => {
     setSelectedAppointment(null);
@@ -639,31 +647,54 @@ function CobrosContent() {
       if (existing) {
         return current.map((line) => {
           if (line.product_id !== product.id) return line;
-          const nextQuantity = Math.min(
+          return buildProductPaymentLine(
+            product,
             Number(line.quantity || 0) + 1,
-            Number(line.stock || 0)
+            line.product_supplier_id
           );
-          return {
-            ...line,
-            quantity: nextQuantity,
-            total_price: nextQuantity * Number(line.unit_price || 0),
-          };
         });
       }
 
-      return [
-        ...current,
-        {
-          product_id: product.id,
-          product_name: product.name,
-          sku: product.sku || "",
-          quantity: 1,
-          stock: Number(product.current_stock || 0),
-          unit_price: Number(product.sale_price || 0),
-          total_price: Number(product.sale_price || 0),
-        },
-      ];
+      return [...current, buildProductPaymentLine(product, 1)];
     });
+  };
+
+  const buildProductPaymentLine = (
+    product,
+    quantity,
+    requestedProductSupplierId = ""
+  ) => {
+    const supplierOptions = getProductSupplierOptions(product);
+    const supplierResolution = resolveProductSupplierForSale({
+      product,
+      quantity,
+      requestedProductSupplierId,
+    });
+    const selectedSupplier = supplierResolution.ok ? supplierResolution.selected : null;
+    const availableStock = selectedSupplier
+      ? selectedSupplier.current_stock
+      : Number(product.current_stock || 0);
+    const nextQuantity = Math.max(
+      0,
+      Math.min(Number(quantity || 0), Number(availableStock || 0))
+    );
+    const unitPrice = Number(product.sale_price || 0);
+
+    return {
+      product_id: product.id,
+      product_name: product.name,
+      sku: product.sku || "",
+      quantity: nextQuantity,
+      stock: Number(availableStock || 0),
+      unit_price: unitPrice,
+      total_price: nextQuantity * unitPrice,
+      supplier_options: supplierOptions,
+      product_supplier_id: selectedSupplier?.id || "",
+      supplier_id: selectedSupplier?.supplier_id || "",
+      supplier_name: selectedSupplier?.supplier_name || "",
+      supplier_required:
+        !supplierResolution.ok && supplierResolution.code === "supplier_required",
+    };
   };
 
   const updateProductLineQuantity = (productId, value) => {
@@ -671,17 +702,24 @@ function CobrosContent() {
       current.map((line) => {
         if (line.product_id !== productId) return line;
 
-        const quantity = Math.max(
-          0,
-          Math.min(Number(value || 0), Number(line.stock || 0))
-        );
+        const product = storeProducts.find((item) => item.id === productId);
+        if (!product) return line;
 
-        return {
-          ...line,
-          quantity,
-          total_price: quantity * Number(line.unit_price || 0),
-        };
+        return buildProductPaymentLine(product, value, line.product_supplier_id);
       })
+    );
+  };
+
+  const updateProductLineSupplier = (productId, productSupplierId) => {
+    const product = storeProducts.find((item) => item.id === productId);
+    if (!product) return;
+
+    setProductLines((current) =>
+      current.map((line) =>
+        line.product_id === productId
+          ? buildProductPaymentLine(product, line.quantity, productSupplierId)
+          : line
+      )
     );
   };
 
@@ -830,14 +868,16 @@ function CobrosContent() {
         payment_id: payment.id,
         seller_staff_id: productSellerStaffId || null,
         payment_method: paymentForm.payment_method,
+        idempotency_key: buildStoreSaleIdempotencyKey({
+          source: "appointment_payment",
+          paymentId: payment.id,
+          appointmentId: selectedAppointment.id,
+          cart: productLines,
+        }),
         notes: `Productos agregados al cobro de cita de ${
           selectedAppointment.clients?.full_name || "clienta"
         }`,
-        products: productLines.map((line) => ({
-          product_id: line.product_id,
-          quantity: Number(line.quantity || 0),
-          unit_price: Number(line.unit_price || 0),
-        })),
+        products: buildStoreSaleProductsPayload(productLines),
       }),
     });
 
@@ -875,6 +915,16 @@ function CobrosContent() {
       setPaymentMessage(
         `Revisa cantidad, precio y stock de ${invalidProduct.product_name}.`
       );
+      setSavingPayment(false);
+      return;
+    }
+
+    const missingSupplier = productLines.find(
+      (line) => line.supplier_options?.length > 1 && !line.product_supplier_id
+    );
+
+    if (missingSupplier) {
+      setPaymentMessage(`Selecciona proveedor para ${missingSupplier.product_name}.`);
       setSavingPayment(false);
       return;
     }
@@ -1773,6 +1823,16 @@ function PaymentModal({
                           <p className="text-sm text-[#68777c]">
                             SKU: {line.sku || "-"} · Stock disponible: {line.stock}
                           </p>
+                          {line.supplier_options?.length === 1 && (
+                            <p className="mt-1 text-xs text-green-700">
+                              Proveedor: {line.supplier_name}
+                            </p>
+                          )}
+                          {line.supplier_options?.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-700">
+                              Producto legacy sin proveedor estructurado.
+                            </p>
+                          )}
                         </div>
 
                         <div>
@@ -1820,6 +1880,32 @@ function PaymentModal({
                         <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                           Stock insuficiente para este producto.
                         </p>
+                      )}
+                      {line.supplier_options?.length > 1 && (
+                        <div className="mt-3">
+                          <label className="mb-2 block text-sm text-[#68777c]">
+                            Proveedor para esta venta
+                          </label>
+                          <select
+                            value={line.product_supplier_id}
+                            onChange={(event) =>
+                              updateProductLineSupplier(line.product_id, event.target.value)
+                            }
+                            className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 text-sm outline-none"
+                          >
+                            <option value="">Seleccionar proveedor</option>
+                            {line.supplier_options.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.supplier_name} · Stock {option.current_stock}
+                              </option>
+                            ))}
+                          </select>
+                          {!line.product_supplier_id && (
+                            <p className="mt-2 text-xs text-amber-700">
+                              Obligatorio porque hay varios proveedores activos con stock.
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))

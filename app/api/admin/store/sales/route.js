@@ -1,21 +1,23 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const saleRoles = ["admin", "encargada", "caja"];
+import {
+  PRODUCT_SALE_ITEM_SELECT,
+  buildStoreSaleIdempotencyKey,
+  buildStoreSaleProductsPayload,
+  cleanText,
+  getSellerCommissionPercent,
+  normalizePaymentMethod,
+  normalizeText,
+  resolveProductSupplierForSale,
+  toFiniteNumber,
+  toPositiveInteger,
+} from "../../../../lib/storeProductSale";
 
-function cleanText(value) {
-  return String(value || "").trim();
-}
+const saleRoles = ["admin", "encargada", "caja"];
 
 function normalizeEmail(value) {
   return cleanText(value).toLowerCase();
-}
-
-function normalizeRole(value) {
-  return cleanText(value)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
 }
 
 function getBearerToken(request) {
@@ -119,7 +121,7 @@ async function getSessionProfile(request, supabase) {
     };
   }
 
-  const role = normalizeRole(profile.role);
+  const role = normalizeText(profile.role);
 
   if (!saleRoles.includes(role)) {
     return {
@@ -132,51 +134,54 @@ async function getSessionProfile(request, supabase) {
 }
 
 function errorResponse(error, status = 400) {
+  const rawMessage = error?.message || error || "No se pudo registrar la venta de productos.";
+  const normalized = normalizeText(rawMessage);
+  const messageMap = [
+    ["product_supplier_required", "Selecciona proveedor para los productos con varias opciones activas."],
+    ["supplier_stock_insufficient", "El proveedor seleccionado no tiene stock suficiente."],
+    ["product_stock_insufficient", "El producto no tiene stock suficiente."],
+    ["duplicate_product_line", "Un producto aparece duplicado en el carrito."],
+    ["store_sale_not_allowed", "No tienes permiso para registrar ventas de tienda."],
+    ["products_required", "Agrega al menos un producto para vender."],
+  ];
+
+  const mapped = messageMap.find(([code]) => normalized.includes(code))?.[1];
+
   return NextResponse.json(
     {
       success: false,
-      error: error?.message || error || "No se pudo registrar la venta de productos.",
+      error: mapped || rawMessage,
     },
     { status }
   );
 }
 
-function normalizePaymentMethod(value) {
-  const text = normalizeRole(value);
-  if (text.includes("tarjeta")) return "tarjeta";
-  if (text.includes("transferencia")) return "transferencia";
-  if (text.includes("mixto")) return "mixto";
-  return "efectivo";
-}
+function calculatePreviewTotals({ saleItems, discountAmount, paymentMethod, settings, seller }) {
+  const subtotal = saleItems.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
+  const discount = Math.min(Math.max(toFiniteNumber(discountAmount, 0), 0), subtotal);
+  const total = Math.max(subtotal - discount, 0);
+  const salonPercent = toFiniteNumber(settings?.salon_product_commission_percent, 0);
+  const terminalPercent =
+    paymentMethod === "tarjeta" || paymentMethod === "mixto"
+      ? toFiniteNumber(settings?.terminal_card_fee_percent, 0)
+      : 0;
+  const sellerPercent = getSellerCommissionPercent(
+    seller,
+    settings?.default_seller_commission_percent
+  );
 
-function cashPaymentMethodLabel(value) {
-  if (value === "tarjeta") return "Tarjeta";
-  if (value === "transferencia") return "Transferencia";
-  if (value === "mixto") return "Mixto";
-  return "Efectivo";
-}
-
-function getSellerCommissionPercent(staff, fallback) {
-  const fields = [
-    "product_commission_percent",
-    "products_commission_percent",
-    "sales_commission_percent",
-    "commission_products_percent",
-    "product_commission_percentage",
-    "products_commission_percentage",
-  ];
-
-  for (const field of fields) {
-    const value = Number(staff?.[field] || 0);
-    if (value > 0) return value;
-  }
-
-  return Number(fallback || 0);
+  return {
+    subtotal,
+    discount,
+    total,
+    salonPercent,
+    terminalPercent,
+    sellerPercent,
+  };
 }
 
 export async function POST(request) {
   try {
-    const token = getBearerToken(request);
     const adminSupabase = createAdminClient();
     const session = await getSessionProfile(request, adminSupabase);
 
@@ -198,48 +203,51 @@ export async function POST(request) {
 
     const { data: dbProducts, error: productsError } = await supabase
       .from("store_products")
-      .select("*")
+      .select(PRODUCT_SALE_ITEM_SELECT)
       .in("id", productIds);
 
     if (productsError) return errorResponse(productsError.message, 400);
 
     const productsById = new Map((dbProducts || []).map((item) => [item.id, item]));
-    const now = new Date().toISOString();
     const saleItems = [];
 
     for (const line of products) {
       const product = productsById.get(line.product_id);
-      const quantity = Math.trunc(Number(line.quantity || 0));
-      const unitPrice = Number(line.unit_price ?? product?.sale_price ?? 0);
+      const quantity = toPositiveInteger(line.quantity);
+      const unitPrice = toFiniteNumber(line.unit_price ?? product?.sale_price, 0);
 
       if (!product) return errorResponse("No se encontró uno de los productos.", 400);
-      if (product.active === false) {
-        return errorResponse(`${product.name} está inactivo.`, 400);
-      }
-      if (quantity <= 0) {
-        return errorResponse(`Cantidad inválida para ${product.name}.`, 400);
-      }
-      if (unitPrice < 0) {
-        return errorResponse(`Precio inválido para ${product.name}.`, 400);
-      }
+      if (product.active === false) return errorResponse(`${product.name} está inactivo.`, 400);
+      if (quantity <= 0) return errorResponse(`Cantidad inválida para ${product.name}.`, 400);
+      if (unitPrice < 0) return errorResponse(`Precio inválido para ${product.name}.`, 400);
       if (quantity > Number(product.current_stock || 0)) {
         return errorResponse(`Stock insuficiente para ${product.name}.`, 400);
       }
 
-      saleItems.push({
+      const supplierResolution = resolveProductSupplierForSale({
         product,
+        quantity,
+        requestedProductSupplierId: line.product_supplier_id,
+      });
+
+      if (!supplierResolution.ok) {
+        return errorResponse(
+          `${supplierResolution.message} Producto: ${product.name}`,
+          supplierResolution.code === "supplier_required" ? 409 : 400
+        );
+      }
+
+      saleItems.push({
         product_id: product.id,
         product_name: product.name,
         quantity,
         unit_price: unitPrice,
         subtotal: Number((quantity * unitPrice).toFixed(2)),
+        product_supplier_id: supplierResolution.selected?.id || null,
       });
     }
 
     const paymentMethod = normalizePaymentMethod(body.payment_method);
-    const subtotal = saleItems.reduce((sum, item) => sum + item.subtotal, 0);
-    const discount = Number(body.discount_amount || 0);
-    const total = Math.max(subtotal - discount, 0);
 
     const { data: settings } = await supabase
       .from("store_settings")
@@ -255,119 +263,57 @@ export async function POST(request) {
           .maybeSingle()
       : { data: null };
 
-    const salonPercent = Number(settings?.salon_product_commission_percent || 0);
-    const terminalPercent =
-      paymentMethod === "tarjeta" || paymentMethod === "mixto"
-        ? Number(settings?.terminal_card_fee_percent || 0)
-        : 0;
-    const sellerPercent = getSellerCommissionPercent(
+    const discountAmount = toFiniteNumber(body.discount_amount, 0);
+    const preview = calculatePreviewTotals({
+      saleItems,
+      discountAmount,
+      paymentMethod,
+      settings,
       seller,
-      settings?.default_seller_commission_percent
+    });
+    const idempotencyKey =
+      cleanText(body.idempotency_key) ||
+      buildStoreSaleIdempotencyKey({
+        source: body.source || "direct_sale",
+        paymentId: body.payment_id || null,
+        appointmentId: body.appointment_id || null,
+        cart: saleItems,
+        timestamp: body.client_request_id || new Date().toISOString(),
+      });
+
+    const { data: transactionResult, error: transactionError } = await supabase.rpc(
+      "create_store_product_sale_transaction",
+      {
+        p_sale_date: body.sale_date || new Date().toISOString().slice(0, 10),
+        p_source: body.source || "direct_sale",
+        p_payment_method: paymentMethod,
+        p_products: buildStoreSaleProductsPayload(saleItems),
+        p_seller_staff_id: seller?.id || null,
+        p_discount_amount: discountAmount,
+        p_notes: cleanText(body.notes) || null,
+        p_appointment_id: body.appointment_id || null,
+        p_payment_id: body.payment_id || null,
+        p_client_id: body.client_id || null,
+        p_seller_commission_percent:
+          body.seller_commission_percent === undefined ||
+          body.seller_commission_percent === null ||
+          body.seller_commission_percent === ""
+            ? null
+            : toFiniteNumber(body.seller_commission_percent, 0),
+        p_idempotency_key: idempotencyKey,
+      }
     );
 
-    const salonCommission = total * (salonPercent / 100);
-    const terminalFee = total * (terminalPercent / 100);
-    const sellerCommission = total * (sellerPercent / 100);
-    const externalNet = total - salonCommission - terminalFee - sellerCommission;
-
-    const { data: sale, error: saleError } = await supabase
-      .from("store_sales")
-      .insert([
-        {
-          sale_date: body.sale_date || new Date().toISOString().slice(0, 10),
-          appointment_id: body.appointment_id || null,
-          payment_id: body.payment_id || null,
-          client_id: body.client_id || null,
-          seller_staff_id: seller?.id || null,
-          seller_name: seller?.full_name || null,
-          subtotal: Number(subtotal.toFixed(2)),
-          discount_amount: Number(discount.toFixed(2)),
-          total_amount: Number(total.toFixed(2)),
-          payment_method: paymentMethod,
-          salon_commission_percent: salonPercent,
-          salon_commission_amount: Number(salonCommission.toFixed(2)),
-          terminal_fee_percent: terminalPercent,
-          terminal_fee_amount: Number(terminalFee.toFixed(2)),
-          seller_commission_percent: sellerPercent,
-          seller_commission_amount: Number(sellerCommission.toFixed(2)),
-          external_owner_net_amount: Number(externalNet.toFixed(2)),
-          cash_registered: true,
-          source: body.source || "direct_sale",
-          notes: cleanText(body.notes) || null,
-          created_by: session.user?.email || null,
-          updated_at: now,
-        },
-      ])
-      .select()
-      .single();
-
-    if (saleError) return errorResponse(saleError.message, 400);
-
-    const itemRows = saleItems.map((item) => ({
-      sale_id: sale.id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      subtotal: item.subtotal,
-    }));
-
-    const { error: itemsError } = await supabase.from("store_sale_items").insert(itemRows);
-    if (itemsError) return errorResponse(itemsError.message, 400);
-
-    for (const item of saleItems) {
-      const previousStock = Number(item.product.current_stock || 0);
-      const newStock = previousStock - item.quantity;
-
-      const { error: stockError } = await supabase
-        .from("store_products")
-        .update({ current_stock: newStock, updated_at: now })
-        .eq("id", item.product_id);
-
-      if (stockError) return errorResponse(stockError.message, 400);
-
-      const { error: movementError } = await supabase
-        .from("store_inventory_movements")
-        .insert([
-          {
-            product_id: item.product_id,
-            movement_type: "venta",
-            quantity: item.quantity,
-            previous_stock: previousStock,
-            new_stock: newStock,
-            note: `Venta de producto ${sale.id}`,
-            created_by: session.user?.email || null,
-          },
-        ]);
-
-      if (movementError) return errorResponse(movementError.message, 400);
-    }
-
-    const { error: cashError } = await supabase.from("cash_movements").insert([
-      {
-        movement_date: body.sale_date || new Date().toISOString().slice(0, 10),
-        movement_type: "ingreso",
-        amount: Number(total.toFixed(2)),
-        payment_method: cashPaymentMethodLabel(paymentMethod),
-        concept:
-          body.source === "appointment_payment"
-            ? `Venta de productos en cobro ${body.payment_id || sale.id}`
-            : `Venta de productos ${sale.id}`,
-        category: "venta_producto",
-        notes: `Tienda · Vendedora: ${seller?.full_name || "Sin vendedora"}`,
-        payment_id: body.payment_id || null,
-        created_by_user_id: session.user?.id || null,
-        created_by_email: session.user?.email || null,
-        updated_at: now,
-      },
-    ]);
-
-    if (cashError) return errorResponse(cashError.message, 400);
+    if (transactionError) return errorResponse(transactionError.message, 400);
 
     return NextResponse.json({
       success: true,
-      sale,
-      total,
+      sale: {
+        id: transactionResult?.saleId || null,
+        sale_reference: transactionResult?.saleReference || null,
+      },
+      total: transactionResult?.total ?? preview.total,
+      idempotent: Boolean(transactionResult?.idempotent),
     });
   } catch (error) {
     return errorResponse(error, 500);

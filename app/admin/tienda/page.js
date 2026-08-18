@@ -3,10 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  buildStoreSaleIdempotencyKey,
+  buildStoreSaleProductsPayload,
+  getProductSupplierOptions,
+  resolveProductSupplierForSale,
+} from "../../lib/storeProductSale";
+import SupplierManagementPanel from "./SupplierManagementPanel";
 
 const adminMenuItems = [
   { key: "productos", label: "Productos / Inventario" },
   { key: "venta", label: "Nueva venta" },
+  { key: "proveedores", label: "Proveedores" },
+  { key: "solicitudes", label: "Solicitudes de stock" },
   { key: "movimientos", label: "Movimientos" },
   { key: "reportes", label: "Reportes" },
   { key: "configuracion", label: "Configuración" },
@@ -84,13 +93,6 @@ function toInteger(value) {
 
 function paymentMethodLabel(value) {
   return paymentMethods.find((item) => item.value === value)?.label || value;
-}
-
-function cashPaymentMethodLabel(value) {
-  if (value === "efectivo") return "Efectivo";
-  if (value === "tarjeta") return "Tarjeta";
-  if (value === "transferencia") return "Transferencia";
-  return "Mixto";
 }
 
 function saleSourceLabel(value) {
@@ -416,12 +418,15 @@ export default function StorePage() {
   }, [message]);
 
   useEffect(() => {
-    if (isProductOwner && (activeSection === "venta" || activeSection === "configuracion")) {
-      setActiveSection("productos");
+    if (
+      isProductOwner &&
+      ["venta", "configuracion", "proveedores", "solicitudes"].includes(activeSection)
+    ) {
+      queueMicrotask(() => setActiveSection("productos"));
     }
   }, [activeSection, isProductOwner]);
 
-  const loadRole = async (user) => {
+  async function loadRole(user) {
     try {
       const token = await getStoreAccessToken();
       const response = await fetch("/api/admin/store/products", {
@@ -499,16 +504,18 @@ export default function StorePage() {
       ),
       error: profileByEmail ? "" : "No se encontró perfil desde cliente.",
     }));
-  };
+  }
 
-  const loadData = async () => {
+  async function loadData() {
     setLoadingData(true);
 
     const [productsResult, movementsResult, salesResult, staffResult, settingsResult] =
       await Promise.all([
         supabase
           .from("store_products")
-          .select("*")
+          .select(
+            "*, store_product_suppliers(id,product_id,supplier_id,supplier_sku,reference_cost,ownership_model,active,is_default_for_sales,priority,store_suppliers(id,commercial_name,active),store_supplier_inventory(id,current_stock))"
+          )
           .order("name", { ascending: true }),
         supabase
           .from("store_inventory_movements")
@@ -571,7 +578,7 @@ export default function StorePage() {
     }
 
     setLoadingData(false);
-  };
+  }
 
   const filteredProducts = useMemo(() => {
     const term = normalizeText(productSearch);
@@ -980,7 +987,7 @@ export default function StorePage() {
       if (existing) {
         return current.map((item) =>
           item.product_id === product.id
-            ? buildCartItem(product, item.quantity + 1)
+            ? buildCartItem(product, item.quantity + 1, item.product_supplier_id)
             : item
         );
       }
@@ -988,17 +995,37 @@ export default function StorePage() {
     });
   };
 
-  const buildCartItem = (product, quantity) => {
-    const safeQuantity = Math.max(1, Math.min(toInteger(quantity), Number(product.current_stock || 0)));
+  const buildCartItem = (product, quantity, requestedProductSupplierId = "") => {
+    const supplierOptions = getProductSupplierOptions(product);
+    const supplierResolution = resolveProductSupplierForSale({
+      product,
+      quantity,
+      requestedProductSupplierId,
+    });
+    const selectedSupplier = supplierResolution.ok ? supplierResolution.selected : null;
+    const availableStock = selectedSupplier
+      ? selectedSupplier.current_stock
+      : Number(product.current_stock || 0);
+    const safeQuantity = Math.max(1, Math.min(toInteger(quantity), availableStock));
     const unitPrice = Number(product.sale_price || 0);
+
     return {
       product_id: product.id,
       product_name: product.name,
       sku: product.sku,
-      stock: Number(product.current_stock || 0),
+      stock: availableStock,
       quantity: safeQuantity,
       unit_price: unitPrice,
       subtotal: safeQuantity * unitPrice,
+      supplier_options: supplierOptions,
+      product_supplier_id: selectedSupplier?.id || "",
+      supplier_id: selectedSupplier?.supplier_id || "",
+      supplier_name: selectedSupplier?.supplier_name || "",
+      supplier_required:
+        !supplierResolution.ok && supplierResolution.code === "supplier_required",
+      economic_snapshot_complete: supplierResolution.ok
+        ? supplierResolution.economicSnapshotComplete
+        : false,
     };
   };
 
@@ -1007,7 +1034,21 @@ export default function StorePage() {
     if (!product) return;
     setCart((current) =>
       current.map((item) =>
-        item.product_id === productId ? buildCartItem(product, quantity) : item
+        item.product_id === productId
+          ? buildCartItem(product, quantity, item.product_supplier_id)
+          : item
+      )
+    );
+  };
+
+  const updateCartSupplier = (productId, productSupplierId) => {
+    const product = products.find((item) => item.id === productId);
+    if (!product) return;
+    setCart((current) =>
+      current.map((item) =>
+        item.product_id === productId
+          ? buildCartItem(product, item.quantity, productSupplierId)
+          : item
       )
     );
   };
@@ -1027,6 +1068,14 @@ export default function StorePage() {
       return;
     }
 
+    const missingSupplier = cart.find(
+      (item) => item.supplier_options?.length > 1 && !item.product_supplier_id
+    );
+    if (missingSupplier) {
+      setMessage(`Selecciona proveedor para ${missingSupplier.product_name}.`);
+      return;
+    }
+
     const invalidStock = cart.find((item) => item.quantity > item.stock);
     if (invalidStock) {
       setMessage(`Stock insuficiente para ${invalidStock.product_name}.`);
@@ -1037,110 +1086,56 @@ export default function StorePage() {
     const seller = staff.find((person) => person.id === saleForm.seller_staff_id);
     const now = new Date().toISOString();
 
-    const salePayload = {
-      sale_date: todayISO(),
-      seller_staff_id: seller?.id || null,
-      seller_name: seller?.full_name || null,
-      subtotal: saleTotals.subtotal,
-      discount_amount: saleTotals.discount,
-      total_amount: saleTotals.total,
-      payment_method: saleForm.payment_method,
-      salon_commission_percent: saleTotals.salonPercent,
-      salon_commission_amount: Number(saleTotals.salonCommission.toFixed(2)),
-      terminal_fee_percent: saleTotals.terminalPercent,
-      terminal_fee_amount: Number(saleTotals.terminalFee.toFixed(2)),
-      seller_commission_percent: saleTotals.sellerPercent,
-      seller_commission_amount: Number(saleTotals.sellerCommission.toFixed(2)),
-      external_owner_net_amount: Number(saleTotals.externalNet.toFixed(2)),
-      cash_registered: true,
-      source: "direct_sale",
-      notes: saleForm.notes.trim() || null,
-      created_by: currentEmail || null,
-      updated_at: now,
-    };
-
-    const { data: sale, error: saleError } = await supabase
-      .from("store_sales")
-      .insert([salePayload])
-      .select()
-      .single();
-
-    if (saleError) {
-      setSaving(false);
-      setMessage(`No se pudo registrar venta: ${saleError.message}`);
-      return;
-    }
-
-    const itemRows = cart.map((item) => ({
-      sale_id: sale.id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      subtotal: item.subtotal,
-    }));
-
-    const { error: itemsError } = await supabase.from("store_sale_items").insert(itemRows);
-    if (itemsError) {
-      setSaving(false);
-      setMessage(`Venta creada, pero no se guardó detalle: ${itemsError.message}`);
-      return;
-    }
-
-    for (const item of cart) {
-      const product = products.find((productItem) => productItem.id === item.product_id);
-      const previousStock = Number(product?.current_stock || 0);
-      const newStock = previousStock - Number(item.quantity || 0);
-
-      await supabase
-        .from("store_products")
-        .update({ current_stock: newStock, updated_at: now })
-        .eq("id", item.product_id);
-
-      await supabase.from("store_inventory_movements").insert([
-        {
-          product_id: item.product_id,
-          movement_type: "venta",
-          quantity: item.quantity,
-          previous_stock: previousStock,
-          new_stock: newStock,
-          note: `Venta de producto ${sale.id}`,
-          created_by: currentEmail || null,
+    try {
+      const token = await getStoreAccessToken();
+      const response = await fetch("/api/admin/store/sales", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      ]);
-    }
+        body: JSON.stringify({
+          sale_date: todayISO(),
+          source: "direct_sale",
+          seller_staff_id: seller?.id || null,
+          payment_method: saleForm.payment_method,
+          discount_amount: saleTotals.discount,
+          seller_commission_percent: saleTotals.sellerPercent,
+          notes: saleForm.notes.trim() || null,
+          client_request_id: now,
+          idempotency_key: buildStoreSaleIdempotencyKey({
+            source: "direct_sale",
+            cart,
+            timestamp: now,
+          }),
+          products: buildStoreSaleProductsPayload(cart),
+        }),
+      });
 
-    const { error: cashError } = await supabase.from("cash_movements").insert([
-      {
-        movement_date: todayISO(),
-        movement_type: "ingreso",
-        amount: Number(saleTotals.total.toFixed(2)),
-        payment_method: cashPaymentMethodLabel(saleForm.payment_method),
-        concept: `Venta de productos ${sale.id}`,
-        category: "venta_producto",
-        notes: `Tienda · Vendedora: ${seller?.full_name || "Sin vendedora"}`,
-        updated_at: now,
-      },
-    ]);
+      const result = await response
+        .json()
+        .catch(() => ({ success: false, error: "Respuesta inválida del servidor." }));
 
-    setSaving(false);
-    setCart([]);
-    setSaleForm({
-      seller_staff_id: "",
-      payment_method: "efectivo",
-      discount_amount: 0,
-      seller_commission_percent: String(settingsForm.default_seller_commission_percent || 0),
-      notes: "",
-    });
-    setSaleSearch("");
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "No se pudo registrar venta.");
+      }
 
-    if (cashError) {
-      setMessage(`Venta registrada, pero no se pudo registrar caja: ${cashError.message}`);
-    } else {
+      setCart([]);
+      setSaleForm({
+        seller_staff_id: "",
+        payment_method: "efectivo",
+        discount_amount: 0,
+        seller_commission_percent: String(settingsForm.default_seller_commission_percent || 0),
+        notes: "",
+      });
+      setSaleSearch("");
       setMessage("Venta de productos registrada correctamente ✨");
+      await loadData();
+    } catch (error) {
+      setMessage(`No se pudo registrar venta: ${error?.message || "intenta nuevamente."}`);
+    } finally {
+      setSaving(false);
     }
-
-    await loadData();
   };
 
   const saveSettings = async () => {
@@ -1509,6 +1504,26 @@ export default function StorePage() {
         </div>
       )}
 
+      {activeSection === "proveedores" && !isProductOwner && (
+        <SupplierManagementPanel
+          mode="suppliers"
+          products={products}
+          getAccessToken={getStoreAccessToken}
+          setMessage={setMessage}
+          canManageApprovers={isAdmin}
+        />
+      )}
+
+      {activeSection === "solicitudes" && !isProductOwner && (
+        <SupplierManagementPanel
+          mode="requests"
+          products={products}
+          getAccessToken={getStoreAccessToken}
+          setMessage={setMessage}
+          canManageApprovers={isAdmin}
+        />
+      )}
+
       {activeSection === "venta" && !isProductOwner && (
         <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
           <Card>
@@ -1551,6 +1566,16 @@ export default function StorePage() {
                         <p className="text-sm text-[#68777c]">
                           {formatMoney(item.unit_price)} · Stock {item.stock}
                         </p>
+                        {item.supplier_options?.length === 1 && (
+                          <p className="mt-1 text-xs text-green-700">
+                            Proveedor: {item.supplier_name}
+                          </p>
+                        )}
+                        {item.supplier_options?.length === 0 && (
+                          <p className="mt-1 text-xs text-amber-700">
+                            Producto legacy sin proveedor estructurado.
+                          </p>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -1571,6 +1596,32 @@ export default function StorePage() {
                         {formatMoney(item.subtotal)}
                       </p>
                     </div>
+                    {item.supplier_options?.length > 1 && (
+                      <div className="mt-3">
+                        <label className="mb-2 block text-sm text-[#68777c]">
+                          Proveedor para esta venta
+                        </label>
+                        <select
+                          value={item.product_supplier_id}
+                          onChange={(event) =>
+                            updateCartSupplier(item.product_id, event.target.value)
+                          }
+                          className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 text-sm outline-none"
+                        >
+                          <option value="">Seleccionar proveedor</option>
+                          {item.supplier_options.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.supplier_name} · Stock {option.current_stock}
+                            </option>
+                          ))}
+                        </select>
+                        {!item.product_supplier_id && (
+                          <p className="mt-2 text-xs text-amber-700">
+                            Obligatorio porque hay varios proveedores activos con stock.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
