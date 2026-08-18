@@ -138,6 +138,8 @@ function errorResponse(error, status = 400) {
   const normalized = normalizeText(rawMessage);
   const messageMap = [
     ["product_supplier_required", "Selecciona proveedor para los productos con varias opciones activas."],
+    ["product_supplier_unavailable", "El producto no tiene proveedores activos disponibles."],
+    ["supplier_unavailable", "El producto no tiene proveedores activos disponibles."],
     ["supplier_stock_insufficient", "El proveedor seleccionado no tiene stock suficiente."],
     ["product_stock_insufficient", "El producto no tiene stock suficiente."],
     ["duplicate_product_line", "Un producto aparece duplicado en el carrito."],
@@ -214,9 +216,9 @@ export async function POST(request) {
     for (const line of products) {
       const product = productsById.get(line.product_id);
       const quantity = toPositiveInteger(line.quantity);
-      const unitPrice = toFiniteNumber(line.unit_price ?? product?.sale_price, 0);
-
       if (!product) return errorResponse("No se encontró uno de los productos.", 400);
+      const unitPrice = toFiniteNumber(product.sale_price, 0);
+
       if (product.active === false) return errorResponse(`${product.name} está inactivo.`, 400);
       if (quantity <= 0) return errorResponse(`Cantidad inválida para ${product.name}.`, 400);
       if (unitPrice < 0) return errorResponse(`Precio inválido para ${product.name}.`, 400);
@@ -251,14 +253,16 @@ export async function POST(request) {
 
     const { data: settings } = await supabase
       .from("store_settings")
-      .select("*")
+      .select(
+        "salon_product_commission_percent,terminal_card_fee_percent,default_seller_commission_percent"
+      )
       .limit(1)
       .maybeSingle();
 
     const { data: seller } = body.seller_staff_id
       ? await supabase
           .from("staff")
-          .select("*")
+          .select("product_commission_percentage")
           .eq("id", body.seller_staff_id)
           .maybeSingle()
       : { data: null };
@@ -294,12 +298,7 @@ export async function POST(request) {
         p_appointment_id: body.appointment_id || null,
         p_payment_id: body.payment_id || null,
         p_client_id: body.client_id || null,
-        p_seller_commission_percent:
-          body.seller_commission_percent === undefined ||
-          body.seller_commission_percent === null ||
-          body.seller_commission_percent === ""
-            ? null
-            : toFiniteNumber(body.seller_commission_percent, 0),
+        p_seller_commission_percent: null,
         p_idempotency_key: idempotencyKey,
       }
     );

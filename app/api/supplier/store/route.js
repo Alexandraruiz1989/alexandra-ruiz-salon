@@ -62,7 +62,9 @@ async function getSupplierSession(request, supabase) {
 
   const { data: supplierUsers, error: supplierUserError } = await supabase
     .from("store_supplier_users")
-    .select("*, store_suppliers(id,commercial_name,active)")
+    .select(
+      "id,supplier_id,auth_user_id,user_profile_id,email_snapshot,active,revoked_at,store_suppliers(id,commercial_name,active)"
+    )
     .eq("active", true)
     .is("revoked_at", null)
     .or(
@@ -115,7 +117,6 @@ function sanitizeProductRelation(relation) {
 
   return {
     product_supplier_id: relation.id,
-    product_id: relation.product_id,
     name: relation.store_products?.name || "Producto",
     sku: relation.supplier_sku || relation.store_products?.sku || "",
     stock: Number(inventory?.current_stock || 0),
@@ -150,7 +151,6 @@ function sanitizeRequest(request) {
     request_type: request.request_type,
     quantity: Number(request.quantity || 0),
     reason: request.reason || "",
-    notes: request.notes || "",
     status: request.status,
     rejection_reason: request.rejection_reason || "",
   };
@@ -172,24 +172,32 @@ export async function GET(request) {
     ] = await Promise.all([
       supabase
         .from("store_product_suppliers")
-        .select("*, store_products(id,name,sku,sale_price,current_stock,active), store_supplier_inventory(id,current_stock)")
+        .select(
+          "id,product_id,supplier_id,supplier_sku,ownership_model,active,created_at,store_products(id,name,sku,sale_price,current_stock,active),store_supplier_inventory(id,current_stock)"
+        )
         .in("supplier_id", supplierIds)
         .order("created_at", { ascending: false }),
       supabase
         .from("store_sale_items")
-        .select("id,product_name,quantity,unit_price,discount_amount,supplier_net_amount,supplier_id,store_sales(id,sale_date,sale_reference,payment_method,status)")
+        .select(
+          "id,product_name,quantity,unit_price,discount_amount,supplier_net_amount,store_sales(id,sale_date,sale_reference,payment_method,status)"
+        )
         .in("supplier_id", supplierIds)
         .order("created_at", { ascending: false })
         .limit(100),
       supabase
         .from("store_inventory_movements")
-        .select("id,product_id,movement_type,quantity,previous_stock,new_stock,reason,movement_request_id,created_at,supplier_id,store_products(id,name,sku)")
+        .select(
+          "id,movement_type,quantity,previous_stock,new_stock,reason,movement_request_id,created_at,store_products(id,name,sku)"
+        )
         .in("supplier_id", supplierIds)
         .order("created_at", { ascending: false })
         .limit(100),
       supabase
         .from("store_inventory_movement_requests")
-        .select("*, store_products(id,name,sku)")
+        .select(
+          "id,requested_at,product_supplier_id,request_type,quantity,reason,status,rejection_reason,store_products(id,name,sku)"
+        )
         .in("supplier_id", supplierIds)
         .order("requested_at", { ascending: false })
         .limit(100),
@@ -213,7 +221,6 @@ export async function GET(request) {
     return NextResponse.json({
       success: true,
       supplier: {
-        id: session.supplierLinks[0]?.supplier_id,
         commercial_name:
           session.supplierLinks[0]?.store_suppliers?.commercial_name ||
           "Proveedor",
@@ -291,12 +298,12 @@ export async function POST(request) {
           updated_at: new Date().toISOString(),
         },
       ])
-      .select()
+      .select("id,requested_at,product_supplier_id,request_type,quantity,reason,status,rejection_reason")
       .single();
 
     if (error) return errorResponse(error.message, 400);
 
-    return NextResponse.json({ success: true, request: data });
+    return NextResponse.json({ success: true, request: sanitizeRequest(data) });
   } catch (error) {
     return errorResponse(error, 500);
   }
@@ -335,12 +342,12 @@ export async function PATCH(request) {
       })
       .eq("id", requestId)
       .eq("status", "pending")
-      .select()
+      .select("id,requested_at,product_supplier_id,request_type,quantity,reason,status,rejection_reason")
       .single();
 
     if (error) return errorResponse(error.message, 400);
 
-    return NextResponse.json({ success: true, request: data });
+    return NextResponse.json({ success: true, request: sanitizeRequest(data) });
   } catch (error) {
     return errorResponse(error, 500);
   }

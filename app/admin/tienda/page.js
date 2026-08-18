@@ -26,6 +26,7 @@ const ownerMenuItems = [
   { key: "movimientos", label: "Movimientos" },
   { key: "reportes", label: "Reportes" },
 ];
+const allowedStoreRoles = ["admin", "encargada", "caja", "product_owner"];
 
 const emptyProductForm = {
   name: "",
@@ -368,7 +369,6 @@ export default function StorePage() {
     seller_staff_id: "",
     payment_method: "efectivo",
     discount_amount: 0,
-    seller_commission_percent: "",
     notes: "",
   });
   const [saleSearch, setSaleSearch] = useState("");
@@ -403,9 +403,9 @@ export default function StorePage() {
         auth_user_id: data.session.user?.id || "",
         role_source: "sesión detectada",
       }));
-      await loadRole(data.session.user);
+      const role = await loadRole(data.session.user);
       setLoadingSession(false);
-      await loadData();
+      await loadData(role);
     };
 
     start();
@@ -457,7 +457,7 @@ export default function StorePage() {
 
       if (response.ok && result.success && result.profile?.role) {
         setCurrentRole(result.profile.role);
-        return;
+        return normalizeText(result.profile.role);
       }
 
       if (result.error) {
@@ -483,7 +483,7 @@ export default function StorePage() {
         role_source: "cliente (auth_user_id)",
         can_manage_products: ["admin", "encargada"].includes(normalizeText(profileById.role)),
       }));
-      return;
+      return normalizeText(profileById.role);
     }
 
     const { data: profilesByEmail } = await supabase
@@ -493,10 +493,11 @@ export default function StorePage() {
       .limit(1);
 
     const profileByEmail = profilesByEmail?.[0] || null;
-    setCurrentRole(profileByEmail?.role || "tecnica");
+    const fallbackRole = profileByEmail?.role || "sin_acceso";
+    setCurrentRole(fallbackRole);
     setAccessDebug((current) => ({
       ...current,
-      role: profileByEmail?.role || "tecnica",
+      role: fallbackRole,
       active: profileByEmail?.active ?? null,
       role_source: profileByEmail ? "cliente (email)" : "cliente (sin perfil)",
       can_manage_products: ["admin", "encargada"].includes(
@@ -504,10 +505,24 @@ export default function StorePage() {
       ),
       error: profileByEmail ? "" : "No se encontró perfil desde cliente.",
     }));
+    return normalizeText(fallbackRole);
   }
 
-  async function loadData() {
+  async function loadData(roleParam = currentRole) {
     setLoadingData(true);
+
+    const role = normalizeText(roleParam);
+
+    if (!allowedStoreRoles.includes(role)) {
+      setProducts([]);
+      setMovements([]);
+      setSales([]);
+      setStaff([]);
+      setSettings(null);
+      setMessage("No tienes permiso para entrar a Tienda.");
+      setLoadingData(false);
+      return;
+    }
 
     const [productsResult, movementsResult, salesResult, staffResult, settingsResult] =
       await Promise.all([
@@ -568,13 +583,6 @@ export default function StorePage() {
           settingsResult.data?.default_seller_commission_percent || 0,
       };
       setSettingsForm(nextSettings);
-      setSaleForm((current) => ({
-        ...current,
-        seller_commission_percent:
-          current.seller_commission_percent === ""
-            ? String(nextSettings.default_seller_commission_percent || 0)
-            : current.seller_commission_percent,
-      }));
     }
 
     setLoadingData(false);
@@ -612,16 +620,25 @@ export default function StorePage() {
       saleForm.payment_method === "tarjeta" || saleForm.payment_method === "mixto"
         ? Number(settingsForm.terminal_card_fee_percent || 0)
         : 0;
+    const selectedSeller = staff.find((person) => person.id === saleForm.seller_staff_id);
     const sellerPercent = Number(
-      saleForm.seller_commission_percent === ""
-        ? settingsForm.default_seller_commission_percent
-        : saleForm.seller_commission_percent
+      selectedSeller?.product_commission_percentage ??
+        settingsForm.default_seller_commission_percent ??
+        0
     );
 
     const salonCommission = total * (salonPercent / 100);
     const terminalFee = total * (terminalPercent / 100);
     const sellerCommission = total * (sellerPercent / 100);
-    const externalNet = total - salonCommission - terminalFee - sellerCommission;
+    const externalNet = cart.reduce((sum, item) => {
+      if (!item.economic_snapshot_complete || item.ownership_model === "salon_owned") {
+        return sum;
+      }
+
+      const ratio = subtotal > 0 ? Number(item.subtotal || 0) / subtotal : 0;
+      const lineNet = Math.max(Number(item.subtotal || 0) - discount * ratio, 0);
+      return sum + lineNet - salonCommission * ratio - terminalFee * ratio - sellerCommission * ratio;
+    }, 0);
 
     return {
       subtotal,
@@ -635,7 +652,7 @@ export default function StorePage() {
       sellerCommission,
       externalNet,
     };
-  }, [cart, saleForm, settingsForm]);
+  }, [cart, saleForm.discount_amount, saleForm.payment_method, saleForm.seller_staff_id, settingsForm, staff]);
 
   const reportSales = useMemo(() => {
     return sales.filter((sale) => {
@@ -1021,8 +1038,10 @@ export default function StorePage() {
       product_supplier_id: selectedSupplier?.id || "",
       supplier_id: selectedSupplier?.supplier_id || "",
       supplier_name: selectedSupplier?.supplier_name || "",
+      ownership_model: selectedSupplier?.ownership_model || "legacy",
       supplier_required:
         !supplierResolution.ok && supplierResolution.code === "supplier_required",
+      supplier_error: supplierResolution.ok ? "" : supplierResolution.message,
       economic_snapshot_complete: supplierResolution.ok
         ? supplierResolution.economicSnapshotComplete
         : false,
@@ -1076,6 +1095,12 @@ export default function StorePage() {
       return;
     }
 
+    const supplierError = cart.find((item) => item.supplier_error);
+    if (supplierError) {
+      setMessage(`${supplierError.supplier_error} Producto: ${supplierError.product_name}.`);
+      return;
+    }
+
     const invalidStock = cart.find((item) => item.quantity > item.stock);
     if (invalidStock) {
       setMessage(`Stock insuficiente para ${invalidStock.product_name}.`);
@@ -1100,7 +1125,6 @@ export default function StorePage() {
           seller_staff_id: seller?.id || null,
           payment_method: saleForm.payment_method,
           discount_amount: saleTotals.discount,
-          seller_commission_percent: saleTotals.sellerPercent,
           notes: saleForm.notes.trim() || null,
           client_request_id: now,
           idempotency_key: buildStoreSaleIdempotencyKey({
@@ -1125,7 +1149,6 @@ export default function StorePage() {
         seller_staff_id: "",
         payment_method: "efectivo",
         discount_amount: 0,
-        seller_commission_percent: String(settingsForm.default_seller_commission_percent || 0),
         notes: "",
       });
       setSaleSearch("");
@@ -1571,9 +1594,14 @@ export default function StorePage() {
                             Proveedor: {item.supplier_name}
                           </p>
                         )}
-                        {item.supplier_options?.length === 0 && (
+                        {item.supplier_options?.length === 0 && !item.supplier_error && (
                           <p className="mt-1 text-xs text-amber-700">
                             Producto legacy sin proveedor estructurado.
+                          </p>
+                        )}
+                        {item.supplier_error && (
+                          <p className="mt-1 text-xs text-red-700">
+                            {item.supplier_error}
                           </p>
                         )}
                       </div>
@@ -1633,14 +1661,9 @@ export default function StorePage() {
                 <select
                   value={saleForm.seller_staff_id}
                   onChange={(event) => {
-                    const person = staff.find((item) => item.id === event.target.value);
                     setSaleForm((current) => ({
                       ...current,
                       seller_staff_id: event.target.value,
-                      seller_commission_percent:
-                        person?.product_commission_percentage ??
-                        settingsForm.default_seller_commission_percent ??
-                        0,
                     }));
                   }}
                   className="w-full rounded-2xl border border-[#dde3e6] bg-[#f7f9fa] px-4 py-3 outline-none"
@@ -1672,12 +1695,6 @@ export default function StorePage() {
                 type="number"
                 value={saleForm.discount_amount}
                 onChange={(value) => setSaleForm((current) => ({ ...current, discount_amount: value }))}
-              />
-              <InputField
-                label="% comisión vendedora"
-                type="number"
-                value={saleForm.seller_commission_percent}
-                onChange={(value) => setSaleForm((current) => ({ ...current, seller_commission_percent: value }))}
               />
             </div>
             <div className="mt-4">

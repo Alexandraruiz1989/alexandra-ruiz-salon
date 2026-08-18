@@ -19,8 +19,23 @@ const supplierApiSource = readFileSync(
   "utf8"
 );
 
+const adminSupplierApiSource = readFileSync(
+  new URL("../app/api/admin/store/suppliers/route.js", import.meta.url),
+  "utf8"
+);
+
 const saleApiSource = readFileSync(
   new URL("../app/api/admin/store/sales/route.js", import.meta.url),
+  "utf8"
+);
+
+const tiendaPageSource = readFileSync(
+  new URL("../app/admin/tienda/page.js", import.meta.url),
+  "utf8"
+);
+
+const cobrosPageSource = readFileSync(
+  new URL("../app/admin/cobros/page.js", import.meta.url),
   "utf8"
 );
 
@@ -83,6 +98,26 @@ test("producto con varios proveedores activos exige seleccion explicita", () => 
   assert.equal(result.requiresSelection, true);
 });
 
+test("proveedor inactivo o relacion inactiva no son seleccionables", () => {
+  const inactiveSupplier = resolveProductSupplierForSale({
+    product: productWithSuppliers([
+      relation({ id: "relation-1", supplierActive: false, current_stock: 10 }),
+    ]),
+    quantity: 1,
+  });
+  const inactiveRelation = resolveProductSupplierForSale({
+    product: productWithSuppliers([
+      relation({ id: "relation-1", active: false, current_stock: 10 }),
+    ]),
+    quantity: 1,
+  });
+
+  assert.equal(inactiveSupplier.ok, false);
+  assert.equal(inactiveSupplier.code, "supplier_unavailable");
+  assert.equal(inactiveRelation.ok, false);
+  assert.equal(inactiveRelation.code, "supplier_unavailable");
+});
+
 test("producto con proveedor seleccionado valida que pertenezca y tenga stock", () => {
   const product = productWithSuppliers([
     relation({ id: "relation-1", supplier_id: "supplier-1", current_stock: 2 }),
@@ -116,6 +151,16 @@ test("producto legacy sin proveedor estructurado sigue siendo compatible e incom
   assert.equal(result.mode, "legacy");
   assert.equal(result.selected, null);
   assert.equal(result.economicSnapshotComplete, false);
+});
+
+test("stock legacy no se redistribuye al asociar proveedor", () => {
+  assert.match(adminSupplierApiSource, /current_stock:\s*0/);
+  assert.doesNotMatch(
+    adminSupplierApiSource,
+    /\.from\(["']store_products["']\)[\s\S]{0,160}\.update\([\s\S]{0,160}current_stock/
+  );
+  assert.doesNotMatch(migrationSource, /current_stock\s*=\s*sum\(/i);
+  assert.doesNotMatch(migrationSource, /sum\s*\(\s*.*store_supplier_inventory.*current_stock/i);
 });
 
 test("payload de venta conserva product_supplier_id y no inventa proveedor", () => {
@@ -206,6 +251,14 @@ test("portal proveedor no devuelve datos privados de clientas, citas o pagos", (
   assert.doesNotMatch(JSON.stringify(sale), /client-private|appointment-private|payment-private/);
 });
 
+test("endpoint proveedor usa DTO explicito y no select star", () => {
+  assert.doesNotMatch(supplierApiSource, /\.select\(\s*["']\*/);
+  assert.match(supplierApiSource, /sanitizeProductRelation/);
+  assert.match(supplierApiSource, /sanitizeMovement/);
+  assert.match(supplierApiSource, /sanitizeRequest/);
+  assert.match(supplierApiSource, /sanitizeSupplierPortalSaleItem/);
+});
+
 test("migracion crea tablas, columnas, RLS y RPCs esperadas sin tocar create_payment_transaction", () => {
   for (const table of [
     "store_suppliers",
@@ -242,6 +295,104 @@ test("aprobacion usa bloqueo, status pending y evita doble movimiento", () => {
   assert.match(migrationSource, /v_request\.status <> 'pending'/);
   assert.match(migrationSource, /WHERE id = v_request\.id\s+AND status = 'pending'/);
   assert.match(migrationSource, /CREATE UNIQUE INDEX IF NOT EXISTS store_inventory_movements_request_idx/);
+});
+
+test("RLS y RPC impiden spoofing de supplier_id en solicitudes", () => {
+  assert.match(migrationSource, /store_supplier_product_relation_matches/);
+  assert.match(migrationSource, /store_inventory_requests_insert_supplier_own[\s\S]*store_supplier_product_relation_matches/);
+  assert.match(migrationSource, /approve_store_inventory_movement_request[\s\S]*store_supplier_product_relation_matches/);
+  assert.match(supplierApiSource, /session\.supplierIds\.includes\(relation\.supplier_id\)/);
+  assert.match(supplierApiSource, /No puedes solicitar movimientos sobre productos de otro proveedor/);
+});
+
+test("solo admin o aprobadores activos pueden aprobar o rechazar stock", () => {
+  assert.match(migrationSource, /CREATE OR REPLACE FUNCTION public\.store_user_can_approve_inventory/);
+  assert.match(migrationSource, /store_user_has_any_active_role\(ARRAY\['admin'::text\]\)/);
+  assert.match(migrationSource, /FROM public\.store_inventory_approvers approver/);
+  assert.match(migrationSource, /approver\.active = true/);
+  assert.match(migrationSource, /approver\.revoked_at IS NULL/);
+  assert.doesNotMatch(
+    migrationSource.slice(
+      migrationSource.indexOf("CREATE OR REPLACE FUNCTION public.store_user_can_approve_inventory"),
+      migrationSource.indexOf("CREATE OR REPLACE FUNCTION public.approve_store_inventory_movement_request")
+    ),
+    /store_supplier_user_is_active/
+  );
+});
+
+test("entrada aprobada incrementa inventario proveedor y stock total en la misma RPC", () => {
+  assert.match(migrationSource, /IF v_request\.request_type = 'entrada' THEN\s+v_delta := v_request\.quantity/s);
+  assert.match(migrationSource, /v_supplier_new_stock := coalesce\(v_inventory\.current_stock, 0\) \+ v_delta/);
+  assert.match(migrationSource, /v_product_new_stock := coalesce\(v_product\.current_stock, 0\) \+ v_delta/);
+  assert.match(migrationSource, /UPDATE public\.store_supplier_inventory[\s\S]*SET current_stock = v_supplier_new_stock/);
+  assert.match(migrationSource, /UPDATE public\.store_products[\s\S]*SET current_stock = v_product_new_stock/);
+});
+
+test("venta con proveedor descuenta inventario proveedor y stock total en una sola RPC", () => {
+  assert.match(migrationSource, /v_supplier_new_stock := v_supplier_previous_stock - v_quantity/);
+  assert.match(migrationSource, /v_product_new_stock := v_product_previous_stock - v_quantity/);
+  assert.match(migrationSource, /UPDATE public\.store_supplier_inventory[\s\S]*SET current_stock = v_supplier_new_stock/);
+  assert.match(migrationSource, /UPDATE public\.store_products[\s\S]*SET current_stock = v_product_new_stock/);
+});
+
+test("fallos transaccionales no se silencian en RPCs de stock y venta", () => {
+  for (const functionName of [
+    "approve_store_inventory_movement_request",
+    "reject_store_inventory_movement_request",
+    "create_store_product_sale_transaction",
+  ]) {
+    const start = migrationSource.indexOf(`CREATE OR REPLACE FUNCTION public.${functionName}`);
+    const next = migrationSource.indexOf("CREATE OR REPLACE FUNCTION public.", start + 1);
+    const source = migrationSource.slice(start, next === -1 ? undefined : next);
+    assert.match(source, /LANGUAGE plpgsql/);
+    assert.match(source, /SECURITY DEFINER/);
+    assert.match(source, /SET search_path = public, pg_temp/);
+    assert.doesNotMatch(source, /EXCEPTION\s+WHEN\s+OTHERS[\s\S]*RETURN/i);
+  }
+});
+
+test("venta repetida con misma idempotency_key no duplica venta, stock, movimientos ni caja", () => {
+  const saleFunction = migrationSource.slice(
+    migrationSource.indexOf("CREATE OR REPLACE FUNCTION public.create_store_product_sale_transaction"),
+    migrationSource.indexOf("ALTER TABLE public.store_suppliers ENABLE ROW LEVEL SECURITY")
+  );
+
+  assert.match(migrationSource, /CREATE UNIQUE INDEX IF NOT EXISTS store_sales_idempotency_key_idx/);
+  assert.match(saleFunction, /WHERE idempotency_key = v_idempotency_key/);
+  assert.match(saleFunction, /RETURN jsonb_build_object\('success', true, 'saleId', v_existing\.id, 'idempotent', true\)/);
+  assert.ok(
+    saleFunction.indexOf("WHERE idempotency_key = v_idempotency_key") <
+      saleFunction.indexOf("INSERT INTO public.store_sales")
+  );
+});
+
+test("servidor no confia precio ni comision enviados por cliente", () => {
+  assert.match(saleApiSource, /const unitPrice = toFiniteNumber\(product\.sale_price, 0\)/);
+  assert.doesNotMatch(saleApiSource, /unit_price:\s*line\.unit_price/);
+  assert.match(saleApiSource, /p_seller_commission_percent:\s*null/);
+  assert.match(
+    saleApiSource,
+    /\.from\("store_settings"\)[\s\S]*\.select\(\s*"salon_product_commission_percent,terminal_card_fee_percent,default_seller_commission_percent"\s*\)/
+  );
+  assert.match(saleApiSource, /\.from\("staff"\)[\s\S]*\.select\("product_commission_percentage"\)/);
+  assert.match(migrationSource, /v_unit_price := round\(coalesce\(v_product\.sale_price, 0\), 2\)/);
+  assert.doesNotMatch(migrationSource, /ELSE greatest\(p_seller_commission_percent/);
+  assert.doesNotMatch(tiendaPageSource, /seller_commission_percent:\s*saleTotals\.sellerPercent/);
+});
+
+test("Tienda y Cobros bloquean productos con proveedor estructurado no disponible", () => {
+  for (const source of [tiendaPageSource, cobrosPageSource]) {
+    assert.match(source, /supplier_error:\s*supplierResolution\.ok \? "" : supplierResolution\.message/);
+    assert.match(source, /find\(\(.*\) => .*\.supplier_error\)/s);
+    assert.match(source, /supplier_options\?\.\length === 0 && !.*\.supplier_error/s);
+  }
+});
+
+test("salon_owned no inventa neto a proveedor", () => {
+  assert.match(
+    migrationSource,
+    /WHEN \(v_line ->> 'ownership_model_snapshot'\) = 'salon_owned' THEN 0/
+  );
 });
 
 test("rechazo no modifica inventario ni stock", () => {

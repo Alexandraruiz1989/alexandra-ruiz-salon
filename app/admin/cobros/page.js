@@ -23,6 +23,7 @@ const menuItems = [
   { key: "pagos", label: "Pagos recientes" },
   { key: "extras", label: "Extras / Decoraciones" },
 ];
+const allowedCobrosRoles = ["admin", "encargada", "caja", "tecnica"];
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -242,8 +243,8 @@ function CobrosContent() {
     return {
       email: user.email,
       full_name: user.email,
-      role: "tecnica",
-      active: true,
+      role: "sin_acceso",
+      active: false,
       staff_id: null,
     };
   }
@@ -253,6 +254,18 @@ function CobrosContent() {
     setMessage("");
 
     const role = normalizeRole(profileParam?.role);
+
+    if (!profileParam || profileParam.active === false || !allowedCobrosRoles.includes(role)) {
+      setAppointments([]);
+      setPayments([]);
+      setAllPaidAppointmentIds([]);
+      setExtras([]);
+      setStoreProducts([]);
+      setStaff([]);
+      setMessage("No tienes permiso para entrar a Cobros.");
+      setLoadingData(false);
+      return;
+    }
 
     const appointmentsQuery = appointmentIdFromUrl
       ? supabase
@@ -692,6 +705,8 @@ function CobrosContent() {
       product_supplier_id: selectedSupplier?.id || "",
       supplier_id: selectedSupplier?.supplier_id || "",
       supplier_name: selectedSupplier?.supplier_name || "",
+      ownership_model: selectedSupplier?.ownership_model || "legacy",
+      supplier_error: supplierResolution.ok ? "" : supplierResolution.message,
       supplier_required:
         !supplierResolution.ok && supplierResolution.code === "supplier_required",
     };
@@ -925,6 +940,16 @@ function CobrosContent() {
 
     if (missingSupplier) {
       setPaymentMessage(`Selecciona proveedor para ${missingSupplier.product_name}.`);
+      setSavingPayment(false);
+      return;
+    }
+
+    const supplierError = productLines.find((line) => line.supplier_error);
+
+    if (supplierError) {
+      setPaymentMessage(
+        `${supplierError.supplier_error} Producto: ${supplierError.product_name}.`
+      );
       setSavingPayment(false);
       return;
     }
@@ -1828,9 +1853,14 @@ function PaymentModal({
                               Proveedor: {line.supplier_name}
                             </p>
                           )}
-                          {line.supplier_options?.length === 0 && (
+                          {line.supplier_options?.length === 0 && !line.supplier_error && (
                             <p className="mt-1 text-xs text-amber-700">
                               Producto legacy sin proveedor estructurado.
+                            </p>
+                          )}
+                          {line.supplier_error && (
+                            <p className="mt-1 text-xs text-red-700">
+                              {line.supplier_error}
                             </p>
                           )}
                         </div>

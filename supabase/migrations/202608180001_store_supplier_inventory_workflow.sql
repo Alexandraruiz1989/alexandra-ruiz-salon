@@ -401,7 +401,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS store_inventory_movements_idempotency_idx
   ON public.store_inventory_movements (idempotency_key)
   WHERE idempotency_key IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS store_sales_idempotency_idx
+CREATE UNIQUE INDEX IF NOT EXISTS store_sales_idempotency_key_idx
   ON public.store_sales (idempotency_key)
   WHERE idempotency_key IS NOT NULL;
 
@@ -452,6 +452,60 @@ AS $$
   )
 $$;
 
+CREATE OR REPLACE FUNCTION public.store_user_has_any_active_role(allowed_roles text[])
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT coalesce(
+    EXISTS (
+      SELECT 1
+      FROM public.user_profiles up
+      WHERE (
+          up.auth_user_id = auth.uid()
+          OR lower(up.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+        )
+        AND coalesce(up.active, true) = true
+        AND up.role = ANY(allowed_roles)
+    ),
+    false
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION public.store_supplier_product_relation_matches(
+  p_supplier_id uuid,
+  p_product_id uuid,
+  p_product_supplier_id uuid,
+  p_require_active boolean DEFAULT true
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT coalesce(
+    EXISTS (
+      SELECT 1
+      FROM public.store_product_suppliers ps
+      JOIN public.store_suppliers supplier ON supplier.id = ps.supplier_id
+      WHERE ps.id = p_product_supplier_id
+        AND ps.product_id = p_product_id
+        AND ps.supplier_id = p_supplier_id
+        AND (
+          p_require_active = false
+          OR (
+            ps.active = true
+            AND supplier.active = true
+          )
+        )
+    ),
+    false
+  )
+$$;
+
 CREATE OR REPLACE FUNCTION public.store_user_can_approve_inventory()
 RETURNS boolean
 LANGUAGE sql
@@ -460,7 +514,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
   SELECT coalesce(
-    public.store_user_has_role(ARRAY['admin'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text])
     OR EXISTS (
       SELECT 1
       FROM public.store_inventory_approvers approver
@@ -509,6 +563,15 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'movement_request_already_reviewed';
   END IF;
 
+  IF NOT public.store_supplier_product_relation_matches(
+    v_request.supplier_id,
+    v_request.product_id,
+    v_request.product_supplier_id,
+    true
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '23503', MESSAGE = 'product_supplier_invalid';
+  END IF;
+
   SELECT *
   INTO v_inventory
   FROM public.store_supplier_inventory
@@ -531,6 +594,9 @@ BEGIN
       now()
     )
     RETURNING * INTO v_inventory;
+  ELSIF v_inventory.product_id <> v_request.product_id
+    OR v_inventory.supplier_id <> v_request.supplier_id THEN
+    RAISE EXCEPTION USING ERRCODE = '23503', MESSAGE = 'supplier_inventory_mismatch';
   END IF;
 
   SELECT *
@@ -727,6 +793,7 @@ DECLARE
   v_relation_supplier_active boolean;
   v_relation_supplier_stock integer;
   v_candidate_count integer := 0;
+  v_structured_relation_count integer := 0;
   v_product_id uuid;
   v_product_supplier_id uuid;
   v_quantity integer;
@@ -764,7 +831,7 @@ DECLARE
   v_supplier_previous_stock integer;
   v_supplier_new_stock integer;
 BEGIN
-  IF v_profile_id IS NULL OR NOT public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text]) THEN
+  IF v_profile_id IS NULL OR NOT public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text]) THEN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'store_sale_not_allowed';
   END IF;
 
@@ -804,14 +871,11 @@ BEGIN
     WHEN v_payment_method IN ('tarjeta', 'mixto') THEN coalesce(v_settings.terminal_card_fee_percent, 0)
     ELSE 0
   END;
-  v_seller_percent := CASE
-    WHEN p_seller_commission_percent IS NULL THEN coalesce(
-      nullif(v_seller.product_commission_percentage, 0),
-      v_settings.default_seller_commission_percent,
-      0
-    )
-    ELSE greatest(p_seller_commission_percent, 0)
-  END;
+  v_seller_percent := coalesce(
+    nullif(v_seller.product_commission_percentage, 0),
+    v_settings.default_seller_commission_percent,
+    0
+  );
 
   FOR v_item IN
     SELECT value
@@ -858,7 +922,7 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'quantity_invalid';
     END IF;
 
-    v_unit_price := round(coalesce(nullif((v_item ->> 'unit_price')::numeric, 0), v_product.sale_price, 0), 2);
+    v_unit_price := round(coalesce(v_product.sale_price, 0), 2);
 
     IF v_unit_price < 0 THEN
       RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'unit_price_invalid';
@@ -900,6 +964,11 @@ BEGIN
 
       v_has_relation := true;
     ELSE
+      SELECT count(*)
+      INTO v_structured_relation_count
+      FROM public.store_product_suppliers ps
+      WHERE ps.product_id = v_product_id;
+
       SELECT count(*)
       INTO v_candidate_count
       FROM public.store_product_suppliers ps
@@ -946,6 +1015,8 @@ BEGIN
         v_has_relation := true;
       ELSIF v_candidate_count > 1 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'product_supplier_required';
+      ELSIF v_structured_relation_count > 0 THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'product_supplier_unavailable';
       END IF;
     END IF;
 
@@ -987,7 +1058,7 @@ BEGIN
   v_salon_commission := round(v_total * (v_salon_percent / 100), 2);
   v_terminal_fee := round(v_total * (v_terminal_percent / 100), 2);
   v_seller_commission := round(v_total * (v_seller_percent / 100), 2);
-  v_external_net := round(v_total - v_salon_commission - v_terminal_fee - v_seller_commission, 2);
+  v_external_net := 0;
   v_sale_reference := 'TV-' || to_char(coalesce(p_sale_date, current_date), 'YYYYMMDD') || '-' || upper(substr(v_sale_id::text, 1, 8));
 
   INSERT INTO public.store_sales (
@@ -1060,7 +1131,13 @@ BEGIN
     v_line_salon := round(v_salon_commission * v_ratio, 2);
     v_line_terminal := round(v_terminal_fee * v_ratio, 2);
     v_line_seller := round(v_seller_commission * v_ratio, 2);
-    v_line_supplier_net := round(v_line_net - v_line_salon - v_line_terminal - v_line_seller, 2);
+    v_line_supplier_net := CASE
+      WHEN (v_line ->> 'ownership_model_snapshot') = 'salon_owned' THEN 0
+      WHEN (v_line ->> 'economic_snapshot_complete')::boolean = true THEN
+        round(v_line_net - v_line_salon - v_line_terminal - v_line_seller, 2)
+      ELSE NULL
+    END;
+    v_external_net := round(v_external_net + coalesce(v_line_supplier_net, 0), 2);
     v_line_profit := CASE
       WHEN nullif(v_line ->> 'unit_cost_snapshot', '') IS NULL THEN NULL
       ELSE round(v_line_net - (((v_line ->> 'unit_cost_snapshot')::numeric) * ((v_line ->> 'quantity')::integer)), 2)
@@ -1191,6 +1268,11 @@ BEGIN
     );
   END LOOP;
 
+  UPDATE public.store_sales
+  SET external_owner_net_amount = v_external_net,
+      updated_at = now()
+  WHERE id = v_sale_id;
+
   IF v_total > 0 THEN
     INSERT INTO public.cash_movements (
       movement_date,
@@ -1254,7 +1336,7 @@ CREATE POLICY store_suppliers_select_roles_or_own
   FOR SELECT
   TO authenticated
   USING (
-    public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text])
     OR public.store_supplier_user_is_active(id)
   );
 
@@ -1263,15 +1345,15 @@ CREATE POLICY store_suppliers_insert_admin_encargada
   ON public.store_suppliers
   FOR INSERT
   TO authenticated
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_suppliers_update_admin_encargada ON public.store_suppliers;
 CREATE POLICY store_suppliers_update_admin_encargada
   ON public.store_suppliers
   FOR UPDATE
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]))
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]))
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_supplier_users_select_roles_or_self ON public.store_supplier_users;
 CREATE POLICY store_supplier_users_select_roles_or_self
@@ -1279,7 +1361,7 @@ CREATE POLICY store_supplier_users_select_roles_or_self
   FOR SELECT
   TO authenticated
   USING (
-    public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text])
     OR public.store_supplier_user_is_active(supplier_id)
   );
 
@@ -1288,15 +1370,15 @@ CREATE POLICY store_supplier_users_insert_admin_encargada
   ON public.store_supplier_users
   FOR INSERT
   TO authenticated
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_supplier_users_update_admin_encargada ON public.store_supplier_users;
 CREATE POLICY store_supplier_users_update_admin_encargada
   ON public.store_supplier_users
   FOR UPDATE
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]))
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]))
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_product_suppliers_select_roles_or_own ON public.store_product_suppliers;
 CREATE POLICY store_product_suppliers_select_roles_or_own
@@ -1304,7 +1386,7 @@ CREATE POLICY store_product_suppliers_select_roles_or_own
   FOR SELECT
   TO authenticated
   USING (
-    public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text, 'product_owner'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text, 'product_owner'::text])
     OR public.store_supplier_user_is_active(supplier_id)
   );
 
@@ -1313,15 +1395,15 @@ CREATE POLICY store_product_suppliers_insert_admin_encargada
   ON public.store_product_suppliers
   FOR INSERT
   TO authenticated
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_product_suppliers_update_admin_encargada ON public.store_product_suppliers;
 CREATE POLICY store_product_suppliers_update_admin_encargada
   ON public.store_product_suppliers
   FOR UPDATE
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]))
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]))
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_supplier_inventory_select_roles_or_own ON public.store_supplier_inventory;
 CREATE POLICY store_supplier_inventory_select_roles_or_own
@@ -1329,7 +1411,7 @@ CREATE POLICY store_supplier_inventory_select_roles_or_own
   FOR SELECT
   TO authenticated
   USING (
-    public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text, 'product_owner'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text, 'product_owner'::text])
     OR public.store_supplier_user_is_active(supplier_id)
   );
 
@@ -1338,8 +1420,8 @@ CREATE POLICY store_supplier_inventory_write_admin_encargada
   ON public.store_supplier_inventory
   FOR ALL
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]))
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]))
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_inventory_requests_select_roles_or_own ON public.store_inventory_movement_requests;
 CREATE POLICY store_inventory_requests_select_roles_or_own
@@ -1347,7 +1429,7 @@ CREATE POLICY store_inventory_requests_select_roles_or_own
   FOR SELECT
   TO authenticated
   USING (
-    public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text])
+    public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text, 'caja'::text])
     OR public.store_supplier_user_is_active(supplier_id)
   );
 
@@ -1359,6 +1441,12 @@ CREATE POLICY store_inventory_requests_insert_supplier_own
   WITH CHECK (
     status = 'pending'
     AND public.store_supplier_user_is_active(supplier_id)
+    AND public.store_supplier_product_relation_matches(
+      supplier_id,
+      product_id,
+      product_supplier_id,
+      true
+    )
   );
 
 DROP POLICY IF EXISTS store_inventory_requests_update_supplier_cancel_pending ON public.store_inventory_movement_requests;
@@ -1373,6 +1461,12 @@ CREATE POLICY store_inventory_requests_update_supplier_cancel_pending
   WITH CHECK (
     status = 'cancelled'
     AND public.store_supplier_user_is_active(supplier_id)
+    AND public.store_supplier_product_relation_matches(
+      supplier_id,
+      product_id,
+      product_supplier_id,
+      false
+    )
   );
 
 DROP POLICY IF EXISTS store_inventory_requests_update_approvers ON public.store_inventory_movement_requests;
@@ -1388,15 +1482,15 @@ CREATE POLICY store_inventory_approvers_select_admin
   ON public.store_inventory_approvers
   FOR SELECT
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text, 'encargada'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text, 'encargada'::text]));
 
 DROP POLICY IF EXISTS store_inventory_approvers_write_admin ON public.store_inventory_approvers;
 CREATE POLICY store_inventory_approvers_write_admin
   ON public.store_inventory_approvers
   FOR ALL
   TO authenticated
-  USING (public.store_user_has_role(ARRAY['admin'::text]))
-  WITH CHECK (public.store_user_has_role(ARRAY['admin'::text]));
+  USING (public.store_user_has_any_active_role(ARRAY['admin'::text]))
+  WITH CHECK (public.store_user_has_any_active_role(ARRAY['admin'::text]));
 
 REVOKE ALL PRIVILEGES
 ON TABLE

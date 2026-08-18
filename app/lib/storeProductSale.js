@@ -107,6 +107,9 @@ export function resolveProductSupplierForSale({
   requestedProductSupplierId = "",
 }) {
   const safeQuantity = toPositiveInteger(quantity);
+  const relations = Array.isArray(product?.store_product_suppliers)
+    ? product.store_product_suppliers
+    : [];
   const options = getProductSupplierOptions(product);
   const inStockOptions = options.filter(
     (option) => option.current_stock >= safeQuantity
@@ -154,7 +157,7 @@ export function resolveProductSupplierForSale({
     };
   }
 
-  if (options.length === 0) {
+  if (options.length === 0 && relations.length === 0) {
     return {
       ok: true,
       mode: "legacy",
@@ -163,6 +166,16 @@ export function resolveProductSupplierForSale({
       options,
       economicSnapshotComplete: false,
       reason: "legacy_product_without_structured_supplier",
+    };
+  }
+
+  if (options.length === 0) {
+    return {
+      ok: false,
+      code: "supplier_unavailable",
+      message: "Este producto no tiene proveedores activos disponibles.",
+      requiresSelection: true,
+      options,
     };
   }
 
