@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  buildFollowupWhatsAppMessage,
+  openManualWhatsAppMessage,
+} from "../../lib/manualWhatsApp";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
@@ -12,30 +16,6 @@ const menuItems = [
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
-}
-
-function cleanPhoneForWhatsApp(phone) {
-  if (!phone) return "";
-
-  const onlyNumbers = String(phone).replace(/\D/g, "");
-
-  if (onlyNumbers.startsWith("52")) {
-    return onlyNumbers;
-  }
-
-  return `52${onlyNumbers}`;
-}
-
-function openWhatsAppMessage(phone, message) {
-  const cleanPhone = cleanPhoneForWhatsApp(phone);
-
-  if (!cleanPhone) {
-    alert("Esta clienta no tiene teléfono registrado.");
-    return;
-  }
-
-  const encodedMessage = encodeURIComponent(message);
-  window.open(`https://wa.me/${cleanPhone}?text=${encodedMessage}`, "_blank");
 }
 
 function getToastStyle(message) {
@@ -81,6 +61,7 @@ export default function SeguimientosPage() {
   const [message, setMessage] = useState("");
 
   const [followups, setFollowups] = useState([]);
+  const [editableMessages, setEditableMessages] = useState({});
 
   useEffect(() => {
     const start = async () => {
@@ -139,7 +120,19 @@ export default function SeguimientosPage() {
     if (error) {
       setMessage(`No se pudieron cargar seguimientos: ${error.message}`);
     } else {
-      setFollowups(data || []);
+      const nextFollowups = data || [];
+      setFollowups(nextFollowups);
+      setEditableMessages((current) => {
+        const nextMessages = { ...current };
+
+        for (const followup of nextFollowups) {
+          if (nextMessages[followup.id] === undefined) {
+            nextMessages[followup.id] = buildFollowupWhatsAppMessage(followup);
+          }
+        }
+
+        return nextMessages;
+      });
     }
 
     setLoadingData(false);
@@ -189,15 +182,26 @@ export default function SeguimientosPage() {
     setMessage("Seguimiento marcado como enviado correctamente ✨");
   };
 
+  const updateEditableMessage = (followupId, value) => {
+    setEditableMessages((current) => ({
+      ...current,
+      [followupId]: value,
+    }));
+  };
+
   const sendWhatsApp = (followup) => {
-    const clientName = followup.clients?.full_name || "hermosa";
-    const firstName = clientName.split(" ")[0];
+    const currentMessage =
+      editableMessages[followup.id] ?? buildFollowupWhatsAppMessage(followup);
+    const result = openManualWhatsAppMessage({
+      phone: followup.clients?.phone,
+      message: currentMessage,
+      openWindow:
+        typeof window !== "undefined" ? window.open.bind(window) : null,
+    });
 
-    const defaultMessage =
-      followup.message_body ||
-      `Hola ${firstName} 💕 Esperamos que estés muy bien. Queríamos recordarte que ya es buen momento para agendar tu siguiente cita en Alexandra Ruiz Salón Spa. ¿Te gustaría que te ayudemos a encontrar un espacio? ✨`;
-
-    openWhatsAppMessage(followup.clients?.phone, defaultMessage);
+    if (!result.ok) {
+      setMessage(result.error);
+    }
   };
 
   if (loadingSession) {
@@ -313,11 +317,21 @@ export default function SeguimientosPage() {
                         </p>
                       )}
 
-                      {followup.message_body && (
-                        <p className="mt-4 rounded-xl bg-white/70 p-4 text-sm leading-6 text-[#68777c]">
-                          {followup.message_body}
-                        </p>
-                      )}
+                      <label className="mt-4 block text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                        Mensaje para WhatsApp
+                      </label>
+
+                      <textarea
+                        value={
+                          editableMessages[followup.id] ??
+                          buildFollowupWhatsAppMessage(followup)
+                        }
+                        onChange={(event) =>
+                          updateEditableMessage(followup.id, event.target.value)
+                        }
+                        rows={5}
+                        className="mt-2 w-full rounded-2xl border border-[#dde3e6] bg-white/80 px-4 py-3 text-sm leading-6 text-[#263238] outline-none transition focus:border-[#bd7b83] focus:ring-2 focus:ring-[#f2d6db]"
+                      />
 
                       {followup.notes && (
                         <p className="mt-3 text-sm text-[#68777c]">

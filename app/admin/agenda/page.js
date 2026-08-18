@@ -6,10 +6,17 @@ import {
   buildAdminAppointmentCreatePayload,
   getAdminTransactionalCreateBlocker,
 } from "../../lib/adminAppointmentClientMode";
+import {
+  buildAppointmentManualWhatsAppMessages,
+  buildWhatsAppPhoneUrl,
+  isAppointmentEligibleForManualWhatsApp,
+  openManualWhatsAppMessage,
+} from "../../lib/manualWhatsApp";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
 const DESIGN_IMAGE_BUCKET = "appointment-designs";
+const REVIEW_BASE_URL = "https://alexandra-ruiz-salon.vercel.app";
 const ADMIN_TRANSACTIONAL_APPOINTMENT_WRITES_ENABLED =
   adminTransactionalAppointmentWritesEnabled({
     APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED:
@@ -4866,9 +4873,7 @@ function buildGoogleCalendarUrl(appointment) {
 function AppointmentPopover({ appointment, payment, onClose, onOpenDetail }) {
   const servicesText = getAppointmentServicesText(appointment);
   const phone = appointment.clients?.phone || "";
-  const whatsappUrl = phone
-    ? `https://wa.me/${cleanPhoneForWhatsApp(phone)}`
-    : "";
+  const whatsappUrl = buildWhatsAppPhoneUrl(phone);
 
   return (
     <div
@@ -5593,35 +5598,6 @@ function buildFollowupMessage(template, clientName) {
 
   return String(template || "").replaceAll("{client_first_name}", firstName);
 }
-function cleanPhoneForWhatsApp(phone) {
-  if (!phone) return "";
-
-  const onlyNumbers = String(phone).replace(/\D/g, "");
-
-  if (onlyNumbers.startsWith("52")) {
-    return onlyNumbers;
-  }
-
-  return `52${onlyNumbers}`;
-}
-
-function openWhatsAppMessage(phone, message) {
-  const cleanPhone = cleanPhoneForWhatsApp(phone);
-
-  if (!cleanPhone) {
-    alert("Esta clienta no tiene teléfono registrado.");
-    return;
-  }
-
-  const encodedMessage = encodeURIComponent(message);
-  window.open(`https://wa.me/${cleanPhone}?text=${encodedMessage}`, "_blank");
-}
-
-function getClientFirstName(fullName) {
-  if (!fullName) return "";
-  return ` ${fullName.split(" ")[0]}`;
-}
-
 function getAppointmentServicesText(appointment) {
   const services = appointment.appointment_services || [];
 
@@ -5638,6 +5614,121 @@ function normalizeRole(role) {
   return String(role || "tecnica").trim().toLowerCase();
 }
 
+function ManualAppointmentWhatsAppPanel({
+  appointment,
+  canUseManualWhatsApp,
+  onStatusMessage,
+}) {
+  const clientPhone = appointment.clients?.phone || "";
+  const manualWhatsAppOptions = buildAppointmentManualWhatsAppMessages(
+    appointment,
+    {
+      reviewBaseUrl: REVIEW_BASE_URL,
+    }
+  );
+  const canOfferAppointmentWhatsApp =
+    isAppointmentEligibleForManualWhatsApp(appointment);
+  const hasClientWhatsAppPhone = Boolean(buildWhatsAppPhoneUrl(clientPhone));
+  const [manualWhatsAppMessage, setManualWhatsAppMessage] = useState(
+    manualWhatsAppOptions[0]?.message || ""
+  );
+
+  if (!canUseManualWhatsApp) {
+    return null;
+  }
+
+  const manualWhatsAppUnavailableMessage = !canOfferAppointmentWhatsApp
+    ? "Esta cita no está vigente para enviar recordatorios por WhatsApp."
+    : !hasClientWhatsAppPhone
+    ? "Esta clienta no tiene un número de WhatsApp válido registrado."
+    : "";
+
+  const handleOpenManualWhatsApp = () => {
+    onStatusMessage("");
+
+    if (!canOfferAppointmentWhatsApp) {
+      onStatusMessage(
+        "Esta cita no está vigente para enviar recordatorios por WhatsApp."
+      );
+      return;
+    }
+
+    const result = openManualWhatsAppMessage({
+      phone: clientPhone,
+      message: manualWhatsAppMessage,
+      openWindow:
+        typeof window !== "undefined" ? window.open.bind(window) : null,
+    });
+
+    if (!result.ok) {
+      onStatusMessage(result.error);
+      return;
+    }
+
+    onStatusMessage(
+      "WhatsApp se abrió con el mensaje preparado. Revísalo y envíalo manualmente."
+    );
+  };
+
+  return (
+    <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
+      <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+        Recordatorio por WhatsApp
+      </p>
+
+      {manualWhatsAppUnavailableMessage ? (
+        <p className="mt-3 rounded-2xl bg-white/80 p-4 text-sm text-[#68777c]">
+          {manualWhatsAppUnavailableMessage}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {manualWhatsAppOptions.map((option, index) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setManualWhatsAppMessage(option.message)}
+                className={
+                  index === 0
+                    ? "rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+                    : "rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
+                }
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="mt-4 block text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Mensaje editable
+          </label>
+
+          <textarea
+            value={manualWhatsAppMessage}
+            onChange={(event) => setManualWhatsAppMessage(event.target.value)}
+            rows={6}
+            className="mt-2 w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 text-sm leading-6 text-[#263238] outline-none transition focus:border-[#bd7b83] focus:ring-2 focus:ring-[#f2d6db]"
+          />
+
+          <button
+            type="button"
+            onClick={handleOpenManualWhatsApp}
+            disabled={!manualWhatsAppMessage.trim()}
+            className="mt-3 rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Abrir WhatsApp
+          </button>
+        </>
+      )}
+
+      <p className="mt-3 text-xs text-[#68777c]">
+        Por ahora se abrirá WhatsApp con el mensaje listo para revisar y enviar
+        manualmente. No se marca como enviado ni se envía automáticamente.
+      </p>
+    </div>
+  );
+}
+
 function AppointmentDetailModal({
   appointment,
   onClose,
@@ -5649,10 +5740,6 @@ function AppointmentDetailModal({
   const designImageUrl = appointment.design_image_url || "";
   const clientName = appointment.clients?.full_name || "";
   const clientNumber = appointment.clients?.client_number || "";
- const clientFirstName = getClientFirstName(clientName);
-  const clientPhone = appointment.clients?.phone || "";
-  const appointmentTime = formatTime(appointment.start_time);
-  const servicesText = getAppointmentServicesText(appointment);
  
   const [currentRole, setCurrentRole] = useState("tecnica");
   const [previousAppointment, setPreviousAppointment] = useState(null);
@@ -5863,23 +5950,6 @@ const saveAttendanceStatus = async () => {
   );
   setSavingAttendance(false);
 };
-
-  const reminderMessage = `Hola ${clientFirstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para hoy a las ${appointmentTime}. Te esperamos para consentirte ✨`;
-
-  const onTheWayMessage = `Hola ${clientFirstName} 💕 Solo queremos confirmar si vienes en camino a tu cita de las ${appointmentTime}. Te esperamos ✨`;
-
-  const lateMessage = `Hola ${clientFirstName} 💕 Notamos que tu cita era a las ${appointmentTime}. ¿Nos confirmas si vienes en camino o si tuviste algún retraso?`;
-
-  const thankYouMessage = `Hola ${clientFirstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`;
-
- const reviewBaseUrl = "https://alexandra-ruiz-salon.vercel.app";
-
-const reviewLink = `${reviewBaseUrl}/calificar/${appointment.id}`;
-
-const reviewMessage = `Hola ${clientFirstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
-
-Puedes calificarnos aquí:
-${reviewLink}`;
 
 const goToPayment = () => {
   window.location.href = `/admin/cobros?appointmentId=${appointment.id}`;
@@ -6253,59 +6323,12 @@ const deleteAppointment = async () => {
           )}
         </div>
 
-     {canUseManualWhatsApp && (
-  <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
-    <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
-      Mensajes rápidos por WhatsApp
-    </p>
-
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-      <button
-        type="button"
-        onClick={() => openWhatsAppMessage(clientPhone, reminderMessage)}
-        className="rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
-      >
-        Enviar recordatorio
-      </button>
-
-      <button
-        type="button"
-        onClick={() => openWhatsAppMessage(clientPhone, onTheWayMessage)}
-        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-      >
-        ¿Viene en camino?
-      </button>
-
-      <button
-        type="button"
-        onClick={() => openWhatsAppMessage(clientPhone, lateMessage)}
-        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-      >
-        Preguntar si viene retrasada
-      </button>
-
-      <button
-        type="button"
-        onClick={() => openWhatsAppMessage(clientPhone, thankYouMessage)}
-        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white"
-      >
-        Enviar agradecimiento
-      </button>
-
-      <button
-        type="button"
-        onClick={() => openWhatsAppMessage(clientPhone, reviewMessage)}
-        className="rounded-full border border-[#bd7b83] px-5 py-3 text-sm text-[#bd7b83] transition hover:bg-[#bd7b83] hover:text-white sm:col-span-2"
-      >
-        Solicitar calificación
-      </button>
-    </div>
-
-    <p className="mt-3 text-xs text-[#68777c]">
-      Por ahora se abrirá WhatsApp con el mensaje listo para enviar. Más adelante estos mensajes se enviarán desde el número del salón mediante API.
-    </p>
-  </div>
-)}
+        <ManualAppointmentWhatsAppPanel
+          key={`manual-whatsapp-${appointment.id}`}
+          appointment={appointment}
+          canUseManualWhatsApp={canUseManualWhatsApp}
+          onStatusMessage={setAttendanceMessage}
+        />
 
 <div className="mt-6">
   {deleteMessage && (
