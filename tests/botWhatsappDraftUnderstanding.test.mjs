@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   analyzeDraftRequest,
   generateSafeDraftReply,
 } from "../app/lib/whatsapp/botResponseDraftGenerator.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const productionCatalogCopyPath =
   process.env.BOT_TEST_SERVICE_CATALOG_PATH ||
-  "C:\\Users\\sabid\\Proyectos\\alexandra-ruiz-salon-production-backups\\service-alias-fix-v2-20260803-203708\\services-catalog-production-after-apply.json";
+  path.join(__dirname, "fixtures", "service-catalog-draft-understanding.json");
 
 function service(overrides = {}) {
   return {

@@ -1,0 +1,82 @@
+[
+  {
+    "id": "fixture_gel_natural",
+    "name": "Aplicación de Gel Semi Permanente Manos",
+    "category": "Servicios sobre Uña Natural",
+    "base_price": 160,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "gel en uña natural, gel en una natural, gel semipermanente en uña natural, gelish uña natural",
+    "bot_service_group": "una_natural_gel_semipermanente"
+  },
+  {
+    "id": "fixture_gel_pies",
+    "name": "Gel Semi Permanente Pies",
+    "category": "Pedicure",
+    "base_price": 180,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "gel en pies, gelish pies, gel semipermanente pies, gel en uñas de los pies",
+    "bot_service_group": "pies_gel_semipermanente"
+  },
+  {
+    "id": "fixture_gel_construccion",
+    "name": "Gel de Construcción",
+    "category": "Uñas",
+    "base_price": 350,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "gel de construccion, gel de construcción",
+    "bot_service_group": ""
+  },
+  {
+    "id": "fixture_bano_gel",
+    "name": "Baño de Gel",
+    "category": "Uñas",
+    "base_price": 220,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "baño de gel, bano de gel",
+    "bot_service_group": ""
+  },
+  {
+    "id": "fixture_relleno_rubber",
+    "name": "Relleno de Rubber",
+    "category": "Uñas",
+    "base_price": 300,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "relleno de rubber",
+    "bot_service_group": ""
+  },
+  {
+    "id": "fixture_cirugia_capilar",
+    "name": "Cirugía Capilar",
+    "category": "Cabello",
+    "base_price": 1200,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "cirugia capilar, cirugía capilar",
+    "bot_service_group": ""
+  },
+  {
+    "id": "fixture_planchado_cejas",
+    "name": "Planchado de Cejas",
+    "category": "Cejas",
+    "base_price": 150,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "planchado de cejas",
+    "bot_service_group": ""
+  },
+  {
+    "id": "fixture_pedicure_spa_gel",
+    "name": "Pedicure Spa con Gel",
+    "category": "Pedicure",
+    "base_price": 420,
+    "active": true,
+    "bot_active": true,
+    "bot_keywords": "pedicure spa con gel",
+    "bot_service_group": ""
+  }
+]

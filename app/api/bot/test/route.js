@@ -18,7 +18,7 @@ import OpenAI from "openai";
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
 const openaiModel = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const aiEnabled = process.env.BOT_AI_ENABLED !== "false";
+const aiEnabled = process.env.BOT_AI_ENABLED === "true";
 const AI_RULES_FALLBACK_MESSAGE =
   "IA no conectada. El bot está funcionando con reglas básicas.";
 let openaiClient = null;
