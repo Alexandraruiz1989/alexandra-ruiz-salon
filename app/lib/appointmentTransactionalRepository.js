@@ -103,6 +103,16 @@ export function appointmentTransactionalWritesEnabled(env = process.env) {
   );
 }
 
+function appointmentTransactionalWriteAllowedForSource(
+  source,
+  env = process.env
+) {
+  return (
+    clean(source) === "client_portal" ||
+    appointmentTransactionalWritesEnabled(env)
+  );
+}
+
 export function createAppointmentTransactionalRepository({
   supabase,
   env = process.env,
@@ -116,7 +126,9 @@ export function createAppointmentTransactionalRepository({
     writesEnabled: appointmentTransactionalWritesEnabled(env),
 
     async createAppointmentTransaction({ contract, idempotencyKey }) {
-      if (!appointmentTransactionalWritesEnabled(env)) {
+      if (
+        !appointmentTransactionalWriteAllowedForSource(contract?.source, env)
+      ) {
         return {
           ...safeFailure("write_disabled", idempotencyKey),
           status: "write_disabled",

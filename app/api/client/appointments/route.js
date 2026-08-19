@@ -121,12 +121,6 @@ function mapAppointmentForClient(appointment) {
   };
 }
 
-function sameServiceIds(left, right) {
-  const normalize = (values) =>
-    [...new Set((values || []).map(cleanText).filter(Boolean))].sort();
-  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
-}
-
 function portalWriteError(result) {
   if (result?.code === "preview_expired") {
     return "La vista previa venció. Busca nuevamente un horario.";
@@ -144,114 +138,6 @@ function portalWriteError(result) {
     return "La solicitud requiere revisión del equipo.";
   }
   return "No se pudo crear la cita. Revisa los datos e inténtalo nuevamente.";
-}
-
-async function findExistingPortalAppointment(adminSupabase, contract) {
-  const { data, error } = await adminSupabase
-    .from("appointments")
-    .select("id, appointment_services (service_id)")
-    .eq("client_id", contract.client.id)
-    .eq("staff_id", contract.staffId)
-    .eq("appointment_date", contract.date)
-    .eq("start_time", contract.startTime)
-    .eq("booking_source", "cliente_portal")
-    .neq("status", "cancelada")
-    .limit(10);
-  if (error) throw error;
-
-  const requestedIds = contract.services.map((service) => service.id);
-  return (data || []).find((appointment) =>
-    sameServiceIds(
-      requestedIds,
-      (appointment.appointment_services || []).map(
-        (service) => service.service_id
-      )
-    )
-  );
-}
-
-async function createLegacyPortalAppointment({
-  adminSupabase,
-  contract,
-  selectedSlot,
-}) {
-  const existing = await findExistingPortalAppointment(
-    adminSupabase,
-    contract
-  );
-  if (existing?.id) {
-    return {
-      status: "already_created",
-      appointmentId: existing.id,
-      clientId: contract.client.id,
-      servicesCreated: contract.services.length,
-      isReplay: true,
-    };
-  }
-
-  const portalNote = [
-    "Solicitud creada desde portal de clientas.",
-    "Pendiente de revisión del equipo y anticipo.",
-    contract.notes ? `Nota de clienta: ${contract.notes}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const appointmentPayload = {
-    client_id: contract.client.id,
-    staff_id: contract.staffId,
-    appointment_date: contract.date,
-    start_time: contract.startTime,
-    end_time: contract.endTime,
-    status: "agendada",
-    confirmation_status: "pendiente",
-    attendance_status: "pendiente",
-    booking_source: "cliente_portal",
-    estimated_total: contract.expectedPrice,
-    deposit_amount: 0,
-    notes: portalNote,
-    client_visible_notes:
-      "Solicitud recibida. El equipo revisará disponibilidad y te contactará para confirmar el anticipo.",
-  };
-  const { data: appointment, error: appointmentError } = await adminSupabase
-    .from("appointments")
-    .insert([appointmentPayload])
-    .select()
-    .single();
-  if (appointmentError || !appointment?.id) {
-    throw appointmentError || new Error("appointment_not_created");
-  }
-
-  const serviceRows = (selectedSlot.service_segments || []).map((segment) => ({
-    appointment_id: appointment.id,
-    service_id: segment.service_id,
-    staff_id: contract.staffId,
-    service_date: contract.date,
-    start_time: segment.start_time,
-    end_time: segment.end_time,
-    duration_minutes: Number(segment.duration_minutes || 0),
-    cleanup_minutes: Number(segment.cleanup_minutes || 0),
-    quantity: 1,
-    unit_price: Number(segment.price || 0),
-    total_price: Number(segment.price || 0),
-    price: Number(segment.price || 0),
-    notes: null,
-    status: "agendado",
-  }));
-  const { error: servicesError } = await adminSupabase
-    .from("appointment_services")
-    .insert(serviceRows);
-  if (servicesError) {
-    await adminSupabase.from("appointments").delete().eq("id", appointment.id);
-    throw servicesError;
-  }
-
-  return {
-    status: "created",
-    appointmentId: appointment.id,
-    clientId: contract.client.id,
-    servicesCreated: serviceRows.length,
-    isReplay: false,
-  };
 }
 
 export async function GET(request) {
@@ -441,12 +327,6 @@ export async function POST(request) {
       transactionalRepository: createAppointmentTransactionalRepository({
         supabase: adminSupabase,
       }),
-      legacyWriter: ({ contract: writeContract }) =>
-        createLegacyPortalAppointment({
-          adminSupabase,
-          contract: writeContract,
-          selectedSlot,
-        }),
     });
     if (!result.ok || !result.appointmentId) {
       return errorResponse(

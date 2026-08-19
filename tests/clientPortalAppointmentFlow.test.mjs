@@ -12,6 +12,8 @@ import {
   isPortalBookableService,
   validateAppointmentWriteContract,
 } from "../app/lib/appointmentWriteContracts.js";
+import { clearAppointmentWriteInFlightForTests } from "../app/lib/appointmentWriteService.js";
+import { createAppointmentTransactionalRepository } from "../app/lib/appointmentTransactionalRepository.js";
 
 const now = new Date("2026-07-24T12:00:00.000Z");
 
@@ -85,6 +87,83 @@ function created() {
     appointmentId: "55555555-5555-4555-8555-555555555555",
     clientId: "44444444-4444-4444-8444-444444444444",
     servicesCreated: 1,
+  };
+}
+
+function createPortalTransactionalHarness({
+  occupiedSlots = [],
+  failBeforeServices = false,
+  invalidStaffIds = [],
+} = {}) {
+  const operations = new Map();
+  const occupied = new Set(occupiedSlots);
+  const appointments = [];
+  const appointmentServices = [];
+  let sequence = 0;
+  return {
+    calls: [],
+    appointments,
+    appointmentServices,
+    async createAppointmentTransaction({ contract, idempotencyKey }) {
+      this.calls.push({ contract, idempotencyKey });
+      if (operations.has(idempotencyKey)) {
+        return {
+          ...operations.get(idempotencyKey),
+          status: "already_created",
+          isReplay: true,
+        };
+      }
+      if (invalidStaffIds.includes(contract.staffId)) {
+        return {
+          status: "invalid_staff",
+          errorCode: "staff_service_not_allowed",
+          appointmentId: null,
+          servicesCreated: 0,
+        };
+      }
+      const slotKey = [
+        contract.staffId,
+        contract.date,
+        contract.startTime,
+        contract.endTime,
+      ].join("|");
+      if (occupied.has(slotKey)) {
+        return {
+          status: "not_available",
+          errorCode: "staff_overlap",
+          appointmentId: null,
+          servicesCreated: 0,
+        };
+      }
+      if (failBeforeServices) {
+        return {
+          status: "failed",
+          errorCode: "transaction_failed",
+          appointmentId: null,
+          servicesCreated: 0,
+        };
+      }
+      sequence += 1;
+      const appointmentId = `appointment_${sequence}`;
+      occupied.add(slotKey);
+      appointments.push({ id: appointmentId, slotKey });
+      for (const serviceItem of contract.services) {
+        appointmentServices.push({
+          appointment_id: appointmentId,
+          service_id: serviceItem.id,
+          staff_id: serviceItem.staffId,
+        });
+      }
+      const result = {
+        status: "created",
+        appointmentId,
+        clientId: contract.client.id,
+        servicesCreated: contract.services.length,
+        isReplay: false,
+      };
+      operations.set(idempotencyKey, result);
+      return result;
+    },
   };
 }
 
@@ -249,10 +328,6 @@ test("portal 8: técnica no compatible requiere revisión", () => {
 test("portal 9: horario ocupado se conserva como no disponible", async () => {
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    env: {
-      APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
-      APPOINTMENT_PORTAL_TRANSACTIONAL_WRITES_ENABLED: "true",
-    },
     transactionalRepository: {
       createAppointmentTransaction: async () => ({
         status: "not_available",
@@ -294,31 +369,38 @@ test("portal 12: cambio posterior invalida la vista previa", () => {
   assert.equal(validation.code, "preview_changed");
 });
 
-test("portal 13: confirmación válida usa un solo escritor", async () => {
-  let calls = 0;
+test("portal 13: confirmación válida usa la operación transaccional", async () => {
+  const repository = createPortalTransactionalHarness();
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    legacyWriter: async () => {
-      calls += 1;
-      return created();
-    },
+    transactionalRepository: repository,
     now,
   });
   assert.equal(result.ok, true);
-  assert.equal(calls, 1);
+  assert.equal(result.mode, "transactional");
+  assert.equal(repository.calls.length, 1);
+  assert.equal(repository.appointments.length, 1);
+  assert.equal(repository.appointmentServices.length, 1);
 });
 
-test("portal 14: confirmación repetida puede regresar replay", async () => {
-  const result = await confirmClientPortalAppointment({
-    input: preview(),
-    legacyWriter: async () => ({
-      ...created(),
-      status: "already_created",
-      isReplay: true,
-    }),
+test("portal 14: misma idempotency key regresa replay sin duplicar cita", async () => {
+  const repository = createPortalTransactionalHarness();
+  const current = preview();
+  const first = await confirmClientPortalAppointment({
+    input: current,
+    transactionalRepository: repository,
     now,
   });
-  assert.equal(result.isReplay, true);
+  const second = await confirmClientPortalAppointment({
+    input: current,
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(second.isReplay, true);
+  assert.equal(first.appointmentId, second.appointmentId);
+  assert.equal(repository.appointments.length, 1);
+  assert.equal(repository.appointmentServices.length, 1);
 });
 
 test("portal 15: doble clic concurrente no duplica la llamada", async () => {
@@ -329,10 +411,12 @@ test("portal 15: doble clic concurrente no duplica la llamada", async () => {
   });
   const options = {
     input: preview(),
-    legacyWriter: async () => {
-      calls += 1;
-      await wait;
-      return created();
+    transactionalRepository: {
+      createAppointmentTransaction: async () => {
+        calls += 1;
+        await wait;
+        return created();
+      },
     },
     now,
   };
@@ -414,23 +498,21 @@ test("portal 21: anticipo pendiente no se marca verificado", () => {
 test("portal 22: error de red se normaliza", async () => {
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    legacyWriter: async () => {
-      throw new Error("network");
+    transactionalRepository: {
+      createAppointmentTransaction: async () => {
+        throw new Error("network");
+      },
     },
     now,
   });
   assert.equal(result.ok, false);
-  assert.equal(result.code, "legacy_write_failed");
+  assert.equal(result.code, "transactional_write_failed");
 });
 
 test("portal 23: RPC no disponible no cae al escritor antiguo", async () => {
   let legacyCalls = 0;
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    env: {
-      APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
-      APPOINTMENT_PORTAL_TRANSACTIONAL_WRITES_ENABLED: "true",
-    },
     legacyWriter: async () => {
       legacyCalls += 1;
       return created();
@@ -442,12 +524,14 @@ test("portal 23: RPC no disponible no cae al escritor antiguo", async () => {
   assert.equal(legacyCalls, 0);
 });
 
-test("portal 24: bandera transaccional apagada usa solo compatibilidad", async () => {
+test("portal 24: portal no depende de BOT_APPOINTMENT_WRITES_ENABLED", async () => {
   let legacyCalls = 0;
   let transactionalCalls = 0;
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    env: {},
+    env: {
+      BOT_APPOINTMENT_WRITES_ENABLED: "false",
+    },
     legacyWriter: async () => {
       legacyCalls += 1;
       return created();
@@ -460,18 +544,20 @@ test("portal 24: bandera transaccional apagada usa solo compatibilidad", async (
     },
     now,
   });
-  assert.equal(result.mode, "legacy");
-  assert.equal(legacyCalls, 1);
-  assert.equal(transactionalCalls, 0);
+  assert.equal(result.mode, "transactional");
+  assert.equal(legacyCalls, 0);
+  assert.equal(transactionalCalls, 1);
 });
 
 test("portal 25: las pruebas usan repositorios falsos y no Supabase", async () => {
   let fakeWrites = 0;
   const result = await confirmClientPortalAppointment({
     input: preview(),
-    legacyWriter: async () => {
-      fakeWrites += 1;
-      return created();
+    transactionalRepository: {
+      createAppointmentTransaction: async () => {
+        fakeWrites += 1;
+        return created();
+      },
     },
     now,
   });
@@ -613,4 +699,161 @@ test("portal 33: catálogo del portal no usa select star y expone compatibilidad
   assert.match(routeSource, /staff_services/);
   assert.match(routeSource, /bookable_staff_ids/);
   assert.match(pageSource, /compatibleStaff/);
+});
+
+test("portal 34: dos intents distintos sobre el mismo slot dejan solo una cita", async () => {
+  clearAppointmentWriteInFlightForTests();
+  const repository = createPortalTransactionalHarness();
+  const first = preview();
+  const second = preview({
+    actorId: "88888888-8888-4888-8888-888888888888",
+    client: {
+      id: "99999999-9999-4999-8999-999999999999",
+      name: "Otra clienta",
+      phone: "9995556677",
+    },
+  });
+  const results = await Promise.all([
+    confirmClientPortalAppointment({
+      input: first,
+      transactionalRepository: repository,
+      now,
+    }),
+    confirmClientPortalAppointment({
+      input: second,
+      transactionalRepository: repository,
+      now,
+    }),
+  ]);
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(
+    results.filter((result) => result.status === "not_available").length,
+    1
+  );
+  assert.equal(repository.appointments.length, 1);
+  assert.equal(repository.appointmentServices.length, 1);
+});
+
+test("portal 35: multiservicio crea todos los servicios en la misma operación", async () => {
+  const second = service({
+    id: "66666666-6666-4666-8666-666666666666",
+    name: "Pedicure",
+    duration_minutes: 40,
+    cleanup_minutes: 5,
+    base_price: 300,
+  });
+  const repository = createPortalTransactionalHarness();
+  const result = await confirmClientPortalAppointment({
+    input: preview({ slot: slot([service(), second]) }),
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.servicesCreated, 2);
+  assert.equal(repository.appointments.length, 1);
+  assert.equal(repository.appointmentServices.length, 2);
+  assert.deepEqual(
+    repository.appointmentServices.map((item) => item.appointment_id),
+    [result.appointmentId, result.appointmentId]
+  );
+});
+
+test("portal 36: fallo intermedio no deja servicios parciales", async () => {
+  const repository = createPortalTransactionalHarness({
+    failBeforeServices: true,
+  });
+  const result = await confirmClientPortalAppointment({
+    input: preview(),
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "transaction_failed");
+  assert.equal(repository.appointments.length, 0);
+  assert.equal(repository.appointmentServices.length, 0);
+});
+
+test("portal 37: staff incompatible falla en la operación de escritura", async () => {
+  const repository = createPortalTransactionalHarness({
+    invalidStaffIds: ["22222222-2222-4222-8222-222222222222"],
+  });
+  const result = await confirmClientPortalAppointment({
+    input: preview(),
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "invalid_staff");
+  assert.equal(repository.appointments.length, 0);
+});
+
+test("portal 38: slot ocupado después de consultar disponibilidad falla al confirmar", async () => {
+  const current = preview();
+  const repository = createPortalTransactionalHarness({
+    occupiedSlots: [
+      [
+        current.staffId,
+        current.date,
+        current.startTime,
+        current.endTime,
+      ].join("|"),
+    ],
+  });
+  const result = await confirmClientPortalAppointment({
+    input: current,
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "not_available");
+  assert.equal(repository.appointments.length, 0);
+});
+
+test("portal 39: el endpoint del portal no conserva escritor legacy", () => {
+  const routeSource = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(routeSource, /createAppointmentTransactionalRepository/);
+  assert.doesNotMatch(routeSource, /createLegacyPortalAppointment/);
+  assert.doesNotMatch(routeSource, /legacyWriter/);
+});
+
+test("portal 40: el repositorio permite portal sin activar bandera general ni bot", async () => {
+  let rpcCalls = 0;
+  const current = preview();
+  const repository = createAppointmentTransactionalRepository({
+    env: {
+      BOT_APPOINTMENT_WRITES_ENABLED: "false",
+    },
+    supabase: {
+      rpc: async (name, parameters) => {
+        rpcCalls += 1;
+        assert.equal(name, "create_appointment_transaction");
+        assert.equal(parameters.p_source, "client_portal");
+        return {
+          data: {
+            status: "created",
+            appointmentId: "55555555-5555-4555-8555-555555555555",
+            clientId: current.client.id,
+            idempotencyKey: parameters.p_idempotency_key,
+            servicesCreated: 1,
+            date: current.date,
+            startTime: current.startTime,
+            endTime: current.endTime,
+            staffId: current.staffId,
+          },
+          error: null,
+        };
+      },
+    },
+  });
+  const result = await confirmClientPortalAppointment({
+    input: current,
+    transactionalRepository: repository,
+    now,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "transactional");
+  assert.equal(rpcCalls, 1);
 });

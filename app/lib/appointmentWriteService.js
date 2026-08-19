@@ -51,6 +51,8 @@ function logAppointmentWriteDebug(event, details = {}, env = process.env) {
 }
 
 export function getAppointmentWriteMode(source, env = process.env) {
+  if (source === "client_portal") return "transactional";
+
   const sharedEnabled = exactServerFlagEnabled(
     "APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED",
     env
@@ -58,8 +60,6 @@ export function getAppointmentWriteMode(source, env = process.env) {
   const channelFlag =
     source === "admin"
       ? "APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED"
-      : source === "client_portal"
-      ? "APPOINTMENT_PORTAL_TRANSACTIONAL_WRITES_ENABLED"
       : source === "bot"
       ? "BOT_APPOINTMENT_WRITES_ENABLED"
       : "";

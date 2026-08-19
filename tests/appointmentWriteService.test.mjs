@@ -74,9 +74,9 @@ function transactionalEnv(source) {
     APPOINTMENT_TRANSACTIONAL_WRITES_ENABLED: "true",
     ...(source === "admin"
       ? { APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED: "true" }
-      : source === "client_portal"
-      ? { APPOINTMENT_PORTAL_TRANSACTIONAL_WRITES_ENABLED: "true" }
-      : { BOT_APPOINTMENT_WRITES_ENABLED: "true" }),
+      : source === "bot"
+      ? { BOT_APPOINTMENT_WRITES_ENABLED: "true" }
+      : {}),
   };
 }
 
@@ -91,14 +91,17 @@ test("shared 1: origen admin válido usa compatibilidad", async () => {
   assert.equal(result.mode, "legacy");
 });
 
-test("shared 2: origen portal válido usa compatibilidad", async () => {
+test("shared 2: origen portal válido usa modo transaccional estable", async () => {
   const result = await executeAppointmentWrite({
     input: contract("client_portal"),
-    legacyWriter: async () => created(),
+    transactionalRepository: {
+      createAppointmentTransaction: async () => created(),
+    },
     now,
   });
   assert.equal(result.ok, true);
   assert.equal(result.source, "client_portal");
+  assert.equal(result.mode, "transactional");
 });
 
 test("shared 3: origen bot válido exige las dos banderas", async () => {
@@ -304,13 +307,14 @@ test("shared 16: duración actualizada invalida la vista previa", async () => {
   assert.equal(result.code, "preview_changed");
 });
 
-test("shared 17: el modo por canal requiere bandera compartida", () => {
+test("shared 17: admin y bot requieren bandera compartida, portal no", () => {
   assert.equal(
     getAppointmentWriteMode("admin", {
       APPOINTMENT_ADMIN_TRANSACTIONAL_WRITES_ENABLED: "true",
     }),
     "legacy"
   );
+  assert.equal(getAppointmentWriteMode("client_portal", {}), "transactional");
   assert.equal(
     getAppointmentWriteMode("bot", {
       BOT_APPOINTMENT_WRITES_ENABLED: "true",
