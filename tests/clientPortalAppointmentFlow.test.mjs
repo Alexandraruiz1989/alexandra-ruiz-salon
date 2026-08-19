@@ -15,10 +15,14 @@ import {
 import { clearAppointmentWriteInFlightForTests } from "../app/lib/appointmentWriteService.js";
 import { createAppointmentTransactionalRepository } from "../app/lib/appointmentTransactionalRepository.js";
 import {
+  CLIENT_PORTAL_UNCATEGORIZED_CATEGORY,
   getCompatibleStaffForSelectedServices,
+  groupClientPortalServicesByCategory,
   mapClientPortalCatalog,
 } from "../app/lib/clientPortalCatalog.js";
+import { getClientAppointmentStatusLabel } from "../app/lib/clientPortalAppointmentStatus.js";
 import {
+  isClientAuthUser,
   isClientProfileComplete,
   normalizePhoneDigits,
 } from "../app/lib/clientPortalProfile.js";
@@ -1118,4 +1122,212 @@ test("portal 56: relaciones inactivas staff-servicio no habilitan técnicas", ()
     ],
   });
   assert.deepEqual(catalog.services[0].bookable_staff_ids, []);
+});
+
+test("portal 57: registro pide correo propio y contraseña sin email del admin", () => {
+  const registrationPage = readFileSync(
+    new URL("../app/cliente/registro/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(registrationPage, /name="email"/);
+  assert.match(registrationPage, /name="password"/);
+  assert.match(registrationPage, /name="confirm_password"/);
+  assert.doesNotMatch(registrationPage, /alexandraruizsalon@gmail\.com/i);
+});
+
+test("portal 58: sesión existente bloquea registro accidental de clienta", () => {
+  const registrationPage = readFileSync(
+    new URL("../app/cliente/registro/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(registrationPage, /getPortalSession/);
+  assert.match(registrationPage, /Ya hay una sesión iniciada/);
+  assert.match(registrationPage, /Cerrar sesión y registrar clienta/);
+  assert.match(registrationPage, /signOutClient/);
+});
+
+test("portal 59: login usa correo y contraseña propios sin identidad fija", () => {
+  const loginPage = readFileSync(
+    new URL("../app/cliente/login/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(loginPage, /signInWithPassword/);
+  assert.match(loginPage, /name="email"/);
+  assert.match(loginPage, /name="password"/);
+  assert.match(loginPage, /Ya hay una sesión iniciada/);
+  assert.doesNotMatch(loginPage, /alexandraruizsalon@gmail\.com/i);
+});
+
+test("portal 60: metadatos admin no crean clienta automáticamente", () => {
+  assert.equal(
+    isClientAuthUser({
+      user_metadata: { role: "admin", user_type: "admin" },
+    }),
+    false
+  );
+  assert.equal(
+    isClientAuthUser({
+      user_metadata: { role: "client", user_type: "clienta" },
+    }),
+    true
+  );
+
+  const serverSource = readFileSync(
+    new URL("../app/lib/clientPortalServer.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(serverSource, /isClientAuthUser\(user\)/);
+});
+
+test("portal 61: servicios se agrupan por categoría real y conserva Otros", () => {
+  const grouped = groupClientPortalServicesByCategory([
+    service({ id: "svc-uñas", category: "Uñas" }),
+    service({ id: "svc-pedi", category: "Pedicure" }),
+    service({ id: "svc-otro", category: "" }),
+  ]);
+
+  assert.deepEqual(Object.keys(grouped), [
+    "Uñas",
+    "Pedicure",
+    CLIENT_PORTAL_UNCATEGORIZED_CATEGORY,
+  ]);
+  assert.equal(grouped[CLIENT_PORTAL_UNCATEGORIZED_CATEGORY][0].id, "svc-otro");
+});
+
+test("portal 62: categorías desplegables conservan multiselección", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/cliente/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(agendaPage, /openCategories/);
+  assert.match(agendaPage, /aria-expanded/);
+  assert.match(agendaPage, /seleccionado/);
+  assert.match(agendaPage, /toggleService\(service\.id\)/);
+  const toggleCategorySource =
+    agendaPage.match(/const toggleCategory[\s\S]*?;\n\n  const findAvailability/)?.[0] ||
+    "";
+  assert.doesNotMatch(toggleCategorySource, /setSelectedServiceIds/);
+});
+
+test("portal 63: cita del portal pendiente se traduce como pendiente de anticipo", () => {
+  assert.equal(
+    getClientAppointmentStatusLabel({
+      status: "agendada",
+      confirmation_status: "pendiente",
+      booking_source: "cliente_portal",
+    }),
+    "Pendiente de anticipo"
+  );
+  assert.equal(
+    getClientAppointmentStatusLabel({
+      status: "agendada",
+      confirmation_status: "confirmada",
+      booking_source: "cliente_portal",
+    }),
+    "Confirmada"
+  );
+});
+
+test("portal 64: autoagenda responde solicitud pendiente y no cita confirmada", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(appointmentsRoute, /status_label: "Pendiente de anticipo"/);
+  assert.match(appointmentsRoute, /booking_source: "cliente_portal"/);
+  assert.match(appointmentsRoute, /confirmation_status: "pendiente"/);
+  assert.match(appointmentsRoute, /Tu horario fue apartado/);
+  assert.doesNotMatch(appointmentsRoute, /Tu cita está confirmada/);
+});
+
+test("portal 65: SQL transaccional aparta horario como pendiente existente", () => {
+  const sql = readFileSync(
+    new URL(
+      "../supabase/migrations/202607260009_appointment_transaction_rpc.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.match(sql, /'agendada'/);
+  assert.match(sql, /'pendiente'/);
+  assert.match(sql, /when v_source = 'client_portal' then 'cliente_portal'/);
+  assert.match(sql, /appointment_services/);
+});
+
+test("portal 66: pendiente de anticipo bloquea disponibilidad hasta cancelarse", async () => {
+  const busy = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          appointment_id: "pending_portal",
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: {
+            status: "agendada",
+            confirmation_status: "pendiente",
+            booking_source: "cliente_portal",
+          },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  const released = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          appointment_id: "cancelled_portal",
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: {
+            status: "cancelada",
+            confirmation_status: "cancelada",
+            booking_source: "cliente_portal",
+          },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  assert.equal(busy.slots.length, 0);
+  assert.equal(released.slots.length, 1);
+});
+
+test("portal 67: Agenda admin muestra y confirma pendiente sin duplicar cita", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(agendaPage, /getClientAppointmentStatusLabel/);
+  assert.match(agendaPage, /Confirmar cita/);
+  assert.match(agendaPage, /confirmation_status: "confirmada"/);
+  assert.match(agendaPage, /\.update\(payload\)/);
+  assert.doesNotMatch(agendaPage, /insert\(\[payload\]\).*Confirmar cita/s);
+});
+
+test("portal 68: Mis citas usa etiqueta amigable pendiente de anticipo", () => {
+  const appointmentsPage = readFileSync(
+    new URL("../app/cliente/mis-citas/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(appointmentsPage, /getClientAppointmentStatusLabel/);
+  assert.match(appointmentsPage, /status_label/);
 });

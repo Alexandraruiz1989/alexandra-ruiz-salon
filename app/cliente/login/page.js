@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { getPortalSession, portalFetch } from "../components/portalApi";
+import { getPortalSession, portalFetch, signOutClient } from "../components/portalApi";
 import { PortalMessage } from "../components/ClientPortalShell";
 
 export default function ClienteLoginPage() {
@@ -12,19 +12,15 @@ export default function ClienteLoginPage() {
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState("info");
   const [showPassword, setShowPassword] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [existingSession, setExistingSession] = useState(false);
 
   useEffect(() => {
     const checkSession = async () => {
       const session = await getPortalSession();
       if (session) {
-        try {
-          const profile = await portalFetch("/api/client/profile");
-          window.location.href = profile.profile_required
-            ? "/cliente/perfil?next=/cliente/agenda"
-            : "/cliente/agenda";
-        } catch {
-          window.location.href = "/cliente/agenda";
-        }
+        setExistingSession(true);
+        setCheckingSession(false);
         return;
       }
 
@@ -36,6 +32,7 @@ export default function ClienteLoginPage() {
           "Tu correo fue confirmado. Ya puedes iniciar sesión para agendar tu cita."
         );
       }
+      setCheckingSession(false);
     };
 
     checkSession();
@@ -75,6 +72,32 @@ export default function ClienteLoginPage() {
     }
   };
 
+  const handleContinueCurrentSession = async () => {
+    setLoading(true);
+    setMessage("");
+
+    try {
+      const profile = await portalFetch("/api/client/profile");
+      window.location.href = profile.profile_required
+        ? "/cliente/perfil?next=/cliente/agenda"
+        : "/cliente/agenda";
+    } catch (error) {
+      setTone("error");
+      setMessage(error.message);
+      setLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setLoading(true);
+    setMessage("");
+    await signOutClient();
+    setExistingSession(false);
+    setTone("success");
+    setMessage("Sesión cerrada. Ahora puedes iniciar sesión como clienta.");
+    setLoading(false);
+  };
+
   return (
     <main className="min-h-screen bg-[linear-gradient(135deg,#fff8f6_0%,#f6e7e3_50%,#fff_100%)] px-5 py-8 text-[#3b2b2d]">
       <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-md flex-col justify-center">
@@ -87,6 +110,38 @@ export default function ClienteLoginPage() {
             Entra para agendar y revisar tus citas en Alexandra Ruiz Salón.
           </p>
 
+          {checkingSession ? (
+            <div className="mt-7 rounded-3xl bg-[#fff8f6] p-5 text-sm text-[#765d5f]">
+              Revisando sesión...
+            </div>
+          ) : existingSession ? (
+            <div className="mt-7 rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
+              <p className="font-medium">Ya hay una sesión iniciada.</p>
+              <p className="mt-1">
+                Si quieres entrar con una cuenta de clienta diferente, primero
+                cierra la sesión actual. Así evitamos mezclar cuentas del salón
+                con cuentas de clientas.
+              </p>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={handleContinueCurrentSession}
+                  disabled={loading}
+                  className="rounded-full bg-[#bd7b83] px-6 py-3 text-white transition hover:opacity-90 disabled:opacity-60"
+                >
+                  Continuar con esta sesión
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  disabled={loading}
+                  className="rounded-full border border-[#bd7b83] bg-white px-6 py-3 text-[#bd7b83] transition hover:bg-[#fff3f1] disabled:opacity-60"
+                >
+                  Cerrar sesión
+                </button>
+              </div>
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
             <div>
               <label className="mb-2 block text-sm text-[#765d5f]">
@@ -135,6 +190,7 @@ export default function ClienteLoginPage() {
               {loading ? "Entrando..." : "Entrar"}
             </button>
           </form>
+          )}
 
           <p className="mt-6 text-center text-sm text-[#765d5f]">
             ¿Primera vez?{" "}

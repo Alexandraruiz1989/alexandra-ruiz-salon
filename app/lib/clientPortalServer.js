@@ -13,6 +13,7 @@ import {
 } from "./bookingAvailability";
 import {
   getClientDetailsFromUser,
+  isClientAuthUser,
   isClientProfileComplete,
   normalizeEmail,
   normalizePhoneDigits,
@@ -35,6 +36,7 @@ const CLIENT_COLUMNS =
 
 export {
   getClientDetailsFromUser,
+  isClientAuthUser,
   isClientProfileComplete,
   normalizeEmail,
   normalizePhoneDigits,
@@ -219,7 +221,8 @@ export async function getClientPortalProfile(adminSupabase, user, details = {}) 
 
   if (
     client ||
-    (normalizedDetails.fullName &&
+    (isClientAuthUser(user) &&
+      normalizedDetails.fullName &&
       normalizePhoneDigits(normalizedDetails.phone).length >= 8)
   ) {
     client = await ensureClientForUser(adminSupabase, user, {

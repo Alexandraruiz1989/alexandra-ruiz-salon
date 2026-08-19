@@ -12,6 +12,10 @@ import {
   buildWhatsAppUrl,
   isAppointmentEligibleForManualWhatsApp,
 } from "../../lib/manualWhatsApp";
+import {
+  getClientAppointmentStatusLabel,
+  isClientPortalPendingDepositAppointment,
+} from "../../lib/clientPortalAppointmentStatus.js";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
@@ -192,6 +196,24 @@ function getAttendanceBadgeClass(status) {
 
   if (normalized === "cancelo" || normalized === "no_asistio") {
     return "bg-red-100 text-red-800";
+  }
+
+  return "bg-yellow-50 text-yellow-700";
+}
+
+function getAppointmentStatusBadgeClass(appointment) {
+  const label = getClientAppointmentStatusLabel(appointment);
+
+  if (label === "Confirmada" || label === "Realizada") {
+    return "bg-green-50 text-green-700";
+  }
+
+  if (label === "Cancelada") {
+    return "bg-red-100 text-red-800";
+  }
+
+  if (label === "Pendiente de anticipo") {
+    return "bg-amber-50 text-amber-800";
   }
 
   return "bg-yellow-50 text-yellow-700";
@@ -721,8 +743,10 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
         return;
       }
 
+      // eslint-disable-next-line react-hooks/immutability
       await loadCurrentAccessProfile(data.session.user);
       setLoadingSession(false);
+      // eslint-disable-next-line react-hooks/immutability
       await loadInitialData();
     };
 
@@ -731,7 +755,9 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
 
   useEffect(() => {
     if (!loadingSession) {
+      // eslint-disable-next-line react-hooks/immutability
       loadDateData(selectedDate);
+      // eslint-disable-next-line react-hooks/immutability
       loadRangeData(selectedDate);
     }
   }, [selectedDate, loadingSession]);
@@ -3519,6 +3545,7 @@ function NewAppointmentSection({
       return;
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setClientSearch(
       `${selectedClient.client_number ? `${selectedClient.client_number} · ` : ""}${
         selectedClient.full_name || "Sin nombre"
@@ -4966,6 +4993,13 @@ function AppointmentPopover({ appointment, payment, onClose, onOpenDetail }) {
 
         <div className="mt-4 flex flex-wrap gap-2">
           <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${getAppointmentStatusBadgeClass(
+              appointment
+            )}`}
+          >
+            {getClientAppointmentStatusLabel(appointment)}
+          </span>
+          <span
             className={`rounded-full px-3 py-1 text-xs font-medium ${getAttendanceBadgeClass(
               appointment.attendance_status
             )}`}
@@ -5095,7 +5129,7 @@ function AppointmentCard({ item, person, payment, onOpen, onEdit, compact = fals
       {!compact && (
         <div className="mt-2 flex flex-wrap gap-1">
           <span className="rounded-full bg-white/20 px-2 py-1 text-[10px] text-white">
-            {getAttendanceOption(item.appointment?.attendance_status).label}
+            {getClientAppointmentStatusLabel(item.appointment)}
           </span>
           <span className="rounded-full bg-white/20 px-2 py-1 text-[10px] text-white">
             {person?.full_name || item.staff?.full_name || "Técnica"}
@@ -5806,8 +5840,10 @@ function AppointmentDetailModal({
   });
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [savingAttendance, setSavingAttendance] = useState(false);
+  const [savingConfirmation, setSavingConfirmation] = useState(false);
 
 useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   setAttendanceForm({
     attendance_status: appointment.attendance_status || "pendiente",
     attendance_notes: appointment.attendance_notes || "",
@@ -5890,6 +5926,8 @@ const normalizedRole = normalizeRole(currentRole);
 const isAdmin = normalizedRole === "admin";
 const canUpdateAttendance = ["admin", "encargada"].includes(normalizedRole);
 const canUseManualWhatsApp = normalizedRole !== "tecnica";
+const canConfirmPortalAppointment =
+  canUpdateAttendance && isClientPortalPendingDepositAppointment(appointment);
 const currentAttendanceOption = getAttendanceOption(
   attendanceForm.attendance_status
 );
@@ -6003,6 +6041,57 @@ const saveAttendanceStatus = async () => {
     `Estado de asistencia actualizado correctamente ✨${attendancePushWarning}`
   );
   setSavingAttendance(false);
+};
+
+const confirmPortalAppointment = async () => {
+  setAttendanceMessage("");
+
+  if (!canUpdateAttendance) {
+    setAttendanceMessage("Solo admin o encargada pueden confirmar citas.");
+    return;
+  }
+
+  if (!isClientPortalPendingDepositAppointment(appointment)) {
+    setAttendanceMessage("Esta cita no está pendiente de anticipo.");
+    return;
+  }
+
+  const accepted = window.confirm(
+    "¿Confirmas esta cita? Esta acción marcará la solicitud como confirmada por el salón."
+  );
+
+  if (!accepted) return;
+
+  const now = new Date().toISOString();
+  const payload = {
+    confirmation_status: "confirmada",
+    confirmed_at: now,
+    updated_at: now,
+  };
+
+  setSavingConfirmation(true);
+
+  const { data, error } = await supabase
+    .from("appointments")
+    .update(payload)
+    .eq("id", appointment.id)
+    .eq("confirmation_status", "pendiente")
+    .select("id")
+    .maybeSingle();
+
+  if (error || !data) {
+    setAttendanceMessage(
+      error?.message
+        ? `No se pudo confirmar la cita: ${error.message}`
+        : "La cita ya no está pendiente de anticipo."
+    );
+    setSavingConfirmation(false);
+    return;
+  }
+
+  onAppointmentUpdated?.(appointment.id, payload);
+  setAttendanceMessage("Cita confirmada correctamente ✨");
+  setSavingConfirmation(false);
 };
 
 const goToPayment = () => {
@@ -6163,6 +6252,38 @@ const deleteAppointment = async () => {
             Número de clienta: {clientNumber}
           </p>
         )}
+
+        <div className="mt-4 rounded-2xl border border-[#ead8d4] bg-[#fff8f6] p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+            Estado de solicitud
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ${getAppointmentStatusBadgeClass(
+                appointment
+              )}`}
+            >
+              {getClientAppointmentStatusLabel(appointment)}
+            </span>
+            {isClientPortalPendingDepositAppointment(appointment) && (
+              <span className="text-sm leading-6 text-[#765d5f]">
+                El horario está apartado mientras el salón gestiona el anticipo
+                y confirma la cita.
+              </span>
+            )}
+          </div>
+
+          {canConfirmPortalAppointment && (
+            <button
+              type="button"
+              disabled={savingConfirmation}
+              onClick={confirmPortalAppointment}
+              className="mt-4 rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+            >
+              {savingConfirmation ? "Confirmando..." : "Confirmar cita"}
+            </button>
+          )}
+        </div>
 
         <div className="mt-6 rounded-2xl bg-[#f7f9fa] p-4">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">

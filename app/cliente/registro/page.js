@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { portalFetch } from "../components/portalApi";
+import { getPortalSession, portalFetch, signOutClient } from "../components/portalApi";
 import { PortalMessage } from "../components/ClientPortalShell";
 import { getClientEmailRedirectUrl } from "../components/clientAuthRedirect";
 
@@ -21,6 +21,25 @@ export default function ClienteRegistroPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [debugRedirect, setDebugRedirect] = useState("");
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [existingSession, setExistingSession] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function checkExistingSession() {
+      const session = await getPortalSession();
+      if (!active) return;
+      setExistingSession(Boolean(session));
+      setCheckingSession(false);
+    }
+
+    void checkExistingSession();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -31,6 +50,17 @@ export default function ClienteRegistroPage() {
     event.preventDefault();
     setLoading(true);
     setMessage("");
+
+    const currentSession = await getPortalSession();
+    if (currentSession) {
+      setExistingSession(true);
+      setTone("error");
+      setMessage(
+        "Actualmente hay una sesión iniciada. Cierra sesión para registrar una cuenta de clienta diferente."
+      );
+      setLoading(false);
+      return;
+    }
 
     const fullName = form.full_name.trim();
     const phone = form.phone.trim();
@@ -125,17 +155,23 @@ export default function ClienteRegistroPage() {
         }),
       });
 
-      await supabase.auth.signOut();
-      setTone("success");
-      setMessage(
-        "Te enviamos un correo para confirmar tu cuenta. Revisa tu bandeja de entrada o spam. Después de confirmar, podrás entrar al portal para agendar."
-      );
+      window.location.href = "/cliente/agenda";
       setLoading(false);
     } catch (profileError) {
       setTone("error");
       setMessage(profileError.message);
       setLoading(false);
     }
+  };
+
+  const handleSignOut = async () => {
+    setLoading(true);
+    setMessage("");
+    await signOutClient();
+    setExistingSession(false);
+    setTone("success");
+    setMessage("Sesión cerrada. Ahora puedes registrar una cuenta de clienta.");
+    setLoading(false);
   };
 
   return (
@@ -151,6 +187,28 @@ export default function ClienteRegistroPage() {
             existente usando tu correo o teléfono.
           </p>
 
+          {checkingSession ? (
+            <div className="mt-7 rounded-3xl bg-[#fff8f6] p-5 text-sm text-[#765d5f]">
+              Revisando sesión...
+            </div>
+          ) : existingSession ? (
+            <div className="mt-7 rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
+              <p className="font-medium">Ya hay una sesión iniciada.</p>
+              <p className="mt-1">
+                Cierra sesión antes de registrar una cuenta de clienta
+                diferente. Así evitamos asociar accidentalmente la ficha de una
+                clienta con una cuenta administrativa o de otra persona.
+              </p>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                disabled={loading}
+                className="mt-4 rounded-full bg-[#bd7b83] px-6 py-3 text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                {loading ? "Cerrando..." : "Cerrar sesión y registrar clienta"}
+              </button>
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="mt-7 space-y-4" noValidate>
             <div>
               <label className="mb-2 block text-sm text-[#765d5f]">
@@ -256,6 +314,7 @@ export default function ClienteRegistroPage() {
               {loading ? "Creando cuenta..." : "Crear cuenta"}
             </button>
           </form>
+          )}
 
           <p className="mt-6 text-center text-sm text-[#765d5f]">
             ¿Ya tienes cuenta?{" "}

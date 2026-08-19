@@ -23,6 +23,17 @@ export function getClientDetailsFromUser(user, details = {}) {
   };
 }
 
+export function isClientAuthUser(user) {
+  const role = cleanText(
+    user?.user_metadata?.role || user?.app_metadata?.role
+  ).toLowerCase();
+  const userType = cleanText(
+    user?.user_metadata?.user_type || user?.app_metadata?.user_type
+  ).toLowerCase();
+
+  return role === "client" || userType === "client" || userType === "clienta";
+}
+
 export function isClientProfileComplete(client) {
   const fullName = cleanText(client?.full_name);
   return (

@@ -7,7 +7,10 @@ import ClientPortalShell, {
   PortalMessage,
 } from "../components/ClientPortalShell";
 import { portalFetch } from "../components/portalApi";
-import { getCompatibleStaffForSelectedServices } from "../../lib/clientPortalCatalog.js";
+import {
+  getCompatibleStaffForSelectedServices,
+  groupClientPortalServicesByCategory,
+} from "../../lib/clientPortalCatalog.js";
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -40,6 +43,7 @@ export default function ClienteAgendaPage() {
   const [profileRequired, setProfileRequired] = useState(false);
   const [services, setServices] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [openCategories, setOpenCategories] = useState({});
   const [selectedServiceIds, setSelectedServiceIds] = useState([]);
   const [appointmentDate, setAppointmentDate] = useState(todayISO());
   const [preferredStaffId, setPreferredStaffId] = useState("");
@@ -53,9 +57,17 @@ export default function ClienteAgendaPage() {
   const [createdAppointment, setCreatedAppointment] = useState(null);
 
   const applyCatalogData = useCallback((data) => {
-    setServices(data.services || []);
+    const nextServices = data.services || [];
+    setServices(nextServices);
     setStaff(data.staff || []);
     setProfileRequired(Boolean(data.profile?.required));
+    setOpenCategories((current) => {
+      if (Object.keys(current).length > 0) return current;
+      const firstCategory = Object.keys(
+        groupClientPortalServicesByCategory(nextServices)
+      )[0];
+      return firstCategory ? { [firstCategory]: true } : {};
+    });
   }, []);
 
   useEffect(() => {
@@ -100,12 +112,7 @@ export default function ClienteAgendaPage() {
   }, [applyCatalogData]);
 
   const groupedServices = useMemo(() => {
-    return services.reduce((groups, service) => {
-      const category = service.category || "Servicios";
-      if (!groups[category]) groups[category] = [];
-      groups[category].push(service);
-      return groups;
-    }, {});
+    return groupClientPortalServicesByCategory(services);
   }, [services]);
 
   const selectedServices = useMemo(() => {
@@ -157,6 +164,13 @@ export default function ClienteAgendaPage() {
     setSlots([]);
     setSelectedSlot(null);
     setCreatedAppointment(null);
+  };
+
+  const toggleCategory = (category) => {
+    setOpenCategories((current) => ({
+      ...current,
+      [category]: !current[category],
+    }));
   };
 
   const findAvailability = async () => {
@@ -317,12 +331,41 @@ export default function ClienteAgendaPage() {
             </div>
           ) : (
             <div className="space-y-5">
-              {Object.entries(groupedServices).map(([category, items]) => (
-                <div key={category}>
-                  <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-[#9a7074]">
-                    {category}
-                  </h3>
-                  <div className="grid gap-3">
+              {Object.entries(groupedServices).map(([category, items]) => {
+                const selectedCount = items.filter((service) =>
+                  selectedServiceIds.includes(service.id)
+                ).length;
+                const open = openCategories[category] === true;
+
+                return (
+                  <div
+                    key={category}
+                    className="overflow-hidden rounded-3xl border border-[#ead8d4] bg-white"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleCategory(category)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left transition hover:bg-[#fff8f6]"
+                      aria-expanded={open}
+                    >
+                      <span>
+                        <span className="block text-sm font-semibold uppercase tracking-[0.2em] text-[#9a7074]">
+                          {category}
+                        </span>
+                        {selectedCount > 0 && (
+                          <span className="mt-1 block text-xs text-[#bd7b83]">
+                            {selectedCount} seleccionado
+                            {selectedCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xl text-[#bd7b83]">
+                        {open ? "⌃" : "⌄"}
+                      </span>
+                    </button>
+
+                    {open && (
+                      <div className="grid gap-3 border-t border-[#f2e4e1] bg-[#fffdfc] p-3">
                     {items.map((service) => {
                       const selected = selectedServiceIds.includes(service.id);
 
@@ -361,9 +404,11 @@ export default function ClienteAgendaPage() {
                         </button>
                       );
                     })}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </PortalCard>
@@ -474,7 +519,7 @@ export default function ClienteAgendaPage() {
                   </ul>
                   <p className="mt-2">
                     Estado:{" "}
-                    {createdAppointment.confirmation_status || "pendiente"}.
+                    {createdAppointment.status_label || "Pendiente de anticipo"}.
                   </p>
                 </div>
               )}
@@ -555,8 +600,8 @@ export default function ClienteAgendaPage() {
                 className="mt-4 w-full rounded-full bg-[#3b2b2d] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
               >
                 {submitting
-                  ? "Confirmando solicitud..."
-                  : "Confirmar y enviar solicitud"}
+                  ? "Enviando solicitud..."
+                  : "Enviar solicitud"}
               </button>
 
               <p className="mt-4 text-sm leading-6 text-[#765d5f]">

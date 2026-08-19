@@ -6,24 +6,14 @@ import ClientPortalShell, {
   PortalMessage,
 } from "../components/ClientPortalShell";
 import { portalFetch } from "../components/portalApi";
+import { getClientAppointmentStatusLabel } from "../../lib/clientPortalAppointmentStatus.js";
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
 function statusLabel(appointment) {
-  const confirmation = String(
-    appointment.confirmation_status || appointment.status || "pendiente"
-  ).toLowerCase();
-
-  if (confirmation.includes("confirm")) return "Confirmada";
-  if (confirmation.includes("cancel") || confirmation === "cancelo") {
-    return "Cancelada";
-  }
-  if (confirmation === "asistio" || confirmation === "realizada") {
-    return "Realizada";
-  }
-  return "Pendiente";
+  return appointment.status_label || getClientAppointmentStatusLabel(appointment);
 }
 
 function formatServiceWithStaff(service) {

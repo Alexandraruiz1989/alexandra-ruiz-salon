@@ -21,6 +21,7 @@ import {
   slotMeetsMinimumNotice,
 } from "../../../lib/appointmentWriteContracts.js";
 import { createAppointmentTransactionalRepository } from "../../../lib/appointmentTransactionalRepository.js";
+import { getClientAppointmentStatusLabel } from "../../../lib/clientPortalAppointmentStatus.js";
 
 function errorResponse(error, status = 400) {
   return NextResponse.json(
@@ -104,6 +105,8 @@ function mapAppointmentForClient(appointment) {
     status: appointment.status || "agendada",
     confirmation_status:
       appointment.confirmation_status || appointment.attendance_status || "pendiente",
+    booking_source: appointment.booking_source || "",
+    status_label: getClientAppointmentStatusLabel(appointment),
     attendance_status: appointment.attendance_status || "pendiente",
     total_estimate: total,
     total_estimate_text: formatMoney(total),
@@ -369,7 +372,10 @@ export async function POST(request) {
         appointment_date: appointmentDate,
         start_time: startTime,
         end_time: selectedSlot.end_time,
+        status: "agendada",
         confirmation_status: "pendiente",
+        booking_source: "cliente_portal",
+        status_label: "Pendiente de anticipo",
         services: currentPreview.services.map((service) => ({
           id: service.id,
           service_id: service.id,
@@ -388,7 +394,7 @@ export async function POST(request) {
       write_mode: result.mode,
       replay: result.isReplay,
       message:
-        "Tu solicitud fue creada. El equipo revisará el anticipo y te contactará para confirmar.",
+        "Tu horario fue apartado. Tu cita está pendiente de anticipo y confirmación por parte del salón.",
     }, { status: result.isReplay ? 200 : 201 });
   } catch (error) {
     return errorResponse(error, 400);

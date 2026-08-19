@@ -1,5 +1,23 @@
 import { isPortalBookableService } from "./appointmentWriteContracts.js";
 
+export const CLIENT_PORTAL_UNCATEGORIZED_CATEGORY = "Otros servicios";
+
+export function getClientPortalServiceCategory(service) {
+  return (
+    String(service?.category || "").trim() ||
+    CLIENT_PORTAL_UNCATEGORIZED_CATEGORY
+  );
+}
+
+export function groupClientPortalServicesByCategory(services = []) {
+  return (services || []).reduce((groups, service) => {
+    const category = getClientPortalServiceCategory(service);
+    if (!groups[category]) groups[category] = [];
+    groups[category].push(service);
+    return groups;
+  }, {});
+}
+
 export function buildStaffIdsByService(staffServices = []) {
   return (staffServices || []).reduce((result, item) => {
     if (item?.active === false) return result;
@@ -23,7 +41,7 @@ export function mapClientPortalCatalog({
       .map((service) => ({
         id: service.id,
         name: service.name,
-        category: service.category || "Servicios",
+        category: getClientPortalServiceCategory(service),
         description: service.description || "",
         base_price: Number(service.base_price || 0),
         duration_minutes: Number(service.duration_minutes || 0),
