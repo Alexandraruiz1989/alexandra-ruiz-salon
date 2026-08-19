@@ -2,6 +2,45 @@ export const INVALID_WHATSAPP_PHONE_MESSAGE =
   "Esta clienta no tiene un número de WhatsApp válido registrado.";
 
 const WHATSAPP_BASE_URL = "https://wa.me";
+const DEFAULT_BUSINESS_NAME = "Alexandra Ruiz Salón Spa";
+
+export const DEFAULT_APPOINTMENT_REMINDER_TEMPLATE = `✨ ¡Hola, {client_first_name}!
+Te recordamos tu próxima cita 💕
+
+📅 Fecha: {appointment_date}
+🕐 Hora: {appointment_time}
+
+Servicios agendados:
+{services_with_staff}
+
+Nos dará mucho gusto recibirte. ✨
+
+⏰ Te recordamos que contamos con una tolerancia máxima de 10 minutos. Después de este tiempo, la realización de tus servicios quedará sujeta a disponibilidad para no afectar las citas posteriores.
+
+¡Te esperamos! 💕`;
+
+const INACTIVE_APPOINTMENT_SERVICE_STATUSES = new Set([
+  "cancelada",
+  "cancelado",
+  "cancelled",
+  "canceled",
+  "cancelo",
+  "eliminada",
+  "eliminado",
+  "deleted",
+  "inactiva",
+  "inactivo",
+]);
+
+const REMINDER_TEMPLATE_KEYS = new Set([
+  "appointment_reminder",
+  "appointment-reminder",
+  "appointment_reminder_manual",
+  "recordatorio",
+  "recordatorio_cita",
+  "recordatorio-cita",
+  "reminder",
+]);
 
 function normalizeText(value) {
   return String(value || "")
@@ -95,23 +134,167 @@ export function formatAppointmentDateForWhatsApp(dateString) {
 
   if (!match) return value || "la fecha programada";
 
-  return `${match[3]}/${match[2]}/${match[1]}`;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+
+  return date.toLocaleDateString("es-MX", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 export function formatAppointmentTimeForWhatsApp(timeString) {
-  return String(timeString || "").slice(0, 5) || "la hora programada";
+  return normalizeAppointmentTimeForWhatsApp(timeString) || "la hora programada";
+}
+
+function normalizeAppointmentTimeForWhatsApp(timeString) {
+  const value = String(timeString || "").trim();
+  const match = value.match(/(?:T)?(\d{1,2}):(\d{2})(?::\d{2})?/);
+
+  if (!match) return "";
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return "";
+  if (hour === 0 && minute === 0) return "";
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function appointmentTimeToMinutes(timeString) {
+  const normalized = normalizeAppointmentTimeForWhatsApp(timeString);
+
+  if (!normalized) return Number.POSITIVE_INFINITY;
+
+  const [hour, minute] = normalized.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function isActiveAppointmentService(service) {
+  const status = normalizeText(service?.status || "agendado");
+  return !INACTIVE_APPOINTMENT_SERVICE_STATUSES.has(status);
+}
+
+function getServiceDisplayNameForWhatsApp(service) {
+  return (
+    String(
+      service?.services?.name ||
+        service?.custom_name ||
+        service?.name ||
+        "Servicio"
+    ).trim() || "Servicio"
+  );
+}
+
+function getStaffDisplayNameForWhatsApp(service) {
+  const fullName = String(
+    service?.staff?.full_name || service?.staff_name || service?.staff?.name || ""
+  ).trim();
+
+  if (!fullName || /^[0-9a-f-]{24,}$/i.test(fullName)) return "";
+
+  return fullName.split(/\s+/)[0] || "";
+}
+
+function getOrderedActiveAppointmentServices(appointment) {
+  return (appointment?.appointment_services || [])
+    .map((service, index) => ({
+      service,
+      index,
+      startMinutes: appointmentTimeToMinutes(service?.start_time),
+    }))
+    .filter(({ service }) => isActiveAppointmentService(service))
+    .sort((a, b) => {
+      if (a.startMinutes !== b.startMinutes) {
+        return a.startMinutes - b.startMinutes;
+      }
+
+      return a.index - b.index;
+    })
+    .map(({ service }) => service);
 }
 
 function getAppointmentServicesTextForWhatsApp(appointment) {
-  const services = appointment?.appointment_services || [];
+  const services = getOrderedActiveAppointmentServices(appointment);
 
   if (services.length === 0) {
     return "tu servicio";
   }
 
   return services
-    .map((service) => service?.services?.name || service?.name || "servicio")
+    .map((service) => getServiceDisplayNameForWhatsApp(service))
     .join(", ");
+}
+
+export function getAppointmentReminderTimeForWhatsApp(appointment) {
+  const earliestService = getOrderedActiveAppointmentServices(appointment).find(
+    (service) => normalizeAppointmentTimeForWhatsApp(service?.start_time)
+  );
+
+  return formatAppointmentTimeForWhatsApp(
+    earliestService?.start_time || appointment?.start_time
+  );
+}
+
+export function buildServicesWithStaffForWhatsApp(appointment) {
+  const services = getOrderedActiveAppointmentServices(appointment);
+
+  if (services.length === 0) {
+    return "• Servicio por confirmar";
+  }
+
+  return services
+    .map((service) => {
+      const serviceName = getServiceDisplayNameForWhatsApp(service);
+      const staffName = getStaffDisplayNameForWhatsApp(service);
+
+      return staffName ? `• ${serviceName} — con ${staffName}` : `• ${serviceName}`;
+    })
+    .join("\n");
+}
+
+function getAppointmentReminderTemplate(templates = []) {
+  if (!Array.isArray(templates) || templates.length === 0) return "";
+
+  const activeTemplates = templates.filter(
+    (template) => template?.is_active !== false
+  );
+
+  const matchingTemplate = activeTemplates.find((template) => {
+    const key = normalizeText(template?.template_key);
+    const title = normalizeText(template?.title);
+
+    return (
+      REMINDER_TEMPLATE_KEYS.has(key) ||
+      title.includes("recordatorio") ||
+      title.includes("reminder")
+    );
+  });
+
+  return String(matchingTemplate?.message_body || "").trim();
+}
+
+export function renderAppointmentMessageTemplate(
+  template,
+  appointment,
+  { businessName = DEFAULT_BUSINESS_NAME } = {}
+) {
+  const replacements = {
+    client_first_name: getClientFirstName(appointment?.clients?.full_name),
+    business_name: String(businessName || DEFAULT_BUSINESS_NAME).trim(),
+    appointment_date: formatAppointmentDateForWhatsApp(
+      appointment?.appointment_date
+    ),
+    appointment_time: getAppointmentReminderTimeForWhatsApp(appointment),
+    services: getAppointmentServicesTextForWhatsApp(appointment),
+    services_with_staff: buildServicesWithStaffForWhatsApp(appointment),
+  };
+
+  return String(template || "").replace(
+    /\{(client_first_name|business_name|appointment_date|appointment_time|services|services_with_staff)\}/g,
+    (match, key) => replacements[key] || match
+  );
 }
 
 export function isAppointmentEligibleForManualWhatsApp(appointment) {
@@ -132,12 +315,14 @@ export function isAppointmentEligibleForManualWhatsApp(appointment) {
 
 export function buildAppointmentManualWhatsAppMessages(
   appointment,
-  { reviewBaseUrl = "" } = {}
+  { reviewBaseUrl = "", businessName = DEFAULT_BUSINESS_NAME, templates = [] } = {}
 ) {
   const firstName = getClientFirstName(appointment?.clients?.full_name);
-  const date = formatAppointmentDateForWhatsApp(appointment?.appointment_date);
-  const time = formatAppointmentTimeForWhatsApp(appointment?.start_time);
+  const time = getAppointmentReminderTimeForWhatsApp(appointment);
   const servicesText = getAppointmentServicesTextForWhatsApp(appointment);
+  const businessDisplayName = String(businessName || DEFAULT_BUSINESS_NAME).trim();
+  const reminderTemplate =
+    getAppointmentReminderTemplate(templates) || DEFAULT_APPOINTMENT_REMINDER_TEMPLATE;
   const reviewLink =
     reviewBaseUrl && appointment?.id
       ? `${String(reviewBaseUrl).replace(/\/$/, "")}/calificar/${appointment.id}`
@@ -147,7 +332,9 @@ export function buildAppointmentManualWhatsAppMessages(
     {
       key: "reminder",
       label: "Recordatorio por WhatsApp",
-      message: `Hola ${firstName} 💕 Te recordamos con mucho gusto tu cita en Alexandra Ruiz Salón Spa para el ${date} a las ${time}. Te esperamos para consentirte ✨`,
+      message: renderAppointmentMessageTemplate(reminderTemplate, appointment, {
+        businessName: businessDisplayName,
+      }),
     },
     {
       key: "on_the_way",
@@ -162,7 +349,7 @@ export function buildAppointmentManualWhatsAppMessages(
     {
       key: "thank_you",
       label: "Enviar agradecimiento",
-      message: `Hola ${firstName} 💕 Muchas gracias por visitarnos y confiar en Alexandra Ruiz Salón Spa. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`,
+      message: `Hola ${firstName} 💕 Muchas gracias por visitarnos y confiar en ${businessDisplayName}. Esperamos que hayas disfrutado tu servicio de ${servicesText}. Fue un gusto atenderte, te esperamos pronto ✨`,
     },
   ];
 
@@ -170,7 +357,7 @@ export function buildAppointmentManualWhatsAppMessages(
     messages.push({
       key: "review",
       label: "Solicitar calificación",
-      message: `Hola ${firstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en Alexandra Ruiz Salón Spa. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
+      message: `Hola ${firstName} 💕 Gracias por visitarnos. Nos encantaría conocer tu opinión sobre tu experiencia en ${businessDisplayName}. Tu calificación nos ayuda muchísimo a seguir mejorando ✨
 
 Puedes calificarnos aquí:
 ${reviewLink}`,

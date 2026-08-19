@@ -413,8 +413,14 @@ const savePaymentSettings = async () => {
             Puedes usar variables como{" "}
             <span className="font-medium text-[#263238]">{"{client_first_name}"}</span>,{" "}
             <span className="font-medium text-[#263238]">{"{business_name}"}</span>,{" "}
-            <span className="font-medium text-[#263238]">{"{appointment_time}"}</span> y{" "}
+            <span className="font-medium text-[#263238]">{"{appointment_date}"}</span>,{" "}
+            <span className="font-medium text-[#263238]">{"{appointment_time}"}</span>,{" "}
+            <span className="font-medium text-[#263238]">{"{services_with_staff}"}</span> y{" "}
             <span className="font-medium text-[#263238]">{"{services}"}</span>.
+            <span className="mt-2 block">
+              {"{appointment_date}"} muestra la fecha de la cita y{" "}
+              {"{services_with_staff}"} lista los servicios con la técnica asignada.
+            </span>
           </div>
 
           {loadingData ? (

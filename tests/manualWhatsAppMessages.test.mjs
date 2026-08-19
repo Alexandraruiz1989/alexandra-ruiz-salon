@@ -5,10 +5,15 @@ import test from "node:test";
 import {
   buildAppointmentManualWhatsAppMessages,
   buildFollowupWhatsAppMessage,
+  buildServicesWithStaffForWhatsApp,
   buildWhatsAppUrl,
+  DEFAULT_APPOINTMENT_REMINDER_TEMPLATE,
+  formatAppointmentDateForWhatsApp,
+  getAppointmentReminderTimeForWhatsApp,
   isAppointmentEligibleForManualWhatsApp,
   normalizeWhatsAppPhone,
   openManualWhatsAppMessage,
+  renderAppointmentMessageTemplate,
 } from "../app/lib/manualWhatsApp.js";
 
 function appointment(overrides = {}) {
@@ -24,8 +29,15 @@ function appointment(overrides = {}) {
     },
     appointment_services: [
       {
+        id: "service-line-1",
+        created_at: "2026-08-01T12:00:00Z",
+        start_time: "10:30:00",
+        status: "agendado",
         services: {
           name: "Gel en uña natural",
+        },
+        staff: {
+          full_name: "Laura Pérez",
         },
       },
     ],
@@ -161,8 +173,225 @@ test("recordatorios: el mensaje incluye datos de la cita", () => {
   const reminder = messages.find((item) => item.key === "reminder").message;
 
   assert.match(reminder, /Clienta/);
-  assert.match(reminder, /28\/08\/2026/);
+  assert.match(reminder, /28 de agosto de 2026/);
   assert.match(reminder, /10:30/);
+});
+
+test("plantillas: reemplaza appointment_date sin exponer ISO crudo", () => {
+  const message = renderAppointmentMessageTemplate(
+    "Fecha: {appointment_date}",
+    appointment(),
+    { businessName: "Alexandra Ruiz Salón Spa" }
+  );
+
+  assert.equal(message, "Fecha: 28 de agosto de 2026");
+  assert.doesNotMatch(message, /2026-08-28|T00:00|GMT|UTC/);
+});
+
+test("plantillas: un servicio con técnica genera una línea", () => {
+  assert.equal(
+    buildServicesWithStaffForWhatsApp(appointment()),
+    "• Gel en uña natural — con Laura"
+  );
+});
+
+test("plantillas: tres servicios generan tres líneas con su técnica real", () => {
+  const services = buildServicesWithStaffForWhatsApp(
+    appointment({
+      appointment_services: [
+        {
+          start_time: "10:00:00",
+          status: "agendado",
+          services: { name: "Gel manos" },
+          staff: { full_name: "Laura Pérez" },
+        },
+        {
+          start_time: "11:00:00",
+          status: "agendado",
+          services: { name: "Pedicure" },
+          staff: { full_name: "Tania López" },
+        },
+        {
+          start_time: "12:30:00",
+          status: "agendado",
+          services: { name: "Lifting" },
+          staff: { full_name: "Alexandra Ruiz" },
+        },
+      ],
+    })
+  );
+
+  assert.equal(
+    services,
+    [
+      "• Gel manos — con Laura",
+      "• Pedicure — con Tania",
+      "• Lifting — con Alexandra",
+    ].join("\n")
+  );
+});
+
+test("plantillas: cada servicio usa su técnica y omite técnica faltante", () => {
+  const services = buildServicesWithStaffForWhatsApp(
+    appointment({
+      appointment_services: [
+        {
+          start_time: "10:00:00",
+          status: "agendado",
+          services: { name: "Gel manos" },
+          staff: { full_name: "Laura Pérez" },
+        },
+        {
+          start_time: "11:00:00",
+          status: "agendado",
+          services: { name: "Pedicure Spa" },
+          staff: null,
+        },
+      ],
+    })
+  );
+
+  assert.equal(
+    services,
+    ["• Gel manos — con Laura", "• Pedicure Spa"].join("\n")
+  );
+  assert.doesNotMatch(services, /undefined|null|con\s*$/);
+});
+
+test("appointment_time: un servicio usa su hora individual", () => {
+  assert.equal(getAppointmentReminderTimeForWhatsApp(appointment()), "10:30");
+});
+
+test("appointment_time: varios servicios usan la hora más temprana", () => {
+  assert.equal(
+    getAppointmentReminderTimeForWhatsApp(
+      appointment({
+        appointment_services: [
+          { start_time: "10:00:00", status: "agendado" },
+          { start_time: "11:00:00", status: "agendado" },
+          { start_time: "12:30:00", status: "agendado" },
+        ],
+      })
+    ),
+    "10:00"
+  );
+});
+
+test("appointment_time: servicios fuera de orden siguen devolviendo la hora más temprana", () => {
+  assert.equal(
+    getAppointmentReminderTimeForWhatsApp(
+      appointment({
+        appointment_services: [
+          { start_time: "12:30:00", status: "agendado" },
+          { start_time: "10:00:00", status: "agendado" },
+          { start_time: "11:00:00", status: "agendado" },
+        ],
+      })
+    ),
+    "10:00"
+  );
+});
+
+test("appointment_time: el servicio posterior creado primero en DB no afecta el resultado", () => {
+  assert.equal(
+    getAppointmentReminderTimeForWhatsApp(
+      appointment({
+        appointment_services: [
+          {
+            created_at: "2026-08-01T09:00:00Z",
+            start_time: "12:30:00",
+            status: "agendado",
+          },
+          {
+            created_at: "2026-08-01T10:00:00Z",
+            start_time: "10:00:00",
+            status: "agendado",
+          },
+        ],
+      })
+    ),
+    "10:00"
+  );
+});
+
+test("appointment_time: servicio cancelado más temprano no se usa", () => {
+  assert.equal(
+    getAppointmentReminderTimeForWhatsApp(
+      appointment({
+        appointment_services: [
+          { start_time: "09:00:00", status: "cancelado" },
+          { start_time: "10:00:00", status: "agendado" },
+          { start_time: "11:00:00", status: "agendado" },
+        ],
+      })
+    ),
+    "10:00"
+  );
+});
+
+test("appointment_time: sin horarios individuales usa hora general como fallback", () => {
+  assert.equal(
+    getAppointmentReminderTimeForWhatsApp(
+      appointment({
+        start_time: "15:30:00",
+        appointment_services: [
+          { start_time: null, status: "agendado", services: { name: "Servicio" } },
+        ],
+      })
+    ),
+    "15:30"
+  );
+});
+
+test("appointment_time: no hay desplazamiento por zona horaria", () => {
+  assert.equal(formatAppointmentDateForWhatsApp("2026-08-28"), "28 de agosto de 2026");
+  assert.equal(getAppointmentReminderTimeForWhatsApp(appointment()), "10:30");
+});
+
+test("plantillas: conserva client_first_name, business_name, services y variables desconocidas", () => {
+  const message = renderAppointmentMessageTemplate(
+    "{client_first_name} · {business_name} · {appointment_time} · {services} · {variable_futura}",
+    appointment({ clients: { full_name: "Junuen Ruiz", phone: "9991112233" } }),
+    { businessName: "Alexandra Ruiz Salón Spa" }
+  );
+
+  assert.match(message, /^Junuen · Alexandra Ruiz Salón Spa · 10:30 · Gel en uña natural · \{variable_futura\}$/);
+});
+
+test("plantillas: default de recordatorio conserva emojis, saltos y servicios con staff", () => {
+  const message = renderAppointmentMessageTemplate(
+    DEFAULT_APPOINTMENT_REMINDER_TEMPLATE,
+    appointment(),
+    { businessName: "Alexandra Ruiz Salón Spa" }
+  );
+
+  assert.match(message, /^✨ ¡Hola, Clienta!/);
+  assert.match(message, /📅 Fecha: 28 de agosto de 2026/);
+  assert.match(message, /🕐 Hora: 10:30/);
+  assert.match(message, /• Gel en uña natural — con Laura/);
+  assert.match(message, /tolerancia máxima de 10 minutos/);
+});
+
+test("plantillas: una plantilla guardada de recordatorio tiene prioridad sin sobrescribirse", () => {
+  const messages = buildAppointmentManualWhatsAppMessages(appointment(), {
+    businessName: "Alexandra Ruiz Salón Spa",
+    templates: [
+      {
+        template_key: "recordatorio",
+        title: "Recordatorio de cita",
+        is_active: true,
+        message_body:
+          "Hola {client_first_name}\nServicios:\n{services_with_staff}\nHora: {appointment_time}",
+      },
+    ],
+  });
+
+  const reminder = messages.find((item) => item.key === "reminder").message;
+
+  assert.equal(
+    reminder,
+    "Hola Clienta\nServicios:\n• Gel en uña natural — con Laura\nHora: 10:30"
+  );
 });
 
 test("recordatorios manuales: no existe envío programático ni Cloud API", () => {

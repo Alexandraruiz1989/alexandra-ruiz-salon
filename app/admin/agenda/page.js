@@ -661,6 +661,8 @@ export default function AgendaPage() {
   const [serviceResources, setServiceResources] = useState([]);
   const [currentProfile, setCurrentProfile] = useState(null);
   const [currentRole, setCurrentRole] = useState("tecnica");
+  const [messageTemplates, setMessageTemplates] = useState([]);
+  const [businessName, setBusinessName] = useState("Alexandra Ruiz Salón Spa");
 
   const [showQuickClientModal, setShowQuickClientModal] = useState(false);
 const [savingQuickClient, setSavingQuickClient] = useState(false);
@@ -776,6 +778,8 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
   staffServicesResult,
   resourcesResult,
   serviceResourcesResult,
+  messageTemplatesResult,
+  businessSettingsResult,
 ] = await Promise.all([
         supabase.from("clients").select("*").order("full_name"),
         supabase.from("staff").select("*").eq("active", true).order("full_name"),
@@ -804,6 +808,10 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
   supabase.from("staff_services").select("*").eq("active", true),
   supabase.from("resources").select("*").eq("active", true).order("name"),
   supabase.from("service_resources").select("*").eq("active", true),
+  supabase
+    .from("message_templates")
+    .select("id, template_key, title, message_body, is_active"),
+  supabase.from("business_settings").select("business_name").limit(1).maybeSingle(),
       ]);
 
     if (clientsResult.error) {
@@ -829,6 +837,20 @@ const [appointmentPopover, setAppointmentPopover] = useState(null);
       setMessage(`Error al cargar servicios: ${servicesResult.error.message}`);
     } else {
       setServices(servicesResult.data || []);
+    }
+
+    if (messageTemplatesResult.error) {
+      setMessage(`Error al cargar plantillas: ${messageTemplatesResult.error.message}`);
+    } else {
+      setMessageTemplates(messageTemplatesResult.data || []);
+    }
+
+    if (businessSettingsResult.error) {
+      setMessage(
+        `Error al cargar datos del negocio: ${businessSettingsResult.error.message}`
+      );
+    } else if (businessSettingsResult.data?.business_name) {
+      setBusinessName(businessSettingsResult.data.business_name);
     }
 
     if (extrasResult.error) {
@@ -3411,6 +3433,8 @@ notificationWarning = await runAppointmentPostSaveEffects({
           onClose={() => setSelectedAppointment(null)}
           onEdit={() => openEditAppointment(selectedAppointment)}
           onAppointmentUpdated={handleAppointmentLocalUpdate}
+          messageTemplates={messageTemplates}
+          businessName={businessName}
         />
       )}
       {showQuickClientModal && (
@@ -5618,12 +5642,16 @@ function ManualAppointmentWhatsAppPanel({
   appointment,
   canUseManualWhatsApp,
   onStatusMessage,
+  messageTemplates = [],
+  businessName = "Alexandra Ruiz Salón Spa",
 }) {
   const clientPhone = appointment.clients?.phone || "";
   const manualWhatsAppOptions = buildAppointmentManualWhatsAppMessages(
     appointment,
     {
       reviewBaseUrl: REVIEW_BASE_URL,
+      businessName,
+      templates: messageTemplates,
     }
   );
   const canOfferAppointmentWhatsApp =
@@ -5758,6 +5786,8 @@ function AppointmentDetailModal({
   onClose,
   onEdit,
   onAppointmentUpdated,
+  messageTemplates = [],
+  businessName = "Alexandra Ruiz Salón Spa",
 }) {
   const services = appointment.appointment_services || [];
   const appointmentExtras = appointment.appointment_extra_items || [];
@@ -6352,6 +6382,8 @@ const deleteAppointment = async () => {
           appointment={appointment}
           canUseManualWhatsApp={canUseManualWhatsApp}
           onStatusMessage={setAttendanceMessage}
+          messageTemplates={messageTemplates}
+          businessName={businessName}
         />
 
 <div className="mt-6">
