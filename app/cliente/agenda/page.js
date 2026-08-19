@@ -23,6 +23,26 @@ function formatMinutes(value) {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+function staffCanDoService(personId, service) {
+  const staffIds = Array.isArray(service?.bookable_staff_ids)
+    ? service.bookable_staff_ids
+    : [];
+
+  return staffIds.length === 0 || staffIds.includes(personId);
+}
+
+function staffCanDoSelectedServices(personId, selectedServices) {
+  if (!personId) return true;
+  return (selectedServices || []).every((service) =>
+    staffCanDoService(personId, service)
+  );
+}
+
+function formatServiceWithStaff(service) {
+  const staffName = service?.staff_name || service?.staff?.full_name || "";
+  return staffName ? `${service.name} — con ${staffName}` : service.name;
+}
+
 export default function ClienteAgendaPage() {
   const [loading, setLoading] = useState(true);
   const [services, setServices] = useState([]);
@@ -37,6 +57,7 @@ export default function ClienteAgendaPage() {
   const [tone, setTone] = useState("info");
   const [searching, setSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [createdAppointment, setCreatedAppointment] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -68,6 +89,13 @@ export default function ClienteAgendaPage() {
     return services.filter((service) => selectedServiceIds.includes(service.id));
   }, [services, selectedServiceIds]);
 
+  const compatibleStaff = useMemo(() => {
+    if (selectedServices.length === 0) return staff;
+    return staff.filter((person) =>
+      staffCanDoSelectedServices(person.id, selectedServices)
+    );
+  }, [staff, selectedServices]);
+
   const estimatedTotal = selectedServices.reduce(
     (sum, service) => sum + Number(service.base_price || 0),
     0
@@ -79,21 +107,34 @@ export default function ClienteAgendaPage() {
       Number(service.cleanup_minutes || 0),
     0
   );
+  const hasCompatibleStaff =
+    selectedServices.length === 0 || compatibleStaff.length > 0;
 
   const toggleService = (serviceId) => {
+    const nextServiceIds = selectedServiceIds.includes(serviceId)
+      ? selectedServiceIds.filter((id) => id !== serviceId)
+      : [...selectedServiceIds, serviceId];
+    const nextSelectedServices = services.filter((service) =>
+      nextServiceIds.includes(service.id)
+    );
+
     setSlots([]);
     setSelectedSlot(null);
-    setSelectedServiceIds((current) =>
-      current.includes(serviceId)
-        ? current.filter((id) => id !== serviceId)
-        : [...current, serviceId]
-    );
+    setCreatedAppointment(null);
+    if (
+      preferredStaffId &&
+      !staffCanDoSelectedServices(preferredStaffId, nextSelectedServices)
+    ) {
+      setPreferredStaffId("");
+    }
+    setSelectedServiceIds(nextServiceIds);
   };
 
   const handleAppointmentDateChange = (value) => {
     setAppointmentDate(value);
     setSlots([]);
     setSelectedSlot(null);
+    setCreatedAppointment(null);
   };
 
   const findAvailability = async () => {
@@ -101,10 +142,19 @@ export default function ClienteAgendaPage() {
     setMessage("");
     setTone("info");
     setSelectedSlot(null);
+    setCreatedAppointment(null);
 
     if (selectedServiceIds.length === 0) {
       setTone("error");
       setMessage("Selecciona al menos un servicio.");
+      setSearching(false);
+      return;
+    }
+    if (!hasCompatibleStaff) {
+      setTone("error");
+      setMessage(
+        "No hay colaboradoras configuradas para todos los servicios seleccionados."
+      );
       setSearching(false);
       return;
     }
@@ -135,6 +185,8 @@ export default function ClienteAgendaPage() {
   };
 
   const createAppointment = async () => {
+    if (submitting) return;
+
     if (!selectedSlot) {
       setTone("error");
       setMessage("Selecciona un horario disponible.");
@@ -163,6 +215,7 @@ export default function ClienteAgendaPage() {
 
       setTone("success");
       setMessage(data.message);
+      setCreatedAppointment(data.appointment || null);
       setSelectedServiceIds([]);
       setSlots([]);
       setSelectedSlot(null);
@@ -290,12 +343,18 @@ export default function ClienteAgendaPage() {
                   className="w-full rounded-2xl border border-[#ead8d4] bg-[#fff8f6] px-4 py-3 outline-none focus:border-[#bd7b83]"
                 >
                   <option value="">La colaboradora disponible</option>
-                  {staff.map((person) => (
+                  {compatibleStaff.map((person) => (
                     <option key={person.id} value={person.id}>
                       {person.full_name}
                     </option>
                   ))}
                 </select>
+                {selectedServices.length > 0 && compatibleStaff.length === 0 && (
+                  <p className="mt-2 text-sm text-red-700">
+                    No hay colaboradoras configuradas para todos los servicios
+                    seleccionados. Elige otra combinación.
+                  </p>
+                )}
               </div>
 
               {selectedServices.length > 0 && (
@@ -314,13 +373,41 @@ export default function ClienteAgendaPage() {
               <button
                 type="button"
                 onClick={findAvailability}
-                disabled={searching || selectedServiceIds.length === 0}
+                disabled={
+                  searching || selectedServiceIds.length === 0 || !hasCompatibleStaff
+                }
                 className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
               >
                 {searching ? "Buscando..." : "Buscar horarios disponibles"}
               </button>
 
               <PortalMessage message={message} tone={tone} />
+
+              {createdAppointment && (
+                <div className="rounded-3xl border border-green-200 bg-green-50 p-4 text-sm leading-6 text-green-800">
+                  <p className="font-medium text-green-900">
+                    Solicitud creada correctamente
+                  </p>
+                  <p>
+                    {createdAppointment.appointment_date} ·{" "}
+                    {createdAppointment.start_time}
+                    {createdAppointment.end_time
+                      ? ` - ${createdAppointment.end_time}`
+                      : ""}
+                  </p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {(createdAppointment.services || []).map((service) => (
+                      <li key={service.id || service.service_id}>
+                        {formatServiceWithStaff(service)}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2">
+                    Estado:{" "}
+                    {createdAppointment.confirmation_status || "pendiente"}.
+                  </p>
+                </div>
+              )}
             </div>
           </PortalCard>
 

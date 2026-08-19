@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   confirmClientPortalAppointment,
   prepareClientPortalAppointment,
 } from "../app/lib/appointmentChannelAdapters.js";
+import { getAvailability } from "../app/lib/bookingAvailability.js";
 import {
   appointmentContractFingerprint,
   isPortalBookableService,
@@ -83,6 +85,88 @@ function created() {
     appointmentId: "55555555-5555-4555-8555-555555555555",
     clientId: "44444444-4444-4444-8444-444444444444",
     servicesCreated: 1,
+  };
+}
+
+function staff(overrides = {}) {
+  return {
+    id: "22222222-2222-4222-8222-222222222222",
+    full_name: "Laura Canul",
+    active: true,
+    photo_url: null,
+    ...overrides,
+  };
+}
+
+function scheduleForStaff(staffId, overrides = {}) {
+  return {
+    staff_id: staffId,
+    day_of_week: 6,
+    start_time: "09:00",
+    end_time: "13:00",
+    is_active: true,
+    is_day_off: false,
+    has_break: false,
+    ...overrides,
+  };
+}
+
+function createAvailabilitySupabase({
+  services = [service()],
+  staffRows = [staff()],
+  schedules = staffRows.map((person) => scheduleForStaff(person.id)),
+  staffServices = [],
+  existingServices = [],
+  blocks = [],
+  resources = [],
+  serviceResources = [],
+} = {}) {
+  const tables = {
+    services,
+    staff: staffRows,
+    staff_schedules: schedules,
+    staff_services: staffServices,
+    appointment_services: existingServices,
+    staff_time_blocks: blocks,
+    resources,
+    service_resources: serviceResources,
+  };
+
+  return {
+    from(table) {
+      const filters = [];
+      const inFilters = [];
+      const builder = {
+        select() {
+          return builder;
+        },
+        eq(column, value) {
+          filters.push({ column, value });
+          return builder;
+        },
+        in(column, values) {
+          inFilters.push({ column, values });
+          return builder;
+        },
+        order() {
+          return builder;
+        },
+        then(resolve) {
+          let data = [...(tables[table] || [])];
+          for (const filter of filters) {
+            data = data.filter((item) => item[filter.column] === filter.value);
+          }
+          for (const filter of inFilters) {
+            data = data.filter((item) =>
+              (filter.values || []).includes(item[filter.column])
+            );
+          }
+          return Promise.resolve({ data, error: null }).then(resolve);
+        },
+      };
+
+      return builder;
+    },
   };
 }
 
@@ -403,4 +487,130 @@ test("portal 27: precios provienen del snapshot del servidor", () => {
   const result = preview();
   assert.equal(result.expectedPrice, 250);
   assert.equal(result.services[0].price, 250);
+});
+
+test("portal 28: disponibilidad no ofrece técnica incompatible", async () => {
+  const laura = staff();
+  const tania = staff({
+    id: "77777777-7777-4777-8777-777777777777",
+    full_name: "Tania Mendez",
+  });
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      staffRows: [laura, tania],
+      schedules: [scheduleForStaff(laura.id), scheduleForStaff(tania.id)],
+      staffServices: [{ staff_id: laura.id, service_id: service().id, active: true }],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  assert.deepEqual([...new Set(result.slots.map((item) => item.staff_id))], [
+    laura.id,
+  ]);
+});
+
+test("portal 29: horario ocupado no aparece", async () => {
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: { status: "agendada" },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  assert.equal(result.slots.length, 0);
+});
+
+test("portal 30: bloqueo o comida se respeta", async () => {
+  const blocked = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      blocks: [
+        {
+          staff_id: staff().id,
+          block_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+  const lunch = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      schedules: [
+        scheduleForStaff(staff().id, {
+          has_break: true,
+          break_start: "09:30",
+          break_end: "10:00",
+        }),
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  assert.equal(blocked.slots.length, 0);
+  assert.equal(lunch.slots.length, 0);
+});
+
+test("portal 31: cita cancelada no bloquea el horario", async () => {
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: { status: "cancelada" },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+  });
+
+  assert.equal(result.slots.length, 1);
+  assert.equal(result.slots[0].start_time, "09:00");
+});
+
+test("portal 32: APIs derivan clienta desde sesión y no confían client_id del navegador", () => {
+  const routeSource = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(routeSource, /ensureClientForUser/);
+  assert.doesNotMatch(routeSource, /body\.client_id|client_id:\s*body/i);
+});
+
+test("portal 33: catálogo del portal no usa select star y expone compatibilidad mínima", () => {
+  const routeSource = readFileSync(
+    new URL("../app/api/client/services/route.js", import.meta.url),
+    "utf8"
+  );
+  const pageSource = readFileSync(
+    new URL("../app/cliente/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.doesNotMatch(routeSource, /\.select\(["']\*["']\)/);
+  assert.match(routeSource, /staff_services/);
+  assert.match(routeSource, /bookable_staff_ids/);
+  assert.match(pageSource, /compatibleStaff/);
 });

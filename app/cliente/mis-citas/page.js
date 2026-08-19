@@ -26,6 +26,10 @@ function statusLabel(appointment) {
   return "Pendiente";
 }
 
+function formatServiceWithStaff(service) {
+  return service.staff_name ? `${service.name} — con ${service.staff_name}` : service.name;
+}
+
 function AppointmentCard({
   appointment,
   onCancel,
@@ -44,7 +48,7 @@ function AppointmentCard({
             {appointment.end_time ? ` - ${appointment.end_time}` : ""}
           </p>
           <p className="mt-1 text-sm text-[#765d5f]">
-            {appointment.services.map((service) => service.name).join(", ")}
+            {appointment.services.map(formatServiceWithStaff).join(", ")}
           </p>
         </div>
         <span className="w-fit rounded-full bg-[#fff3f1] px-3 py-1 text-sm text-[#9a6067]">
@@ -126,7 +130,28 @@ export default function ClienteMisCitasPage() {
   };
 
   useEffect(() => {
-    loadAppointments();
+    let ignore = false;
+
+    const start = async () => {
+      try {
+        const data = await portalFetch("/api/client/appointments");
+        if (ignore) return;
+        setAppointments(data.appointments || []);
+        setContact(data.contact || null);
+      } catch (error) {
+        if (ignore) return;
+        setTone("error");
+        setMessage(error.message);
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+
+    start();
+
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const { upcoming, history } = useMemo(() => {

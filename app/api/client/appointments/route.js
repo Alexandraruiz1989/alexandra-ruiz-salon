@@ -61,8 +61,36 @@ function canClientCancelAppointment(appointment) {
   return hoursDiff >= 24;
 }
 
+function isActiveAppointmentService(service) {
+  const status = cleanText(service?.status || "agendado").toLowerCase();
+  return ![
+    "cancelada",
+    "cancelado",
+    "cancelled",
+    "canceled",
+    "rechazada",
+    "eliminada",
+    "eliminado",
+    "deleted",
+    "inactiva",
+    "inactivo",
+  ].includes(status);
+}
+
+function getPrimaryAppointmentTime(appointment) {
+  const services = (appointment.appointment_services || [])
+    .filter(isActiveAppointmentService)
+    .map((service) => formatTime(service.start_time))
+    .filter(Boolean)
+    .sort();
+
+  return services[0] || formatTime(appointment.start_time);
+}
+
 function mapAppointmentForClient(appointment) {
-  const services = appointment.appointment_services || [];
+  const services = (appointment.appointment_services || []).filter(
+    isActiveAppointmentService
+  );
   const total =
     Number(appointment.estimated_total || 0) ||
     services.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
@@ -70,7 +98,7 @@ function mapAppointmentForClient(appointment) {
   return {
     id: appointment.id,
     appointment_date: appointment.appointment_date,
-    start_time: formatTime(appointment.start_time),
+    start_time: getPrimaryAppointmentTime(appointment),
     end_time: formatTime(appointment.end_time),
     status: appointment.status || "agendada",
     confirmation_status:
@@ -85,6 +113,7 @@ function mapAppointmentForClient(appointment) {
       service_id: item.service_id,
       name: item.services?.name || "Servicio",
       category: item.services?.category || "",
+      staff_name: item.staff?.full_name || "",
       start_time: formatTime(item.start_time),
       end_time: formatTime(item.end_time),
       total_price: Number(item.total_price || item.price || 0),
@@ -258,6 +287,10 @@ export async function GET(request) {
           end_time,
           total_price,
           price,
+          status,
+          staff (
+            full_name
+          ),
           services (
             name,
             category
@@ -449,6 +482,19 @@ export async function POST(request) {
         start_time: startTime,
         end_time: selectedSlot.end_time,
         confirmation_status: "pendiente",
+        services: currentPreview.services.map((service) => ({
+          id: service.id,
+          service_id: service.id,
+          name: service.name,
+          staff_name: selectedSlot.staff_name || "",
+          start_time: selectedSlot.service_segments.find(
+            (segment) => segment.service_id === service.id
+          )?.start_time,
+          end_time: selectedSlot.service_segments.find(
+            (segment) => segment.service_id === service.id
+          )?.end_time,
+          total_price: service.price,
+        })),
       },
       notification,
       write_mode: result.mode,
