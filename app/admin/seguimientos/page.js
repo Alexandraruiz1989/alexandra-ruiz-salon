@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   buildFollowupWhatsAppMessage,
-  openManualWhatsAppMessage,
+  buildWhatsAppUrl,
 } from "../../lib/manualWhatsApp";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
@@ -189,21 +189,6 @@ export default function SeguimientosPage() {
     }));
   };
 
-  const sendWhatsApp = (followup) => {
-    const currentMessage =
-      editableMessages[followup.id] ?? buildFollowupWhatsAppMessage(followup);
-    const result = openManualWhatsAppMessage({
-      phone: followup.clients?.phone,
-      message: currentMessage,
-      openWindow:
-        typeof window !== "undefined" ? window.open.bind(window) : null,
-    });
-
-    if (!result.ok) {
-      setMessage(result.error);
-    }
-  };
-
   if (loadingSession) {
     return (
       <main className="min-h-screen bg-[#eef1f3] px-6 py-10 text-[#263238]">
@@ -279,6 +264,19 @@ export default function SeguimientosPage() {
               const isExpired =
                 followup.followup_status === "pendiente" &&
                 followup.followup_date < todayISO();
+              const currentWhatsAppMessage =
+                editableMessages[followup.id] ??
+                buildFollowupWhatsAppMessage(followup);
+              const whatsappUrl = currentWhatsAppMessage.trim()
+                ? buildWhatsAppUrl(
+                    followup.clients?.phone,
+                    currentWhatsAppMessage
+                  )
+                : "";
+              const canOpenWhatsApp = Boolean(whatsappUrl);
+              const whatsappUnavailableMessage = !currentWhatsAppMessage.trim()
+                ? "Escribe un mensaje antes de abrir WhatsApp."
+                : "Esta clienta no tiene un número de WhatsApp válido registrado.";
 
               return (
                 <div
@@ -322,10 +320,7 @@ export default function SeguimientosPage() {
                       </label>
 
                       <textarea
-                        value={
-                          editableMessages[followup.id] ??
-                          buildFollowupWhatsAppMessage(followup)
-                        }
+                        value={currentWhatsAppMessage}
                         onChange={(event) =>
                           updateEditableMessage(followup.id, event.target.value)
                         }
@@ -341,13 +336,30 @@ export default function SeguimientosPage() {
                     </div>
 
                     <div className="flex min-w-52 flex-col gap-2">
-                      <button
-                        type="button"
-                        onClick={() => sendWhatsApp(followup)}
-                        className="rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
-                      >
-                        Enviar WhatsApp
-                      </button>
+                      {canOpenWhatsApp ? (
+                        <a
+                          href={whatsappUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => setMessage("")}
+                          className="inline-flex cursor-pointer items-center justify-center rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+                        >
+                          Enviar WhatsApp
+                        </a>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            disabled
+                            className="rounded-full bg-[#25D366]/40 px-5 py-3 text-sm text-white disabled:cursor-not-allowed"
+                          >
+                            Enviar WhatsApp
+                          </button>
+                          <p className="text-xs leading-5 text-[#68777c]">
+                            {whatsappUnavailableMessage}
+                          </p>
+                        </>
+                      )}
 
                       {followup.followup_status !== "enviado" && (
                         <button

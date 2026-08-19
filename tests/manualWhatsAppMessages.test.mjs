@@ -7,6 +7,7 @@ import {
   buildFollowupWhatsAppMessage,
   buildWhatsAppUrl,
   isAppointmentEligibleForManualWhatsApp,
+  normalizeWhatsAppPhone,
   openManualWhatsAppMessage,
 } from "../app/lib/manualWhatsApp.js";
 
@@ -84,6 +85,12 @@ test("seguimientos: editar no modifica la plantilla global del seguimiento", () 
 test("seguimientos: teléfono inválido no crea enlace válido", () => {
   assert.equal(buildWhatsAppUrl("abc", "Hola"), "");
   assert.equal(buildWhatsAppUrl("123", "Hola"), "");
+});
+
+test("helper: no devuelve falso negativo para teléfonos mexicanos válidos", () => {
+  assert.equal(normalizeWhatsAppPhone("999 111 2233"), "529991112233");
+  assert.equal(normalizeWhatsAppPhone("(999) 111-2233"), "529991112233");
+  assert.equal(normalizeWhatsAppPhone("+52 999 111 2233"), "529991112233");
 });
 
 test("recordatorios: usa teléfono correcto de la cita", () => {
@@ -176,4 +183,21 @@ test("recordatorios manuales: no existe envío programático ni Cloud API", () =
   assert.doesNotMatch(source, /\/messages\b|graph\.facebook\.com/i);
   assert.doesNotMatch(source, /fetch\([^)]*whatsapp/i);
   assert.doesNotMatch(helperSource, /fetch\(|supabase|followup_status|sent_at|\.from\(/i);
+});
+
+test("botones reales: Agenda y Seguimientos usan href nativo y onClick funcional", () => {
+  const agendaSource = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  const followupsSource = readFileSync(
+    new URL("../app/admin/seguimientos/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(agendaSource, /href=\{manualWhatsAppUrl\}/);
+  assert.match(agendaSource, /onClick=\{handleManualWhatsAppClick\}/);
+  assert.match(followupsSource, /href=\{whatsappUrl\}/);
+  assert.match(followupsSource, /onClick=\{\(\) => setMessage\(""\)\}/);
+  assert.doesNotMatch(`${agendaSource}\n${followupsSource}`, /window\.open|openManualWhatsAppMessage/);
 });

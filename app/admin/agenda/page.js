@@ -9,8 +9,8 @@ import {
 import {
   buildAppointmentManualWhatsAppMessages,
   buildWhatsAppPhoneUrl,
+  buildWhatsAppUrl,
   isAppointmentEligibleForManualWhatsApp,
-  openManualWhatsAppMessage,
 } from "../../lib/manualWhatsApp";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
@@ -5632,6 +5632,12 @@ function ManualAppointmentWhatsAppPanel({
   const [manualWhatsAppMessage, setManualWhatsAppMessage] = useState(
     manualWhatsAppOptions[0]?.message || ""
   );
+  const hasManualWhatsAppMessage = Boolean(manualWhatsAppMessage.trim());
+  const manualWhatsAppUrl =
+    canOfferAppointmentWhatsApp && hasManualWhatsAppMessage
+      ? buildWhatsAppUrl(clientPhone, manualWhatsAppMessage)
+      : "";
+  const canOpenManualWhatsApp = Boolean(manualWhatsAppUrl);
 
   if (!canUseManualWhatsApp) {
     return null;
@@ -5641,27 +5647,19 @@ function ManualAppointmentWhatsAppPanel({
     ? "Esta cita no está vigente para enviar recordatorios por WhatsApp."
     : !hasClientWhatsAppPhone
     ? "Esta clienta no tiene un número de WhatsApp válido registrado."
+    : !hasManualWhatsAppMessage
+    ? "Escribe un mensaje antes de abrir WhatsApp."
     : "";
 
-  const handleOpenManualWhatsApp = () => {
+  const handleManualWhatsAppClick = (event) => {
     onStatusMessage("");
 
-    if (!canOfferAppointmentWhatsApp) {
+    if (!canOpenManualWhatsApp) {
+      event.preventDefault();
       onStatusMessage(
-        "Esta cita no está vigente para enviar recordatorios por WhatsApp."
+        manualWhatsAppUnavailableMessage ||
+          "No se pudo preparar el enlace de WhatsApp."
       );
-      return;
-    }
-
-    const result = openManualWhatsAppMessage({
-      phone: clientPhone,
-      message: manualWhatsAppMessage,
-      openWindow:
-        typeof window !== "undefined" ? window.open.bind(window) : null,
-    });
-
-    if (!result.ok) {
-      onStatusMessage(result.error);
       return;
     }
 
@@ -5676,10 +5674,19 @@ function ManualAppointmentWhatsAppPanel({
         Recordatorio por WhatsApp
       </p>
 
-      {manualWhatsAppUnavailableMessage ? (
-        <p className="mt-3 rounded-2xl bg-white/80 p-4 text-sm text-[#68777c]">
-          {manualWhatsAppUnavailableMessage}
-        </p>
+      {!canOfferAppointmentWhatsApp || !hasClientWhatsAppPhone ? (
+        <div className="mt-3 space-y-3">
+          <p className="rounded-2xl bg-white/80 p-4 text-sm text-[#68777c]">
+            {manualWhatsAppUnavailableMessage}
+          </p>
+          <button
+            type="button"
+            disabled
+            className="inline-flex cursor-not-allowed items-center justify-center rounded-full bg-[#25D366]/40 px-5 py-3 text-sm text-white"
+          >
+            Abrir WhatsApp
+          </button>
+        </div>
       ) : (
         <>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -5710,14 +5717,31 @@ function ManualAppointmentWhatsAppPanel({
             className="mt-2 w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 text-sm leading-6 text-[#263238] outline-none transition focus:border-[#bd7b83] focus:ring-2 focus:ring-[#f2d6db]"
           />
 
-          <button
-            type="button"
-            onClick={handleOpenManualWhatsApp}
-            disabled={!manualWhatsAppMessage.trim()}
-            className="mt-3 rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Abrir WhatsApp
-          </button>
+          {canOpenManualWhatsApp ? (
+            <a
+              href={manualWhatsAppUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={handleManualWhatsAppClick}
+              className="mt-3 inline-flex cursor-pointer items-center justify-center rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+            >
+              Abrir WhatsApp
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="mt-3 inline-flex cursor-not-allowed items-center justify-center rounded-full bg-[#25D366]/40 px-5 py-3 text-sm text-white"
+            >
+              Abrir WhatsApp
+            </button>
+          )}
+
+          {manualWhatsAppUnavailableMessage && (
+            <p className="mt-2 text-sm text-[#68777c]">
+              {manualWhatsAppUnavailableMessage}
+            </p>
+          )}
         </>
       )}
 
