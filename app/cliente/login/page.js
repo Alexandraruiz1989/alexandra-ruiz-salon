@@ -17,7 +17,14 @@ export default function ClienteLoginPage() {
     const checkSession = async () => {
       const session = await getPortalSession();
       if (session) {
-        window.location.href = "/cliente/agenda";
+        try {
+          const profile = await portalFetch("/api/client/profile");
+          window.location.href = profile.profile_required
+            ? "/cliente/perfil?next=/cliente/agenda"
+            : "/cliente/agenda";
+        } catch {
+          window.location.href = "/cliente/agenda";
+        }
         return;
       }
 
@@ -57,8 +64,10 @@ export default function ClienteLoginPage() {
     }
 
     try {
-      await portalFetch("/api/client/profile");
-      window.location.href = "/cliente/agenda";
+      const profile = await portalFetch("/api/client/profile");
+      window.location.href = profile.profile_required
+        ? "/cliente/perfil?next=/cliente/agenda"
+        : "/cliente/agenda";
     } catch (profileError) {
       setTone("error");
       setMessage(profileError.message);

@@ -14,6 +14,14 @@ import {
 } from "../app/lib/appointmentWriteContracts.js";
 import { clearAppointmentWriteInFlightForTests } from "../app/lib/appointmentWriteService.js";
 import { createAppointmentTransactionalRepository } from "../app/lib/appointmentTransactionalRepository.js";
+import {
+  getCompatibleStaffForSelectedServices,
+  mapClientPortalCatalog,
+} from "../app/lib/clientPortalCatalog.js";
+import {
+  isClientProfileComplete,
+  normalizePhoneDigits,
+} from "../app/lib/clientPortalProfile.js";
 
 const now = new Date("2026-07-24T12:00:00.000Z");
 
@@ -697,7 +705,13 @@ test("portal 33: catálogo del portal no usa select star y expone compatibilidad
 
   assert.doesNotMatch(routeSource, /\.select\(["']\*["']\)/);
   assert.match(routeSource, /staff_services/);
-  assert.match(routeSource, /bookable_staff_ids/);
+  assert.match(
+    readFileSync(
+      new URL("../app/lib/clientPortalCatalog.js", import.meta.url),
+      "utf8"
+    ),
+    /bookable_staff_ids/
+  );
   assert.match(pageSource, /compatibleStaff/);
 });
 
@@ -856,4 +870,252 @@ test("portal 40: el repositorio permite portal sin activar bandera general ni bo
   assert.equal(result.ok, true);
   assert.equal(result.mode, "transactional");
   assert.equal(rpcCalls, 1);
+});
+
+test("portal 41: perfil completo se reconoce por nombre real y teléfono", () => {
+  assert.equal(
+    isClientProfileComplete({
+      id: "client_1",
+      full_name: "Clienta Real",
+      phone: "999 111 2233",
+    }),
+    true
+  );
+});
+
+test("portal 42: perfil incompleto no bloquea el catálogo pero exige completar", () => {
+  assert.equal(
+    isClientProfileComplete({
+      id: "client_1",
+      full_name: "",
+      phone: "",
+    }),
+    false
+  );
+  assert.equal(
+    isClientProfileComplete({
+      id: "client_1",
+      full_name: "Clienta",
+      phone: "9991112233",
+    }),
+    false
+  );
+  assert.equal(normalizePhoneDigits("999 111-2233"), "9991112233");
+});
+
+test("portal 43: catálogo del portal expone servicios activos con DTO mínimo", () => {
+  const catalog = mapClientPortalCatalog({
+    services: [service()],
+    staff: [staff()],
+    staffServices: [
+      {
+        staff_id: staff().id,
+        service_id: service().id,
+        active: true,
+      },
+    ],
+  });
+  assert.deepEqual(Object.keys(catalog.services[0]).sort(), [
+    "base_price",
+    "bookable_staff_ids",
+    "category",
+    "cleanup_minutes",
+    "description",
+    "duration_minutes",
+    "id",
+    "name",
+  ]);
+  assert.equal(catalog.services[0].name, "Manicure");
+  assert.deepEqual(catalog.services[0].bookable_staff_ids, [staff().id]);
+});
+
+test("portal 44: servicio inactivo no aparece en catálogo público", () => {
+  const catalog = mapClientPortalCatalog({
+    services: [service(), service({ id: "inactive", active: false })],
+    staff: [staff()],
+  });
+  assert.deepEqual(catalog.services.map((item) => item.id), [service().id]);
+});
+
+test("portal 45: error de API y catálogo vacío tienen estados visuales distintos", () => {
+  const pageSource = readFileSync(
+    new URL("../app/cliente/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(pageSource, /Error cargando servicios/);
+  assert.match(pageSource, /No hay servicios disponibles para agenda en línea/);
+  assert.match(pageSource, /Cargando servicios/);
+});
+
+test("portal 46: sin servicio seleccionado no se inventan técnicas individuales", () => {
+  assert.deepEqual(getCompatibleStaffForSelectedServices([staff()], []), []);
+});
+
+test("portal 47: seleccionar servicio muestra técnicas compatibles", () => {
+  const laura = staff();
+  const tania = staff({
+    id: "77777777-7777-4777-8777-777777777777",
+    full_name: "Tania Mendez",
+  });
+  const catalog = mapClientPortalCatalog({
+    services: [service()],
+    staff: [laura, tania],
+    staffServices: [
+      {
+        staff_id: laura.id,
+        service_id: service().id,
+        active: true,
+      },
+    ],
+  });
+  assert.deepEqual(
+    getCompatibleStaffForSelectedServices(catalog.staff, catalog.services).map(
+      (person) => person.id
+    ),
+    [laura.id]
+  );
+});
+
+test("portal 48: técnica incompatible no aparece", () => {
+  const laura = staff();
+  const tania = staff({
+    id: "77777777-7777-4777-8777-777777777777",
+    full_name: "Tania Mendez",
+  });
+  const catalog = mapClientPortalCatalog({
+    services: [service()],
+    staff: [laura, tania],
+    staffServices: [
+      {
+        staff_id: laura.id,
+        service_id: service().id,
+        active: true,
+      },
+    ],
+  });
+  const compatible = getCompatibleStaffForSelectedServices(
+    catalog.staff,
+    catalog.services
+  );
+  assert.equal(compatible.some((person) => person.id === tania.id), false);
+});
+
+test("portal 49: varios servicios filtran por técnica que cubre toda la combinación", () => {
+  const first = service();
+  const second = service({
+    id: "66666666-6666-4666-8666-666666666666",
+    name: "Pedicure",
+  });
+  const laura = staff();
+  const tania = staff({
+    id: "77777777-7777-4777-8777-777777777777",
+    full_name: "Tania Mendez",
+  });
+  const catalog = mapClientPortalCatalog({
+    services: [first, second],
+    staff: [laura, tania],
+    staffServices: [
+      { staff_id: laura.id, service_id: first.id, active: true },
+      { staff_id: laura.id, service_id: second.id, active: true },
+      { staff_id: tania.id, service_id: first.id, active: true },
+    ],
+  });
+  assert.deepEqual(
+    getCompatibleStaffForSelectedServices(catalog.staff, catalog.services).map(
+      (person) => person.id
+    ),
+    [laura.id]
+  );
+});
+
+test("portal 50: La colaboradora disponible sigue disponible como opción genérica", () => {
+  const pageSource = readFileSync(
+    new URL("../app/cliente/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(pageSource, /La colaboradora disponible/);
+});
+
+test("portal 51: client_id se deriva de sesión y no del navegador", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+  const availabilityRoute = readFileSync(
+    new URL("../app/api/client/availability/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(appointmentsRoute, /ensureClientForUser/);
+  assert.match(availabilityRoute, /getClientPortalProfile/);
+  assert.doesNotMatch(appointmentsRoute, /body\.client_id|client_id:\s*body/i);
+  assert.doesNotMatch(availabilityRoute, /body\.client_id|client_id:\s*body/i);
+});
+
+test("portal 52: servicios ya no exigen crear perfil completo antes de mostrar catálogo", () => {
+  const servicesRoute = readFileSync(
+    new URL("../app/api/client/services/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.doesNotMatch(servicesRoute, /ensureClientForUser/);
+  assert.match(servicesRoute, /getClientPortalProfile/);
+  assert.doesNotMatch(servicesRoute, /\.select\(["']\*["']\)/);
+});
+
+test("portal 53: Perfil puede completar nombre y teléfono sin cerrar sesión", () => {
+  const profilePage = readFileSync(
+    new URL("../app/cliente/perfil/page.js", import.meta.url),
+    "utf8"
+  );
+  const profileRoute = readFileSync(
+    new URL("../app/api/client/profile/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(profilePage, /method:\s*"POST"/);
+  assert.equal(
+    profilePage.includes("Volver a Agenda") ||
+      profilePage.includes("next=/cliente/agenda"),
+    true
+  );
+  assert.match(profileRoute, /ensureClientForUser/);
+  assert.match(profileRoute, /profile_required/);
+});
+
+test("portal 54: admin autenticado sin perfil de clienta no obtiene datos ajenos", () => {
+  const serverSource = readFileSync(
+    new URL("../app/lib/clientPortalServer.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(serverSource, /\.eq\("auth_user_id", user\.id\)/);
+  assert.match(serverSource, /\.ilike\("email", email\)/);
+  assert.doesNotMatch(serverSource, /role.*admin.*client_id|admin.*client_id/i);
+});
+
+test("portal 55: disponibilidad y creación exigen perfil completo desde servidor", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+  const availabilityRoute = readFileSync(
+    new URL("../app/api/client/availability/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(availabilityRoute, /profile_complete/);
+  assert.match(availabilityRoute, /antes de buscar horarios/);
+  assert.match(appointmentsRoute, /profile_complete/);
+  assert.match(appointmentsRoute, /antes de confirmar la cita/);
+});
+
+test("portal 56: relaciones inactivas staff-servicio no habilitan técnicas", () => {
+  const catalog = mapClientPortalCatalog({
+    services: [service()],
+    staff: [staff()],
+    staffServices: [
+      {
+        staff_id: staff().id,
+        service_id: service().id,
+        active: false,
+      },
+    ],
+  });
+  assert.deepEqual(catalog.services[0].bookable_staff_ids, []);
 });

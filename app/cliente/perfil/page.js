@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import ClientPortalShell, {
   PortalCard,
@@ -14,27 +15,38 @@ export default function ClientePerfilPage() {
   const [form, setForm] = useState({ full_name: "", phone: "" });
   const [message, setMessage] = useState("");
   const [tone, setTone] = useState("info");
-
-  const loadProfile = async () => {
-    setLoading(true);
-
-    try {
-      const data = await portalFetch("/api/client/profile");
-      setClient(data.client);
-      setForm({
-        full_name: data.client?.full_name || "",
-        phone: data.client?.phone || "",
-      });
-    } catch (error) {
-      setTone("error");
-      setMessage(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [returnToAgenda] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("next") === "/cliente/agenda";
+  });
 
   useEffect(() => {
-    loadProfile();
+    let active = true;
+
+    async function loadInitialProfile() {
+      try {
+        const data = await portalFetch("/api/client/profile");
+        if (!active) return;
+        setClient(data.client);
+        setForm({
+          full_name: data.client?.full_name || "",
+          phone: data.client?.phone || "",
+        });
+      } catch (error) {
+        if (!active) return;
+        setTone("error");
+        setMessage(error.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadInitialProfile();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleChange = (event) => {
@@ -49,13 +61,16 @@ export default function ClientePerfilPage() {
 
     try {
       const data = await portalFetch("/api/client/profile", {
-        method: "PATCH",
+        method: "POST",
         body: JSON.stringify(form),
       });
 
       setClient(data.client);
       setTone("success");
       setMessage("Perfil actualizado correctamente.");
+      if (returnToAgenda) {
+        window.location.href = "/cliente/agenda";
+      }
     } catch (error) {
       setTone("error");
       setMessage(error.message);
@@ -132,6 +147,15 @@ export default function ClientePerfilPage() {
             </div>
 
             <PortalMessage message={message} tone={tone} />
+
+            {tone === "success" && !returnToAgenda && (
+              <Link
+                href="/cliente/agenda"
+                className="inline-flex w-full justify-center rounded-full border border-[#d8b8b4] bg-white px-6 py-4 text-[#7a5558] transition hover:border-[#bd7b83] hover:text-[#bd7b83]"
+              >
+                Volver a Agenda
+              </Link>
+            )}
 
             <button
               type="submit"

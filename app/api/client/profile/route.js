@@ -3,8 +3,9 @@ import {
   cleanText,
   createClientPortalAdmin,
   ensureClientForUser,
+  getClientPortalProfile,
   getAuthUserFromRequest,
-  updateClientProfile,
+  isClientProfileComplete,
 } from "../../../lib/clientPortalServer";
 
 function errorResponse(error, status = 400) {
@@ -26,11 +27,16 @@ export async function GET(request) {
       return errorResponse(session.error, session.status || 401);
     }
 
-    const client = await ensureClientForUser(adminSupabase, session.user);
+    const profile = await getClientPortalProfile(
+      adminSupabase,
+      session.user
+    );
 
     return NextResponse.json({
       success: true,
-      client,
+      client: profile.client,
+      profile_complete: profile.profile_complete,
+      profile_required: profile.profile_required,
       user: {
         id: session.user.id,
         email: session.user.email,
@@ -60,6 +66,8 @@ export async function POST(request) {
     return NextResponse.json({
       success: true,
       client,
+      profile_complete: isClientProfileComplete(client),
+      profile_required: !isClientProfileComplete(client),
     });
   } catch (error) {
     return errorResponse(error, 400);
@@ -76,15 +84,17 @@ export async function PATCH(request) {
     }
 
     const body = await request.json();
-    const client = await ensureClientForUser(adminSupabase, session.user);
-    const updatedClient = await updateClientProfile(adminSupabase, client.id, {
+    const updatedClient = await ensureClientForUser(adminSupabase, session.user, {
       full_name: cleanText(body.full_name),
       phone: cleanText(body.phone),
+      email: cleanText(body.email) || session.user.email,
     });
 
     return NextResponse.json({
       success: true,
       client: updatedClient,
+      profile_complete: isClientProfileComplete(updatedClient),
+      profile_required: !isClientProfileComplete(updatedClient),
     });
   } catch (error) {
     return errorResponse(error, 400);

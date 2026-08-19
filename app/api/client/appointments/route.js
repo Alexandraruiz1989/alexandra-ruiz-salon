@@ -6,6 +6,7 @@ import {
   formatMoney,
   formatTime,
   getAvailability,
+  getClientPortalProfile,
   getSalonContact,
   getAuthUserFromRequest,
   notifyAdminsForClientAppointment,
@@ -214,7 +215,14 @@ export async function POST(request) {
       return errorResponse(session.error, session.status || 401);
     }
 
-    const client = await ensureClientForUser(adminSupabase, session.user);
+    const profile = await getClientPortalProfile(adminSupabase, session.user);
+    if (!profile.profile_complete || !profile.client) {
+      return errorResponse(
+        "Completa tu perfil con nombre y teléfono antes de confirmar la cita.",
+        409
+      );
+    }
+    const client = profile.client;
     const body = await request.json();
     if (hasForbiddenWriteControls(body)) {
       return errorResponse("La solicitud no es válida.", 400);

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ClientPortalShell, {
   PortalCard,
   PortalMessage,
 } from "../components/ClientPortalShell";
 import { portalFetch } from "../components/portalApi";
+import { getCompatibleStaffForSelectedServices } from "../../lib/clientPortalCatalog.js";
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -23,28 +25,19 @@ function formatMinutes(value) {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
-function staffCanDoService(personId, service) {
-  const staffIds = Array.isArray(service?.bookable_staff_ids)
-    ? service.bookable_staff_ids
-    : [];
-
-  return staffIds.length === 0 || staffIds.includes(personId);
-}
-
-function staffCanDoSelectedServices(personId, selectedServices) {
-  if (!personId) return true;
-  return (selectedServices || []).every((service) =>
-    staffCanDoService(personId, service)
-  );
-}
-
 function formatServiceWithStaff(service) {
   const staffName = service?.staff_name || service?.staff?.full_name || "";
   return staffName ? `${service.name} — con ${staffName}` : service.name;
 }
 
+async function fetchCatalog() {
+  return portalFetch("/api/client/services");
+}
+
 export default function ClienteAgendaPage() {
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
+  const [profileRequired, setProfileRequired] = useState(false);
   const [services, setServices] = useState([]);
   const [staff, setStaff] = useState([]);
   const [selectedServiceIds, setSelectedServiceIds] = useState([]);
@@ -59,22 +52,52 @@ export default function ClienteAgendaPage() {
   const [submitting, setSubmitting] = useState(false);
   const [createdAppointment, setCreatedAppointment] = useState(null);
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const data = await portalFetch("/api/client/services");
-        setServices(data.services || []);
-        setStaff(data.staff || []);
-      } catch (error) {
-        setTone("error");
-        setMessage(error.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
+  const applyCatalogData = useCallback((data) => {
+    setServices(data.services || []);
+    setStaff(data.staff || []);
+    setProfileRequired(Boolean(data.profile?.required));
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadInitialCatalog() {
+      try {
+        const data = await fetchCatalog();
+        if (active) applyCatalogData(data);
+      } catch {
+        if (active) {
+          setCatalogError(
+            "No pudimos cargar los servicios. Intenta actualizar la página."
+          );
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadInitialCatalog();
+
+    return () => {
+      active = false;
+    };
+  }, [applyCatalogData]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setCatalogError("");
+
+    try {
+      const data = await fetchCatalog();
+      applyCatalogData(data);
+    } catch {
+      setCatalogError(
+        "No pudimos cargar los servicios. Intenta actualizar la página."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [applyCatalogData]);
 
   const groupedServices = useMemo(() => {
     return services.reduce((groups, service) => {
@@ -90,10 +113,7 @@ export default function ClienteAgendaPage() {
   }, [services, selectedServiceIds]);
 
   const compatibleStaff = useMemo(() => {
-    if (selectedServices.length === 0) return staff;
-    return staff.filter((person) =>
-      staffCanDoSelectedServices(person.id, selectedServices)
-    );
+    return getCompatibleStaffForSelectedServices(staff, selectedServices);
   }, [staff, selectedServices]);
 
   const estimatedTotal = selectedServices.reduce(
@@ -123,7 +143,9 @@ export default function ClienteAgendaPage() {
     setCreatedAppointment(null);
     if (
       preferredStaffId &&
-      !staffCanDoSelectedServices(preferredStaffId, nextSelectedServices)
+      !getCompatibleStaffForSelectedServices(staff, nextSelectedServices).some(
+        (person) => person.id === preferredStaffId
+      )
     ) {
       setPreferredStaffId("");
     }
@@ -147,6 +169,14 @@ export default function ClienteAgendaPage() {
     if (selectedServiceIds.length === 0) {
       setTone("error");
       setMessage("Selecciona al menos un servicio.");
+      setSearching(false);
+      return;
+    }
+    if (profileRequired) {
+      setTone("error");
+      setMessage(
+        "Completa tu perfil con nombre y teléfono antes de buscar horarios."
+      );
       setSearching(false);
       return;
     }
@@ -246,8 +276,45 @@ export default function ClienteAgendaPage() {
             </p>
           </div>
 
+          {profileRequired && (
+            <div className="mb-5 rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+              <p className="font-medium">Perfil pendiente</p>
+              <p>
+                Puedes revisar el catálogo. Para buscar horarios y reservar,
+                primero completa tu nombre y teléfono.
+              </p>
+              <Link
+                href="/cliente/perfil?next=/cliente/agenda"
+                className="mt-3 inline-flex rounded-full bg-[#bd7b83] px-5 py-3 text-white transition hover:opacity-90"
+              >
+                Completar perfil
+              </Link>
+            </div>
+          )}
+
           {loading ? (
             <p className="text-sm text-[#765d5f]">Cargando servicios...</p>
+          ) : catalogError ? (
+            <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
+              <p className="font-medium">Error cargando servicios</p>
+              <p>{catalogError}</p>
+              <button
+                type="button"
+                onClick={loadData}
+                className="mt-3 rounded-full bg-white px-5 py-3 text-red-700 ring-1 ring-red-200 transition hover:bg-red-100"
+              >
+                Reintentar
+              </button>
+            </div>
+          ) : services.length === 0 ? (
+            <div className="rounded-3xl border border-[#ead8d4] bg-[#fff8f6] p-4 text-sm leading-6 text-[#765d5f]">
+              <p className="font-medium text-[#3b2b2d]">
+                No hay servicios disponibles para agenda en línea.
+              </p>
+              <p>
+                Escríbenos por WhatsApp para ayudarte a revisar opciones.
+              </p>
+            </div>
           ) : (
             <div className="space-y-5">
               {Object.entries(groupedServices).map(([category, items]) => (
@@ -374,7 +441,10 @@ export default function ClienteAgendaPage() {
                 type="button"
                 onClick={findAvailability}
                 disabled={
-                  searching || selectedServiceIds.length === 0 || !hasCompatibleStaff
+                  searching ||
+                  selectedServiceIds.length === 0 ||
+                  !hasCompatibleStaff ||
+                  profileRequired
                 }
                 className="w-full rounded-full bg-[#bd7b83] px-6 py-4 text-white transition hover:opacity-90 disabled:opacity-60"
               >

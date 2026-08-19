@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   createClientPortalAdmin,
-  ensureClientForUser,
+  getClientPortalProfile,
   getAuthUserFromRequest,
 } from "../../../lib/clientPortalServer";
-import { isPortalBookableService } from "../../../lib/appointmentWriteContracts.js";
+import { mapClientPortalCatalog } from "../../../lib/clientPortalCatalog.js";
 
 function errorResponse(error, status = 400) {
   return NextResponse.json(
@@ -25,7 +25,10 @@ export async function GET(request) {
       return errorResponse(session.error, session.status || 401);
     }
 
-    await ensureClientForUser(adminSupabase, session.user);
+    const profile = await getClientPortalProfile(
+      adminSupabase,
+      session.user
+    );
 
     const [servicesResult, staffResult, staffServicesResult] = await Promise.all([
       adminSupabase
@@ -51,35 +54,19 @@ export async function GET(request) {
     if (staffResult.error) throw staffResult.error;
     if (staffServicesResult.error) throw staffServicesResult.error;
 
-    const staffIdsByService = (staffServicesResult.data || []).reduce(
-      (result, item) => {
-        if (!item.service_id || !item.staff_id) return result;
-        if (!result[item.service_id]) result[item.service_id] = [];
-        result[item.service_id].push(item.staff_id);
-        return result;
-      },
-      {}
-    );
+    const catalog = mapClientPortalCatalog({
+      services: servicesResult.data || [],
+      staff: staffResult.data || [],
+      staffServices: staffServicesResult.data || [],
+    });
 
     return NextResponse.json({
       success: true,
-      services: (servicesResult.data || [])
-        .filter(isPortalBookableService)
-        .map((service) => ({
-          id: service.id,
-          name: service.name,
-          category: service.category || "Servicios",
-          description: service.description || "",
-          base_price: Number(service.base_price || 0),
-          duration_minutes: Number(service.duration_minutes || 0),
-          cleanup_minutes: Number(service.cleanup_minutes || 0),
-          bookable_staff_ids: staffIdsByService[service.id] || [],
-        })),
-      staff: (staffResult.data || []).map((person) => ({
-        id: person.id,
-        full_name: person.full_name,
-        photo_url: person.photo_url || person.image_url || null,
-      })),
+      ...catalog,
+      profile: {
+        complete: profile.profile_complete,
+        required: profile.profile_required,
+      },
     });
   } catch (error) {
     return errorResponse(error, 400);

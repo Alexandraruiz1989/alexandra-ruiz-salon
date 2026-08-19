@@ -19,6 +19,7 @@ export default function ClientPortalShell({
   const pathname = usePathname();
   const [loading, setLoading] = useState(true);
   const [client, setClient] = useState(null);
+  const [profileRequired, setProfileRequired] = useState(false);
 
   useEffect(() => {
     const start = async () => {
@@ -32,6 +33,7 @@ export default function ClientPortalShell({
       try {
         const data = await portalFetch("/api/client/profile");
         setClient(data.client);
+        setProfileRequired(Boolean(data.profile_required));
       } catch (error) {
         console.error("No se pudo cargar perfil de clienta", error);
       } finally {
@@ -100,6 +102,22 @@ export default function ClientPortalShell({
             </div>
           </div>
         </header>
+
+        {profileRequired && pathname !== "/cliente/perfil" && (
+          <div className="mb-5 rounded-[2rem] border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
+            <p className="font-medium">Completa tu perfil para reservar.</p>
+            <p className="mt-1">
+              Puedes revisar los servicios, pero antes de buscar horarios o
+              confirmar una cita necesitamos tu nombre y teléfono.
+            </p>
+            <Link
+              href="/cliente/perfil?next=/cliente/agenda"
+              className="mt-3 inline-flex rounded-full bg-[#bd7b83] px-5 py-3 text-white transition hover:opacity-90"
+            >
+              Completar perfil
+            </Link>
+          </div>
+        )}
 
         {children}
       </section>

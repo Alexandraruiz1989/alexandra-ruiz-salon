@@ -11,6 +11,12 @@ import {
   timeToMinutes,
   timesOverlap,
 } from "./bookingAvailability";
+import {
+  getClientDetailsFromUser,
+  isClientProfileComplete,
+  normalizeEmail,
+  normalizePhoneDigits,
+} from "./clientPortalProfile.js";
 
 export {
   addMinutesToTime,
@@ -27,13 +33,12 @@ export {
 const CLIENT_COLUMNS =
   "id, full_name, phone, email, client_number, auth_user_id, created_at, updated_at";
 
-export function normalizeEmail(value) {
-  return cleanText(value).toLowerCase();
-}
-
-export function normalizePhoneDigits(value) {
-  return cleanText(value).replace(/\D/g, "");
-}
+export {
+  getClientDetailsFromUser,
+  isClientProfileComplete,
+  normalizeEmail,
+  normalizePhoneDigits,
+};
 
 export function formatMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
@@ -151,16 +156,7 @@ export async function findClientForUser(adminSupabase, user) {
 }
 
 export async function ensureClientForUser(adminSupabase, user, details = {}) {
-  const email = normalizeEmail(details.email || user?.email);
-  const fullName =
-    cleanText(details.full_name) ||
-    cleanText(details.fullName) ||
-    cleanText(user?.user_metadata?.full_name) ||
-    cleanText(user?.user_metadata?.name);
-  const phone =
-    cleanText(details.phone) ||
-    cleanText(user?.user_metadata?.phone) ||
-    cleanText(user?.phone);
+  const { email, fullName, phone } = getClientDetailsFromUser(user, details);
 
   let client = await findClientForUser(adminSupabase, user);
 
@@ -215,6 +211,29 @@ export async function ensureClientForUser(adminSupabase, user, details = {}) {
   if (error) throw error;
 
   return data;
+}
+
+export async function getClientPortalProfile(adminSupabase, user, details = {}) {
+  const normalizedDetails = getClientDetailsFromUser(user, details);
+  let client = await findClientForUser(adminSupabase, user);
+
+  if (
+    client ||
+    (normalizedDetails.fullName &&
+      normalizePhoneDigits(normalizedDetails.phone).length >= 8)
+  ) {
+    client = await ensureClientForUser(adminSupabase, user, {
+      full_name: normalizedDetails.fullName,
+      phone: normalizedDetails.phone,
+      email: normalizedDetails.email,
+    });
+  }
+
+  return {
+    client,
+    profile_complete: isClientProfileComplete(client),
+    profile_required: !isClientProfileComplete(client),
+  };
 }
 
 export async function updateClientProfile(adminSupabase, clientId, details = {}) {

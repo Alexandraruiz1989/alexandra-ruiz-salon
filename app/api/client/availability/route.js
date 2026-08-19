@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import {
   cleanText,
   createClientPortalAdmin,
-  ensureClientForUser,
+  getClientPortalProfile,
   getAuthUserFromRequest,
   getAvailability,
 } from "../../../lib/clientPortalServer";
@@ -31,7 +31,14 @@ export async function POST(request) {
       return errorResponse(session.error, session.status || 401);
     }
 
-    const client = await ensureClientForUser(adminSupabase, session.user);
+    const profile = await getClientPortalProfile(adminSupabase, session.user);
+    if (!profile.profile_complete || !profile.client) {
+      return errorResponse(
+        "Completa tu perfil con nombre y teléfono antes de buscar horarios.",
+        409
+      );
+    }
+    const client = profile.client;
 
     const body = await request.json();
     const result = await getAvailability({
