@@ -5838,9 +5838,15 @@ function AppointmentDetailModal({
     attendance_notes: appointment.attendance_notes || "",
     arrived_late_minutes: appointment.arrived_late_minutes || "",
   });
+  const [depositForm, setDepositForm] = useState({
+    deposit_amount: appointment.deposit_amount ?? "",
+    deposit_payment_method: appointment.deposit_payment_method || "",
+  });
   const [attendanceMessage, setAttendanceMessage] = useState("");
+  const [depositMessage, setDepositMessage] = useState("");
   const [savingAttendance, setSavingAttendance] = useState(false);
   const [savingConfirmation, setSavingConfirmation] = useState(false);
+  const [savingDeposit, setSavingDeposit] = useState(false);
 
 useEffect(() => {
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -5851,6 +5857,15 @@ useEffect(() => {
   });
   setAttendanceMessage("");
 }, [appointment.id, appointment.attendance_status, appointment.attendance_notes, appointment.arrived_late_minutes]);
+
+useEffect(() => {
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  setDepositForm({
+    deposit_amount: appointment.deposit_amount ?? "",
+    deposit_payment_method: appointment.deposit_payment_method || "",
+  });
+  setDepositMessage("");
+}, [appointment.id, appointment.deposit_amount, appointment.deposit_payment_method]);
 
 useEffect(() => {
   const loadRole = async () => {
@@ -5925,6 +5940,7 @@ useEffect(() => {
 const normalizedRole = normalizeRole(currentRole);
 const isAdmin = normalizedRole === "admin";
 const canUpdateAttendance = ["admin", "encargada"].includes(normalizedRole);
+const canManageDeposit = ["admin", "encargada"].includes(normalizedRole);
 const canUseManualWhatsApp = normalizedRole !== "tecnica";
 const canConfirmPortalAppointment =
   canUpdateAttendance && isClientPortalPendingDepositAppointment(appointment);
@@ -6092,6 +6108,72 @@ const confirmPortalAppointment = async () => {
   onAppointmentUpdated?.(appointment.id, payload);
   setAttendanceMessage("Cita confirmada correctamente ✨");
   setSavingConfirmation(false);
+};
+
+const saveAppointmentDeposit = async () => {
+  setDepositMessage("");
+
+  if (!canManageDeposit) {
+    setDepositMessage("Solo admin o encargada pueden registrar anticipos.");
+    return;
+  }
+
+  const rawAmount = String(depositForm.deposit_amount || "").trim();
+  const depositAmount = Number(rawAmount || 0);
+  const depositMethod = String(depositForm.deposit_payment_method || "").trim();
+  const currentAmount = Number(appointment.deposit_amount || 0);
+  const currentMethod = String(appointment.deposit_payment_method || "").trim();
+
+  if (!Number.isFinite(depositAmount) || depositAmount < 0) {
+    setDepositMessage("Escribe un monto de anticipo válido.");
+    return;
+  }
+
+  if (depositAmount <= 0) {
+    setDepositMessage("Captura el monto recibido antes de registrar el anticipo.");
+    return;
+  }
+
+  if (!depositMethod) {
+    setDepositMessage("Selecciona el método con el que se recibió el anticipo.");
+    return;
+  }
+
+  if (currentAmount === depositAmount && currentMethod === depositMethod) {
+    setDepositMessage("El anticipo ya estaba registrado con esos datos.");
+    return;
+  }
+
+  const payload = {
+    deposit_amount: depositAmount,
+    deposit_payment_method: depositMethod,
+    updated_at: new Date().toISOString(),
+  };
+
+  setSavingDeposit(true);
+
+  const { data, error } = await supabase
+    .from("appointments")
+    .update(payload)
+    .eq("id", appointment.id)
+    .select("id")
+    .maybeSingle();
+
+  if (error || !data) {
+    setDepositMessage(
+      error?.message
+        ? `No se pudo registrar el anticipo: ${error.message}`
+        : "No se encontró la cita para registrar el anticipo."
+    );
+    setSavingDeposit(false);
+    return;
+  }
+
+  onAppointmentUpdated?.(appointment.id, payload);
+  setDepositMessage(
+    "Anticipo registrado en la cita. La confirmación sigue siendo manual."
+  );
+  setSavingDeposit(false);
 };
 
 const goToPayment = () => {
@@ -6282,6 +6364,112 @@ const deleteAppointment = async () => {
             >
               {savingConfirmation ? "Confirmando..." : "Confirmar cita"}
             </button>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-[#ead8d4] bg-[#fffdfb] p-4">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                Gestión de anticipo
+              </p>
+              <p className="mt-2 text-sm leading-6 text-[#68777c]">
+                El anticipo se registra en esta misma cita y después se
+                descuenta en Cobros. Registrar el anticipo no confirma la cita
+                automáticamente.
+              </p>
+            </div>
+            <span
+              className={`w-fit rounded-full px-3 py-1 text-xs font-medium ${
+                Number(appointment.deposit_amount || 0) > 0
+                  ? "bg-green-50 text-green-700"
+                  : "bg-amber-50 text-amber-700"
+              }`}
+            >
+              {Number(appointment.deposit_amount || 0) > 0
+                ? "Anticipo registrado"
+                : "Anticipo pendiente"}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Monto recibido
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8a5f63]">
+                  $
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={depositForm.deposit_amount}
+                  onChange={(event) =>
+                    setDepositForm((current) => ({
+                      ...current,
+                      deposit_amount: event.target.value,
+                    }))
+                  }
+                  disabled={!canManageDeposit || savingDeposit}
+                  className="w-full rounded-2xl border border-[#dde3e6] bg-white px-8 py-3 outline-none disabled:bg-[#f7f9fa] disabled:text-[#8a969a]"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm text-[#68777c]">
+                Método
+              </label>
+              <select
+                value={depositForm.deposit_payment_method}
+                onChange={(event) =>
+                  setDepositForm((current) => ({
+                    ...current,
+                    deposit_payment_method: event.target.value,
+                  }))
+                }
+                disabled={!canManageDeposit || savingDeposit}
+                className="w-full rounded-2xl border border-[#dde3e6] bg-white px-4 py-3 outline-none disabled:bg-[#f7f9fa] disabled:text-[#8a969a]"
+              >
+                <option value="">Seleccionar método</option>
+                <option value="Efectivo">Efectivo</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Tarjeta">Tarjeta</option>
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <button
+                type="button"
+                disabled={!canManageDeposit || savingDeposit}
+                onClick={saveAppointmentDeposit}
+                className="w-full rounded-full bg-[#bd7b83] px-5 py-3 text-sm text-white transition hover:opacity-90 disabled:opacity-60"
+              >
+                {savingDeposit ? "Registrando..." : "Registrar anticipo"}
+              </button>
+            </div>
+          </div>
+
+          {!canManageDeposit && (
+            <p className="mt-3 text-xs text-[#8a969a]">
+              Visible para técnicas. Registro disponible para admin/encargada.
+            </p>
+          )}
+
+          {depositMessage && (
+            <div
+              className={`mt-4 rounded-2xl px-4 py-3 text-sm font-medium ${
+                depositMessage.includes("registrado") ||
+                depositMessage.includes("ya estaba")
+                  ? "bg-green-600 text-white"
+                  : "bg-red-600 text-white"
+              }`}
+            >
+              {depositMessage}
+            </div>
           )}
         </div>
 

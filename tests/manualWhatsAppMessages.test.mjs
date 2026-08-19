@@ -177,6 +177,26 @@ test("recordatorios: el mensaje incluye datos de la cita", () => {
   assert.match(reminder, /10:30/);
 });
 
+test("anticipos manuales: existe opción editable sin envío automático", () => {
+  const messages = buildAppointmentManualWhatsAppMessages(
+    appointment({ deposit_amount: 150 }),
+    {
+      reviewBaseUrl: "https://example.test",
+    }
+  );
+  const depositMessage = messages.find(
+    (item) => item.key === "deposit_confirmation"
+  );
+  const url = buildWhatsAppUrl(appointment().clients.phone, depositMessage.message);
+
+  assert.equal(depositMessage.label, "Anticipo / confirmación");
+  assert.match(depositMessage.message, /horario.*apartado/i);
+  assert.match(depositMessage.message, /\$150\.00 MXN/);
+  assert.match(url, /^https:\/\/wa\.me\/529991112233\?text=/);
+  assert.equal(decodeMessage(url), depositMessage.message);
+  assert.doesNotMatch(depositMessage.message, /Cloud API|enviado automáticamente/i);
+});
+
 test("plantillas: reemplaza appointment_date sin exponer ISO crudo", () => {
   const message = renderAppointmentMessageTemplate(
     "Fecha: {appointment_date}",

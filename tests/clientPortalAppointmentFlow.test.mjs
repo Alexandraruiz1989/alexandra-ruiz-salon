@@ -1331,3 +1331,86 @@ test("portal 68: Mis citas usa etiqueta amigable pendiente de anticipo", () => {
   assert.match(appointmentsPage, /getClientAppointmentStatusLabel/);
   assert.match(appointmentsPage, /status_label/);
 });
+
+test("portal 69: Agenda registra anticipo en la cita existente sin crear pago", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  const depositSource =
+    agendaPage.match(/const saveAppointmentDeposit[\s\S]*?const goToPayment/)?.[0] ||
+    "";
+
+  assert.match(agendaPage, /Gestión de anticipo/);
+  assert.match(depositSource, /deposit_amount: depositAmount/);
+  assert.match(depositSource, /deposit_payment_method: depositMethod/);
+  assert.match(depositSource, /\.from\("appointments"\)/);
+  assert.match(depositSource, /\.update\(payload\)/);
+  assert.match(depositSource, /\.eq\("id", appointment\.id\)/);
+  assert.doesNotMatch(depositSource, /\.from\("payments"\)/);
+  assert.doesNotMatch(depositSource, /\.insert\(/);
+});
+
+test("portal 70: registrar anticipo no confirma automáticamente", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  const depositSource =
+    agendaPage.match(/const saveAppointmentDeposit[\s\S]*?const goToPayment/)?.[0] ||
+    "";
+
+  assert.doesNotMatch(depositSource, /confirmation_status/);
+  assert.doesNotMatch(depositSource, /confirmed_at/);
+  assert.match(depositSource, /La confirmación sigue siendo manual/);
+});
+
+test("portal 71: confirmación administrativa es idempotente y no duplica", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  const confirmationSource =
+    agendaPage.match(/const confirmPortalAppointment[\s\S]*?const saveAppointmentDeposit/)?.[0] ||
+    "";
+
+  assert.match(confirmationSource, /confirmation_status: "confirmada"/);
+  assert.match(confirmationSource, /\.eq\("id", appointment\.id\)/);
+  assert.match(confirmationSource, /\.eq\("confirmation_status", "pendiente"\)/);
+  assert.match(confirmationSource, /onAppointmentUpdated\?\.\(appointment\.id, payload\)/);
+  assert.doesNotMatch(confirmationSource, /\.insert\(/);
+  assert.doesNotMatch(confirmationSource, /appointment_services/);
+});
+
+test("portal 72: clienta no puede registrar anticipo ni confirmarse desde APIs del portal", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.doesNotMatch(appointmentsRoute, /deposit_payment_method/);
+  assert.doesNotMatch(appointmentsRoute, /confirmation_status: "confirmada"/);
+  assert.match(appointmentsRoute, /\.eq\("client_id", client\.id\)/);
+  assert.doesNotMatch(appointmentsRoute, /client_id.*body/i);
+});
+
+test("portal 73: Mis citas solo lee citas de la clienta autenticada", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(appointmentsRoute, /const client = await ensureClientForUser/);
+  assert.match(appointmentsRoute, /\.eq\("client_id", client\.id\)/);
+});
+
+test("portal 74: Cobros sigue descontando anticipo desde appointments", () => {
+  const cobrosPage = readFileSync(
+    new URL("../app/admin/cobros/page.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(cobrosPage, /depositAmount: selectedAppointment\?\.deposit_amount/);
+  assert.match(cobrosPage, /Anticipo registrado/);
+  assert.match(cobrosPage, /create_payment_transaction/);
+});

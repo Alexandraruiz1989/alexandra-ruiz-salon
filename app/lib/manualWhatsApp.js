@@ -237,6 +237,14 @@ export function getAppointmentReminderTimeForWhatsApp(appointment) {
   );
 }
 
+function formatWhatsAppMoney(value) {
+  const amount = Number(value || 0);
+
+  if (!Number.isFinite(amount) || amount <= 0) return "";
+
+  return `$${amount.toFixed(2)} MXN`;
+}
+
 export function buildServicesWithStaffForWhatsApp(appointment) {
   const services = getOrderedActiveAppointmentServices(appointment);
 
@@ -321,6 +329,7 @@ export function buildAppointmentManualWhatsAppMessages(
   const time = getAppointmentReminderTimeForWhatsApp(appointment);
   const servicesText = getAppointmentServicesTextForWhatsApp(appointment);
   const businessDisplayName = String(businessName || DEFAULT_BUSINESS_NAME).trim();
+  const depositAmountText = formatWhatsAppMoney(appointment?.deposit_amount);
   const reminderTemplate =
     getAppointmentReminderTemplate(templates) || DEFAULT_APPOINTMENT_REMINDER_TEMPLATE;
   const reviewLink =
@@ -335,6 +344,15 @@ export function buildAppointmentManualWhatsAppMessages(
       message: renderAppointmentMessageTemplate(reminderTemplate, appointment, {
         businessName: businessDisplayName,
       }),
+    },
+    {
+      key: "deposit_confirmation",
+      label: "Anticipo / confirmación",
+      message: `Hola ${firstName} 💕 Tu horario del ${formatAppointmentDateForWhatsApp(
+        appointment?.appointment_date
+      )} a las ${time} está apartado mientras completamos el proceso de anticipo y confirmación.${
+        depositAmountText ? `\n\nAnticipo registrado en la cita: ${depositAmountText}.` : ""
+      }\n\nTe compartimos por aquí los detalles para continuar. Puedes respondernos si tienes alguna duda. ✨`,
     },
     {
       key: "on_the_way",
