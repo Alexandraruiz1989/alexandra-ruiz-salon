@@ -13,8 +13,11 @@ import {
   isAppointmentEligibleForManualWhatsApp,
 } from "../../lib/manualWhatsApp";
 import {
+  formatClientPortalConfirmationDeadline,
   getClientAppointmentStatusLabel,
+  isClientPortalAppointmentExpired,
   isClientPortalPendingDepositAppointment,
+  appointmentBlocksAvailability,
 } from "../../lib/clientPortalAppointmentStatus.js";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
@@ -212,11 +215,31 @@ function getAppointmentStatusBadgeClass(appointment) {
     return "bg-red-100 text-red-800";
   }
 
+  if (label === "Vencida") {
+    return "bg-slate-100 text-slate-700";
+  }
+
   if (label === "Pendiente de anticipo") {
     return "bg-amber-50 text-amber-800";
   }
 
   return "bg-yellow-50 text-yellow-700";
+}
+
+function appointmentServiceLineBlocksAvailability(serviceLine = {}) {
+  const status = String(serviceLine.status || "agendado").trim().toLowerCase();
+  return ![
+    "cancelada",
+    "cancelado",
+    "cancelled",
+    "canceled",
+    "rechazada",
+    "eliminada",
+    "eliminado",
+    "deleted",
+    "inactiva",
+    "inactivo",
+  ].includes(status);
 }
 
 function normalizeServiceText(text) {
@@ -2126,6 +2149,7 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
         service_date,
         start_time,
         end_time,
+        status,
         appointment_id,
         services (
           name
@@ -2135,6 +2159,9 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
         ),
         appointments (
           status,
+          confirmation_status,
+          booking_source,
+          confirmation_deadline_at,
           clients (
             full_name
           )
@@ -2151,10 +2178,8 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
     }
 
     const existingServices = (data || []).filter((item) => {
-      const status = item.appointments?.status || "";
-
-      if (status === "cancelada" || status === "cancelado") return false;
-
+      if (!appointmentServiceLineBlocksAvailability(item)) return false;
+      if (!appointmentBlocksAvailability(item.appointments)) return false;
       if (editingAppointmentId && item.appointment_id === editingAppointmentId) {
         return false;
       }
@@ -2221,8 +2246,12 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
         service_date,
         start_time,
         end_time,
+        status,
         appointments (
-          status
+          status,
+          confirmation_status,
+          booking_source,
+          confirmation_deadline_at
         )
       `
       )
@@ -2236,10 +2265,8 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
     }
 
     const existingServices = (data || []).filter((item) => {
-      const status = item.appointments?.status || "";
-
-      if (status === "cancelada" || status === "cancelado") return false;
-
+      if (!appointmentServiceLineBlocksAvailability(item)) return false;
+      if (!appointmentBlocksAvailability(item.appointments)) return false;
       if (editingAppointmentId && item.appointment_id === editingAppointmentId) {
         return false;
       }
@@ -2365,9 +2392,8 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
     }
 
     const hasAppointmentConflict = existingServices.some((item) => {
-      const status = item.appointments?.status || "";
-
-      if (status === "cancelada" || status === "cancelado") return false;
+      if (!appointmentServiceLineBlocksAvailability(item)) return false;
+      if (!appointmentBlocksAvailability(item.appointments)) return false;
 
       if (editingAppointmentId && item.appointment_id === editingAppointmentId) {
         return false;
@@ -2445,8 +2471,12 @@ const handleAppointmentLocalUpdate = (appointmentId, changes) => {
         service_date,
         start_time,
         end_time,
+        status,
         appointments (
-          status
+          status,
+          confirmation_status,
+          booking_source,
+          confirmation_deadline_at
         )
       `
       )
@@ -5942,6 +5972,10 @@ const isAdmin = normalizedRole === "admin";
 const canUpdateAttendance = ["admin", "encargada"].includes(normalizedRole);
 const canManageDeposit = ["admin", "encargada"].includes(normalizedRole);
 const canUseManualWhatsApp = normalizedRole !== "tecnica";
+const isExpiredPortalAppointment = isClientPortalAppointmentExpired(appointment);
+const confirmationDeadlineLabel = formatClientPortalConfirmationDeadline(
+  appointment.confirmation_deadline_at
+);
 const canConfirmPortalAppointment =
   canUpdateAttendance && isClientPortalPendingDepositAppointment(appointment);
 const currentAttendanceOption = getAttendanceOption(
@@ -6067,8 +6101,13 @@ const confirmPortalAppointment = async () => {
     return;
   }
 
+  if (isClientPortalAppointmentExpired(appointment)) {
+    setAttendanceMessage("Esta solicitud ya venció y no puede confirmarse normalmente.");
+    return;
+  }
+
   if (!isClientPortalPendingDepositAppointment(appointment)) {
-    setAttendanceMessage("Esta cita no está pendiente de anticipo.");
+    setAttendanceMessage("Esta cita no está pendiente de anticipo vigente.");
     return;
   }
 
@@ -6087,11 +6126,17 @@ const confirmPortalAppointment = async () => {
 
   setSavingConfirmation(true);
 
-  const { data, error } = await supabase
+  let confirmationQuery = supabase
     .from("appointments")
     .update(payload)
     .eq("id", appointment.id)
-    .eq("confirmation_status", "pendiente")
+    .eq("confirmation_status", "pendiente");
+
+  if (appointment.confirmation_deadline_at) {
+    confirmationQuery = confirmationQuery.gt("confirmation_deadline_at", now);
+  }
+
+  const { data, error } = await confirmationQuery
     .select("id")
     .maybeSingle();
 
@@ -6099,7 +6144,7 @@ const confirmPortalAppointment = async () => {
     setAttendanceMessage(
       error?.message
         ? `No se pudo confirmar la cita: ${error.message}`
-        : "La cita ya no está pendiente de anticipo."
+        : "La cita ya no está pendiente de anticipo vigente."
     );
     setSavingConfirmation(false);
     return;
@@ -6351,6 +6396,15 @@ const deleteAppointment = async () => {
               <span className="text-sm leading-6 text-[#765d5f]">
                 El horario está apartado mientras el salón gestiona el anticipo
                 y confirma la cita.
+                {confirmationDeadlineLabel
+                  ? ` Confirmar antes de: ${confirmationDeadlineLabel}.`
+                  : ""}
+              </span>
+            )}
+            {isExpiredPortalAppointment && (
+              <span className="text-sm leading-6 text-slate-600">
+                Esta solicitud venció al no confirmarse dentro del tiempo
+                establecido.
               </span>
             )}
           </div>

@@ -68,6 +68,7 @@ function normalizeRpcPayload(payload, expected) {
     startTime: clean(source.startTime) || null,
     endTime: clean(source.endTime) || null,
     staffId: clean(source.staffId) || null,
+    confirmationDeadlineAt: clean(source.confirmationDeadlineAt) || null,
     errorCode: clean(source.errorCode) || null,
     errorMessage:
       status === "created" || status === "already_created"

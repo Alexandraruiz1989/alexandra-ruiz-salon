@@ -1,3 +1,5 @@
+import { appointmentBlocksAvailability } from "./clientPortalAppointmentStatus.js";
+
 export function cleanText(value) {
   return String(value || "").trim();
 }
@@ -38,6 +40,22 @@ export function timesOverlap(startA, endA, startB, endB) {
   return aStart < bEnd && bStart < aEnd;
 }
 
+function appointmentServiceLineBlocksAvailability(serviceLine = {}) {
+  const status = cleanText(serviceLine.status || "agendado").toLowerCase();
+  return ![
+    "cancelada",
+    "cancelado",
+    "cancelled",
+    "canceled",
+    "rechazada",
+    "eliminada",
+    "eliminado",
+    "deleted",
+    "inactiva",
+    "inactivo",
+  ].includes(status);
+}
+
 export function getDayOfWeek(dateString) {
   if (!dateString) return null;
   return new Date(`${dateString}T00:00:00`).getDay();
@@ -47,13 +65,6 @@ export function getServiceDuration(service) {
   return (
     Number(service?.duration_minutes || 0) +
     Number(service?.cleanup_minutes || 0)
-  );
-}
-
-function isCancelledAppointment(status) {
-  const normalized = cleanText(status).toLowerCase();
-  return ["cancelada", "cancelado", "cancelled", "rechazada"].includes(
-    normalized
   );
 }
 
@@ -126,6 +137,7 @@ function staffIsFree({
   schedules,
   existingServices,
   blocksForDate,
+  now,
 }) {
   const schedule = getScheduleForStaff(person.id, date, schedules);
   const endTime = addMinutesToTime(startTime, totalDuration);
@@ -149,8 +161,11 @@ function staffIsFree({
   }
 
   const appointmentConflict = (existingServices || []).some((item) => {
+    if (!appointmentServiceLineBlocksAvailability(item)) return false;
     if (item.staff_id !== person.id) return false;
-    if (isCancelledAppointment(item.appointments?.status)) return false;
+    if (!appointmentBlocksAvailability(item.appointments, { now })) {
+      return false;
+    }
     return timesOverlap(startTime, endTime, item.start_time, item.end_time);
   });
 
@@ -167,6 +182,7 @@ function resourcesAreFree({
   existingServices,
   resources,
   serviceResources,
+  now,
 }) {
   const activeServiceResources = (serviceResources || []).filter(
     (item) => item.active !== false
@@ -193,7 +209,8 @@ function resourcesAreFree({
 
       const existingUsage = (existingServices || []).reduce((sum, existing) => {
         if (
-          isCancelledAppointment(existing.appointments?.status) ||
+          !appointmentServiceLineBlocksAvailability(existing) ||
+          !appointmentBlocksAvailability(existing.appointments, { now }) ||
           !timesOverlap(
             segment.start_time,
             segment.end_time,
@@ -255,6 +272,7 @@ export async function getAvailability({
   requestedStartTime = "",
   limit = 24,
   allowMissingTimeBlocks = false,
+  now = new Date(),
 }) {
   const selectedDate = cleanText(date);
   const ids = [...new Set((serviceIds || []).map(cleanText).filter(Boolean))];
@@ -296,8 +314,12 @@ export async function getAvailability({
         service_date,
         start_time,
         end_time,
+        status,
         appointments (
-          status
+          status,
+          confirmation_status,
+          booking_source,
+          confirmation_deadline_at
         )
       `
       )
@@ -374,6 +396,7 @@ export async function getAvailability({
         schedules: schedulesResult.data || [],
         existingServices: existingServicesResult.data || [],
         blocksForDate: blocksResult.data || [],
+        now,
       });
 
       if (!isFree) continue;
@@ -390,6 +413,7 @@ export async function getAvailability({
         existingServices: existingServicesResult.data || [],
         resources: resourcesResult.data || [],
         serviceResources: serviceResourcesResult.data || [],
+        now,
       });
 
       if (!resourcesFree) continue;

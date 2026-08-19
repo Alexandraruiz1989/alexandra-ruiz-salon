@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -20,7 +20,16 @@ import {
   groupClientPortalServicesByCategory,
   mapClientPortalCatalog,
 } from "../app/lib/clientPortalCatalog.js";
-import { getClientAppointmentStatusLabel } from "../app/lib/clientPortalAppointmentStatus.js";
+import {
+  buildClientPortalDeadlineMessage,
+  calculateClientPortalConfirmationDeadline,
+  CLIENT_PORTAL_CONFIRMATION_TIME_ZONE,
+  formatClientPortalConfirmationDeadline,
+  getClientAppointmentStatusLabel,
+  isClientPortalAppointmentExpired,
+  isClientPortalPendingDepositAppointment,
+  appointmentBlocksAvailability,
+} from "../app/lib/clientPortalAppointmentStatus.js";
 import {
   isClientAuthUser,
   isClientProfileComplete,
@@ -1238,10 +1247,10 @@ test("portal 64: autoagenda responde solicitud pendiente y no cita confirmada", 
     "utf8"
   );
 
-  assert.match(appointmentsRoute, /status_label: "Pendiente de anticipo"/);
-  assert.match(appointmentsRoute, /booking_source: "cliente_portal"/);
-  assert.match(appointmentsRoute, /confirmation_status: "pendiente"/);
-  assert.match(appointmentsRoute, /Tu horario fue apartado/);
+  assert.match(appointmentsRoute, /status_label: statusLabel/);
+  assert.match(appointmentsRoute, /cliente_portal/);
+  assert.match(appointmentsRoute, /pendiente/);
+  assert.match(appointmentsRoute, /confirmationDeadlineMessage/);
   assert.doesNotMatch(appointmentsRoute, /Tu cita está confirmada/);
 });
 
@@ -1413,4 +1422,297 @@ test("portal 74: Cobros sigue descontando anticipo desde appointments", () => {
   assert.match(cobrosPage, /depositAmount: selectedAppointment\?\.deposit_amount/);
   assert.match(cobrosPage, /Anticipo registrado/);
   assert.match(cobrosPage, /create_payment_transaction/);
+});
+
+function hoursBetween(left, right) {
+  return (new Date(right).getTime() - new Date(left).getTime()) / 36e5;
+}
+
+test("portal 75: política 04:59 Mérida usa ventana nocturna de 10 horas", () => {
+  const createdAt = "2026-08-19T04:59:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 10);
+});
+
+test("portal 76: política 05:00 Mérida usa ventana diurna de 3 horas", () => {
+  const createdAt = "2026-08-19T05:00:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 3);
+});
+
+test("portal 77: política 10:00 Mérida usa ventana diurna de 3 horas", () => {
+  const createdAt = "2026-08-19T10:00:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 3);
+});
+
+test("portal 78: política 21:59 Mérida usa ventana diurna de 3 horas", () => {
+  const createdAt = "2026-08-19T21:59:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 3);
+});
+
+test("portal 79: política 22:00 Mérida usa ventana nocturna de 10 horas", () => {
+  const createdAt = "2026-08-19T22:00:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 10);
+});
+
+test("portal 80: política 03:00 Mérida usa ventana nocturna de 10 horas", () => {
+  const createdAt = "2026-08-19T03:00:00-06:00";
+  const deadline = calculateClientPortalConfirmationDeadline(createdAt);
+  assert.equal(hoursBetween(createdAt, deadline), 10);
+  assert.equal(CLIENT_PORTAL_CONFIRMATION_TIME_ZONE, "America/Merida");
+});
+
+test("portal 81: pendiente vigente bloquea disponibilidad", async () => {
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: {
+            status: "agendada",
+            confirmation_status: "pendiente",
+            booking_source: "cliente_portal",
+            confirmation_deadline_at: "2026-08-01T18:00:00.000Z",
+          },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+    now: new Date("2026-08-01T17:59:00.000Z"),
+  });
+
+  assert.equal(result.slots.length, 0);
+});
+
+test("portal 82: pendiente vencida no bloquea disponibilidad", async () => {
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: {
+            status: "agendada",
+            confirmation_status: "pendiente",
+            booking_source: "cliente_portal",
+            confirmation_deadline_at: "2026-08-01T18:00:00.000Z",
+          },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+    now: new Date("2026-08-01T18:00:00.000Z"),
+  });
+
+  assert.equal(result.slots.length, 1);
+});
+
+test("portal 83: vencida conserva histórico y no bloquea", async () => {
+  assert.equal(
+    appointmentBlocksAvailability({
+      status: "agendada",
+      confirmation_status: "vencida",
+      booking_source: "cliente_portal",
+    }),
+    false
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/202608190001_client_booking_expiration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.doesNotMatch(migration, /delete\s+from\s+public\.appointments/i);
+});
+
+test("portal 84: confirmada y cancelada no vencen automáticamente", () => {
+  const pastDeadline = "2026-08-01T18:00:00.000Z";
+  const current = new Date("2026-08-01T19:00:00.000Z");
+  assert.equal(
+    isClientPortalAppointmentExpired(
+      {
+        status: "agendada",
+        confirmation_status: "confirmada",
+        booking_source: "cliente_portal",
+        confirmation_deadline_at: pastDeadline,
+      },
+      { now: current }
+    ),
+    false
+  );
+  assert.equal(
+    isClientPortalAppointmentExpired(
+      {
+        status: "cancelada",
+        confirmation_status: "cancelada",
+        booking_source: "cliente_portal",
+        confirmation_deadline_at: pastDeadline,
+      },
+      { now: current }
+    ),
+    false
+  );
+});
+
+test("portal 85: confirmación de vencida falla por UI y por filtro de actualización", () => {
+  assert.equal(
+    isClientPortalPendingDepositAppointment(
+      {
+        status: "agendada",
+        confirmation_status: "pendiente",
+        booking_source: "cliente_portal",
+        confirmation_deadline_at: "2026-08-01T18:00:00.000Z",
+      },
+      { now: new Date("2026-08-01T18:00:00.000Z") }
+    ),
+    false
+  );
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(agendaPage, /\.gt\("confirmation_deadline_at", now\)/);
+  assert.match(agendaPage, /no puede confirmarse normalmente/);
+});
+
+test("portal 86: anticipo no se borra cuando se vence una solicitud", () => {
+  const statusSource = readFileSync(
+    new URL("../app/lib/clientPortalAppointmentStatus.js", import.meta.url),
+    "utf8"
+  );
+  const reconciliationSource =
+    statusSource.match(
+      /export async function reconcileExpiredClientPortalAppointments[\s\S]*?\n}/
+    )?.[0] || "";
+  assert.match(reconciliationSource, /confirmation_status/);
+  assert.doesNotMatch(reconciliationSource, /deposit_amount/);
+  assert.doesNotMatch(reconciliationSource, /deposit_payment_method/);
+});
+
+test("portal 87: admin ve deadline y etiqueta vencida sin rediseñar Agenda", () => {
+  const agendaPage = readFileSync(
+    new URL("../app/admin/agenda/page.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(agendaPage, /Confirmar antes de:/);
+  assert.match(agendaPage, /Vencida/);
+  assert.match(agendaPage, /Pendiente de anticipo/);
+});
+
+test("portal 88: clienta ve deadline concreto y mensaje de vencimiento", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+  const misCitasPage = readFileSync(
+    new URL("../app/cliente/mis-citas/page.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(appointmentsRoute, /confirmation_deadline_message/);
+  assert.match(
+    readFileSync(
+      new URL("../app/lib/clientPortalAppointmentStatus.js", import.meta.url),
+      "utf8"
+    ),
+    /Tu horario está apartado hasta/
+  );
+  assert.match(misCitasPage, /En proceso de confirmación/);
+  assert.match(
+    misCitasPage,
+    /Esta solicitud venció al no confirmarse dentro del tiempo establecido/
+  );
+});
+
+test("portal 89: mensaje de deadline incluye fecha si cae en otro día", () => {
+  const deadline = "2026-08-20T14:00:00.000Z";
+  const message = buildClientPortalDeadlineMessage(deadline, {
+    now: new Date("2026-08-19T12:00:00.000Z"),
+  });
+  assert.match(message, /20 de agosto de 2026/);
+  assert.doesNotMatch(message, /undefined|null|00:00/);
+});
+
+test("portal 90: reserva después del deadline puede reutilizar el slot", async () => {
+  const result = await getAvailability({
+    adminSupabase: createAvailabilitySupabase({
+      existingServices: [
+        {
+          staff_id: staff().id,
+          service_date: "2026-08-01",
+          start_time: "09:00",
+          end_time: "10:00",
+          appointments: {
+            status: "agendada",
+            confirmation_status: "pendiente",
+            booking_source: "cliente_portal",
+            confirmation_deadline_at: "2026-08-01T18:00:00.000Z",
+          },
+        },
+      ],
+    }),
+    date: "2026-08-01",
+    serviceIds: [service().id],
+    requestedStartTime: "09:00",
+    now: new Date("2026-08-01T18:00:01.000Z"),
+  });
+  assert.equal(result.slots.length, 1);
+});
+
+test("portal 91: RPC transaccional guarda deadline y protege concurrencia", () => {
+  const sql = readFileSync(
+    new URL(
+      "../supabase/migrations/202608190001_client_booking_expiration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(sql, /add column if not exists confirmation_deadline_at/i);
+  assert.match(sql, /client_portal_confirmation_deadline/);
+  assert.match(sql, /appointment_blocks_availability/);
+  assert.match(sql, /confirmationDeadlineAt/);
+  assert.match(sql, /pg_advisory_xact_lock/);
+});
+
+test("portal 92: /clientes redirige server-side a /cliente y /cliente sigue vigente", () => {
+  const aliasPath = new URL("../app/clientes/page.js", import.meta.url);
+  const portalPath = new URL("../app/cliente/page.js", import.meta.url);
+  assert.equal(existsSync(aliasPath), true);
+  assert.equal(existsSync(portalPath), true);
+  const aliasSource = readFileSync(aliasPath, "utf8");
+  assert.match(aliasSource, /redirect\("\/cliente"\)/);
+});
+
+test("portal 93: bot no participa en vencimiento del portal", () => {
+  const appointmentsRoute = readFileSync(
+    new URL("../app/api/client/appointments/route.js", import.meta.url),
+    "utf8"
+  );
+  const availabilityRoute = readFileSync(
+    new URL("../app/api/client/availability/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.doesNotMatch(appointmentsRoute, /BOT_/);
+  assert.doesNotMatch(availabilityRoute, /BOT_/);
+});
+
+test("portal 94: el formateo usa Mérida sin desplazamiento UTC crudo", () => {
+  const label = formatClientPortalConfirmationDeadline(
+    "2026-08-19T16:00:00.000Z",
+    { now: new Date("2026-08-19T15:00:00.000Z") }
+  );
+  assert.match(label, /10:00 AM/);
+  assert.doesNotMatch(label, /T16:00|Z|undefined|null/);
 });

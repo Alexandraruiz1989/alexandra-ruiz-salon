@@ -78,6 +78,7 @@ function safeResult({
   appointmentId = null,
   clientId = null,
   servicesCreated = 0,
+  confirmationDeadlineAt = null,
   isReplay = false,
   idempotencyKey = "",
   errorMessage = null,
@@ -91,6 +92,7 @@ function safeResult({
     appointmentId,
     clientId,
     servicesCreated: Number(servicesCreated || 0),
+    confirmationDeadlineAt,
     isReplay,
     idempotencyKey,
     errorMessage:
@@ -126,6 +128,7 @@ function normalizeWriterResult(result, context) {
     appointmentId,
     clientId: String(result?.clientId || "").trim() || null,
     servicesCreated,
+    confirmationDeadlineAt: result?.confirmationDeadlineAt || null,
     isReplay: status === "already_created" || result?.isReplay === true,
     errorMessage: created
       ? null

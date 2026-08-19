@@ -521,6 +521,11 @@ export default function ClienteAgendaPage() {
                     Estado:{" "}
                     {createdAppointment.status_label || "Pendiente de anticipo"}.
                   </p>
+                  {createdAppointment.confirmation_deadline_message && (
+                    <p className="mt-2 font-medium text-green-900">
+                      {createdAppointment.confirmation_deadline_message}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

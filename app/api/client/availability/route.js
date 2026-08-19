@@ -11,6 +11,7 @@ import {
   isPortalBookableService,
   slotMeetsMinimumNotice,
 } from "../../../lib/appointmentWriteContracts.js";
+import { reconcileExpiredClientPortalAppointments } from "../../../lib/clientPortalAppointmentStatus.js";
 
 function errorResponse(error, status = 400) {
   return NextResponse.json(
@@ -41,6 +42,11 @@ export async function POST(request) {
     const client = profile.client;
 
     const body = await request.json();
+    const reconciliation = await reconcileExpiredClientPortalAppointments(
+      adminSupabase
+    );
+    if (reconciliation.error) throw reconciliation.error;
+
     const result = await getAvailability({
       adminSupabase,
       date: cleanText(body.date),

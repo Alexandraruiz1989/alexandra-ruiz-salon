@@ -16,6 +16,29 @@ function statusLabel(appointment) {
   return appointment.status_label || getClientAppointmentStatusLabel(appointment);
 }
 
+function clientFacingStatusLabel(appointment) {
+  const label = statusLabel(appointment);
+  return label === "Pendiente de anticipo" ? "En proceso de confirmación" : label;
+}
+
+function appointmentStatusMessage(appointment) {
+  if (statusLabel(appointment) === "Vencida") {
+    return (
+      appointment.confirmation_deadline_message ||
+      "Esta solicitud venció al no confirmarse dentro del tiempo establecido."
+    );
+  }
+
+  if (statusLabel(appointment) === "Pendiente de anticipo") {
+    return (
+      appointment.confirmation_deadline_message ||
+      "Tu horario está apartado mientras validamos tu anticipo."
+    );
+  }
+
+  return "";
+}
+
 function formatServiceWithStaff(service) {
   return service.staff_name ? `${service.name} — con ${service.staff_name}` : service.name;
 }
@@ -42,9 +65,15 @@ function AppointmentCard({
           </p>
         </div>
         <span className="w-fit rounded-full bg-[#fff3f1] px-3 py-1 text-sm text-[#9a6067]">
-          {statusLabel(appointment)}
+          {clientFacingStatusLabel(appointment)}
         </span>
       </div>
+
+      {appointmentStatusMessage(appointment) && (
+        <div className="mt-4 rounded-2xl bg-[#fff8f6] p-3 text-sm leading-6 text-[#765d5f]">
+          {appointmentStatusMessage(appointment)}
+        </div>
+      )}
 
       <div className="mt-4 grid gap-3 text-sm text-[#765d5f] sm:grid-cols-2">
         <div className="rounded-2xl bg-[#fff8f6] p-3">
@@ -150,9 +179,11 @@ export default function ClienteMisCitasPage() {
     const past = [];
 
     appointments.forEach((appointment) => {
-      const cancelled = statusLabel(appointment) === "Cancelada";
+      const inactive = ["Cancelada", "Vencida"].includes(
+        statusLabel(appointment)
+      );
 
-      if (appointment.appointment_date >= today && !cancelled) {
+      if (appointment.appointment_date >= today && !inactive) {
         next.push(appointment);
       } else {
         past.push(appointment);

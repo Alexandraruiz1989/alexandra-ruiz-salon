@@ -21,7 +21,13 @@ import {
   slotMeetsMinimumNotice,
 } from "../../../lib/appointmentWriteContracts.js";
 import { createAppointmentTransactionalRepository } from "../../../lib/appointmentTransactionalRepository.js";
-import { getClientAppointmentStatusLabel } from "../../../lib/clientPortalAppointmentStatus.js";
+import {
+  buildClientPortalDeadlineMessage,
+  formatClientPortalConfirmationDeadline,
+  getClientAppointmentStatusLabel,
+  isClientPortalAppointmentExpired,
+  reconcileExpiredClientPortalAppointments,
+} from "../../../lib/clientPortalAppointmentStatus.js";
 
 function errorResponse(error, status = 400) {
   return NextResponse.json(
@@ -50,8 +56,13 @@ function canClientCancelAppointment(appointment) {
     appointment.confirmation_status || appointment.attendance_status
   ).toLowerCase();
 
+  if (isClientPortalAppointmentExpired(appointment)) return false;
   if (["cancelada", "cancelado", "realizada"].includes(status)) return false;
-  if (["cancelada", "rechazada", "realizada"].includes(confirmationStatus)) {
+  if (
+    ["cancelada", "rechazada", "realizada", "vencida"].includes(
+      confirmationStatus
+    )
+  ) {
     return false;
   }
 
@@ -97,6 +108,11 @@ function mapAppointmentForClient(appointment) {
     Number(appointment.estimated_total || 0) ||
     services.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
 
+  const expired = isClientPortalAppointmentExpired(appointment);
+  const deadlineLabel = formatClientPortalConfirmationDeadline(
+    appointment.confirmation_deadline_at
+  );
+
   return {
     id: appointment.id,
     appointment_date: appointment.appointment_date,
@@ -105,6 +121,14 @@ function mapAppointmentForClient(appointment) {
     status: appointment.status || "agendada",
     confirmation_status:
       appointment.confirmation_status || appointment.attendance_status || "pendiente",
+    confirmation_deadline_at: appointment.confirmation_deadline_at || null,
+    confirmation_deadline_label: deadlineLabel,
+    confirmation_deadline_message: expired
+      ? "Esta solicitud venció al no confirmarse dentro del tiempo establecido."
+      : buildClientPortalDeadlineMessage(
+          appointment.confirmation_deadline_at
+        ),
+    confirmation_expired: expired,
     booking_source: appointment.booking_source || "",
     status_label: getClientAppointmentStatusLabel(appointment),
     attendance_status: appointment.attendance_status || "pendiente",
@@ -154,6 +178,10 @@ export async function GET(request) {
     }
 
     const client = await ensureClientForUser(adminSupabase, session.user);
+    const reconciliation = await reconcileExpiredClientPortalAppointments(
+      adminSupabase
+    );
+    if (reconciliation.error) throw reconciliation.error;
 
     const { data, error } = await adminSupabase
       .from("appointments")
@@ -166,6 +194,7 @@ export async function GET(request) {
         end_time,
         status,
         confirmation_status,
+        confirmation_deadline_at,
         attendance_status,
         estimated_total,
         client_visible_notes,
@@ -227,6 +256,11 @@ export async function POST(request) {
     }
     const client = profile.client;
     const body = await request.json();
+    const reconciliation = await reconcileExpiredClientPortalAppointments(
+      adminSupabase
+    );
+    if (reconciliation.error) throw reconciliation.error;
+
     if (hasForbiddenWriteControls(body)) {
       return errorResponse("La solicitud no es válida.", 400);
     }
@@ -346,6 +380,29 @@ export async function POST(request) {
       );
     }
 
+    const { data: persistedAppointment } = await adminSupabase
+      .from("appointments")
+      .select(
+        "id, confirmation_status, confirmation_deadline_at, booking_source"
+      )
+      .eq("id", result.appointmentId)
+      .maybeSingle();
+    const confirmationDeadlineAt =
+      persistedAppointment?.confirmation_deadline_at ||
+      result.confirmationDeadlineAt ||
+      null;
+    const confirmationDeadlineMessage = buildClientPortalDeadlineMessage(
+      confirmationDeadlineAt
+    );
+    const statusLabel = getClientAppointmentStatusLabel({
+      status: "agendada",
+      confirmation_status:
+        persistedAppointment?.confirmation_status || "pendiente",
+      booking_source:
+        persistedAppointment?.booking_source || "cliente_portal",
+      confirmation_deadline_at: confirmationDeadlineAt,
+    });
+
     const serviceText = currentPreview.services
       .map((service) => service.name)
       .filter(Boolean)
@@ -373,9 +430,15 @@ export async function POST(request) {
         start_time: startTime,
         end_time: selectedSlot.end_time,
         status: "agendada",
-        confirmation_status: "pendiente",
-        booking_source: "cliente_portal",
-        status_label: "Pendiente de anticipo",
+        confirmation_status:
+          persistedAppointment?.confirmation_status || "pendiente",
+        confirmation_deadline_at: confirmationDeadlineAt,
+        confirmation_deadline_label:
+          formatClientPortalConfirmationDeadline(confirmationDeadlineAt),
+        confirmation_deadline_message: confirmationDeadlineMessage,
+        booking_source:
+          persistedAppointment?.booking_source || "cliente_portal",
+        status_label: statusLabel,
         services: currentPreview.services.map((service) => ({
           id: service.id,
           service_id: service.id,
@@ -394,6 +457,7 @@ export async function POST(request) {
       write_mode: result.mode,
       replay: result.isReplay,
       message:
+        confirmationDeadlineMessage ||
         "Tu horario fue apartado. Tu cita está pendiente de anticipo y confirmación por parte del salón.",
     }, { status: result.isReplay ? 200 : 201 });
   } catch (error) {
@@ -421,7 +485,7 @@ export async function PATCH(request) {
     const { data: appointment, error: appointmentError } = await adminSupabase
       .from("appointments")
       .select(
-        "id, client_id, appointment_date, start_time, end_time, status, confirmation_status, attendance_status"
+        "id, client_id, appointment_date, start_time, end_time, status, confirmation_status, confirmation_deadline_at, attendance_status, booking_source"
       )
       .eq("id", appointmentId)
       .eq("client_id", client.id)
