@@ -50,6 +50,29 @@ export const staffAppointmentReportColumns = [
   { key: "estado", label: "Estado de la cita", width: 22 },
 ];
 
+export const retentionAlertReportColumns = [
+  { key: "clienta", label: "Clienta", width: 28 },
+  { key: "telefono", label: "Teléfono", width: 18 },
+  { key: "motivo", label: "Motivo", width: 28 },
+  { key: "familia", label: "Familia", width: 16 },
+  { key: "ultimaVisita", label: "Última visita", width: 14, format: "yyyy-mm-dd" },
+  { key: "ultimoServicio", label: "Último servicio", width: 34 },
+  { key: "diasSinRegresar", label: "Días sin regresar", width: 18 },
+  { key: "rachaMensual", label: "Racha mensual", width: 16 },
+  { key: "totalVisitas", label: "Total visitas", width: 14 },
+  { key: "proximaCita", label: "Próxima cita", width: 18 },
+  { key: "estadoSeguimiento", label: "Estado de seguimiento", width: 22 },
+];
+
+export const frequentClientReportColumns = [
+  { key: "clienta", label: "Clienta", width: 28 },
+  { key: "telefono", label: "Teléfono", width: 18 },
+  { key: "rachaMensual", label: "Racha mensual", width: 16 },
+  { key: "visitasPeriodo", label: "Visitas en la racha", width: 20 },
+  { key: "ultimaVisita", label: "Última visita", width: 14, format: "yyyy-mm-dd" },
+  { key: "familiasFrecuentes", label: "Familias más frecuentes", width: 30 },
+];
+
 const statusLabels = {
   pendiente: "Pendiente",
   confirmada: "Confirmada",
@@ -597,6 +620,84 @@ function createSummaryRows(appointments, filters) {
   return summaryRows;
 }
 
+function createRetentionSummaryRows(retentionReport, filters) {
+  const summary = retentionReport?.summary || {};
+  const historicalDates = retentionReport?.historicalDates || {};
+
+  return [
+    ["Métrica", "Valor"],
+    ["Fecha inicial seleccionada", toLocalDate(filters.startDate)],
+    ["Fecha final seleccionada", toLocalDate(filters.endDate)],
+    ["Fecha de análisis", toLocalDate(retentionReport?.asOfDate || filters.endDate)],
+    [
+      "Definición",
+      "Solo se cuentan visitas válidas: asistió, llegó retrasada, finalizada o con cobro registrado. Canceladas, vencidas, pendientes sin confirmar y no asistió no cuentan como visita.",
+    ],
+    [],
+    ["Clientas activas", summary.activeClients || 0],
+    ["Clientas nuevas", summary.newClients || 0],
+    ["Clientas recurrentes", summary.recurringClients || 0],
+    ["Visitas válidas", summary.validVisits || 0],
+    ["5+ semanas Manos/Pies", summary.fiveWeekAlerts || 0],
+    ["3+ meses inactivas", summary.inactiveClients || 0],
+    ["Clientas frecuentes 3 meses", summary.frequentThreeMonths || 0],
+    ["Clientas frecuentes 4+ meses", summary.frequentFourPlusMonths || 0],
+    ["Autoagendas confirmadas", summary.autoBookingsConfirmed || 0],
+    ["Autoagendas canceladas", summary.autoBookingsCancelled || 0],
+    ["Autoagendas vencidas", summary.autoBookingsExpired || 0],
+    [],
+    ["Histórico más antiguo detectado en datos cargados", "Fecha"],
+    ["Citas", historicalDates.appointments || ""],
+    ["Servicios por cita", historicalDates.appointmentServices || ""],
+    ["Pagos", historicalDates.payments || ""],
+    ["Clientas", historicalDates.clients || ""],
+    ["Seguimientos", historicalDates.followups || ""],
+  ];
+}
+
+function appendRetentionSummarySheet(XLSX, workbook, retentionReport, filters) {
+  const worksheet = XLSX.utils.aoa_to_sheet(
+    createRetentionSummaryRows(retentionReport, filters),
+    {
+      cellDates: true,
+    }
+  );
+
+  worksheet["!cols"] = [{ wch: 44 }, { wch: 96 }];
+  worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Resumen");
+}
+
+function createRetentionAlertRows(alerts = []) {
+  return asArray(alerts).map((alert) => ({
+    clienta: cleanText(alert.clientName) || "Clienta",
+    telefono: cleanText(alert.phone),
+    motivo: cleanText(alert.alertLabel),
+    familia: cleanText(alert.familyLabel),
+    ultimaVisita: toLocalDate(alert.lastVisitDate),
+    ultimoServicio: uniqueTexts(alert.lastServiceNames || []).join(", "),
+    diasSinRegresar: toNumber(alert.daysSinceLastVisit, 0),
+    rachaMensual: "",
+    totalVisitas: toNumber(alert.totalVisits, 0) || "",
+    proximaCita: cleanText(alert.nextAppointmentText) || "ninguna",
+    estadoSeguimiento: alert.hasUpcomingAppointment
+      ? "Con próxima cita"
+      : "Por contactar manualmente",
+  }));
+}
+
+function createFrequentClientRows(clients = []) {
+  return asArray(clients).map((client) => ({
+    clienta: cleanText(client.clientName) || "Clienta",
+    telefono: cleanText(client.phone),
+    rachaMensual: cleanText(client.streakLabel),
+    visitasPeriodo: toNumber(client.visitsInPeriod, 0),
+    ultimaVisita: toLocalDate(client.lastVisitDate),
+    familiasFrecuentes: uniqueTexts(client.frequentFamilies || []).join(", "),
+  }));
+}
+
 function appendSummarySheet(XLSX, workbook, appointments, filters) {
   const worksheet = XLSX.utils.aoa_to_sheet(createSummaryRows(appointments, filters), {
     cellDates: true,
@@ -685,8 +786,50 @@ export function buildAppointmentReportWorkbook(XLSX, { appointments = [], filter
   return workbook;
 }
 
+export function buildRetentionReportWorkbook(
+  XLSX,
+  { retentionReport = {}, filters = {} } = {}
+) {
+  if (!XLSX?.utils?.book_new) {
+    throw new Error("xlsx_unavailable");
+  }
+
+  const workbook = XLSX.utils.book_new();
+
+  appendRetentionSummarySheet(XLSX, workbook, retentionReport, filters);
+  appendSheet(
+    XLSX,
+    workbook,
+    "5+ semanas",
+    createRetentionAlertRows(retentionReport.fiveWeekAlerts),
+    retentionAlertReportColumns
+  );
+  appendSheet(
+    XLSX,
+    workbook,
+    "3+ meses",
+    createRetentionAlertRows(retentionReport.inactiveClients),
+    retentionAlertReportColumns
+  );
+  appendSheet(
+    XLSX,
+    workbook,
+    "Frecuentes",
+    createFrequentClientRows(retentionReport.frequentClients),
+    frequentClientReportColumns
+  );
+
+  return workbook;
+}
+
 export function createAppointmentReportFileName(startDate, endDate) {
   const cleanStart = cleanText(startDate) || "sin-inicio";
   const cleanEnd = cleanText(endDate) || cleanStart;
   return `reporte-citas-${cleanStart}-a-${cleanEnd}.xlsx`;
+}
+
+export function createRetentionReportFileName(startDate, endDate) {
+  const cleanStart = cleanText(startDate) || "sin-inicio";
+  const cleanEnd = cleanText(endDate) || cleanStart;
+  return `reporte-retencion-${cleanStart}-a-${cleanEnd}.xlsx`;
 }

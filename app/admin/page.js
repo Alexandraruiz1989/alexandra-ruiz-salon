@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  addMonthsISO,
+  buildClientRetentionReport,
+  formatRetentionDate,
+} from "../lib/clientRetentionReports";
 import { supabase } from "../lib/supabaseClient";
 import AdminShell from "./components/AdminShell";
 
@@ -13,6 +18,7 @@ const emptyDashboard = {
   popularServices: [],
   pendingFollowups: 0,
   overdueFollowups: 0,
+  frequentClients: [],
   lowStockProducts: [],
   loading: true,
   message: "",
@@ -306,6 +312,7 @@ function AdminDashboard() {
         clientsResult,
         servicesResult,
         followupsResult,
+        retentionResult,
         stockResult,
       ] = await Promise.all([
         supabase
@@ -355,6 +362,53 @@ function AdminDashboard() {
           .select("id, followup_date, followup_status")
           .eq("followup_status", "pendiente"),
         supabase
+          .from("appointments")
+          .select(
+            `
+            id,
+            client_id,
+            appointment_date,
+            start_time,
+            status,
+            attendance_status,
+            confirmation_status,
+            confirmation_deadline_at,
+            booking_source,
+            clients (
+              id,
+              full_name,
+              phone,
+              created_at
+            ),
+            payments (
+              id,
+              payment_date,
+              created_at,
+              paid_amount,
+              total_amount,
+              total,
+              payment_status
+            ),
+            appointment_services (
+              id,
+              service_id,
+              service_date,
+              start_time,
+              status,
+              custom_name,
+              services (
+                id,
+                name,
+                category,
+                bot_service_group
+              )
+            )
+          `
+          )
+          .gte("appointment_date", addMonthsISO(today, -5))
+          .lte("appointment_date", today)
+          .order("appointment_date", { ascending: false }),
+        supabase
           .from("store_products")
           .select("id, name, current_stock, min_stock, active")
           .eq("active", true),
@@ -376,6 +430,14 @@ function AdminDashboard() {
       const pendingFollowups = followupsResult.error
         ? []
         : followupsResult.data || [];
+      const retentionReport = retentionResult.error
+        ? null
+        : buildClientRetentionReport({
+            appointments: retentionResult.data || [],
+            startDate: addMonthsISO(today, -5),
+            endDate: today,
+            asOfDate: today,
+          });
 
       setDashboard({
         appointmentsToday: appointmentsWeek.filter(
@@ -395,6 +457,7 @@ function AdminDashboard() {
         overdueFollowups: pendingFollowups.filter(
           (followup) => followup.followup_date && followup.followup_date < today
         ).length,
+        frequentClients: (retentionReport?.frequentClients || []).slice(0, 10),
         lowStockProducts: stockResult.error
           ? []
           : (stockResult.data || [])
@@ -407,6 +470,8 @@ function AdminDashboard() {
         loading: false,
         message: appointmentsResult.error
           ? `No se pudo cargar todo el resumen: ${appointmentsResult.error.message}`
+          : retentionResult.error
+          ? `No se pudo cargar clientas frecuentes: ${retentionResult.error.message}`
           : "",
       });
     };
@@ -568,7 +633,7 @@ function AdminDashboard() {
             </div>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 xl:grid-cols-3">
             <DashboardPanel
               eyebrow="Servicios"
               title="Más agendados"
@@ -590,6 +655,50 @@ function AdminDashboard() {
                 {dashboard.popularServices.length === 0 && (
                   <p className="rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
                     Aún no hay suficientes servicios esta semana.
+                  </p>
+                )}
+              </div>
+            </DashboardPanel>
+
+            <DashboardPanel
+              eyebrow="Retención"
+              title="Clientas frecuentes"
+              description="Top de clientas con visitas válidas en 3 o 4+ meses consecutivos."
+            >
+              <div className="space-y-3">
+                {dashboard.frequentClients.map((client) => (
+                  <div
+                    key={client.clientId}
+                    className="rounded-2xl bg-[#f7f9fa] px-4 py-3 text-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-[#263238]">
+                          {client.clientName || "Clienta"}
+                        </p>
+                        <p className="mt-1 text-[#68777c]">
+                          Última visita: {formatRetentionDate(client.lastVisitDate)}
+                        </p>
+                        {client.frequentFamilies?.length ? (
+                          <p className="mt-1 text-[#68777c]">
+                            Familias: {client.frequentFamilies.join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
+                      <span className="rounded-full bg-[#f7eeee] px-3 py-1 text-xs font-medium text-[#8a5f63]">
+                        {client.streakLabel}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-[#68777c]">
+                      {client.visitsInPeriod} visita
+                      {client.visitsInPeriod === 1 ? "" : "s"} en la racha.
+                    </p>
+                  </div>
+                ))}
+
+                {dashboard.frequentClients.length === 0 && (
+                  <p className="rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
+                    Todavía no hay una racha de 3 meses consecutivos visible.
                   </p>
                 )}
               </div>

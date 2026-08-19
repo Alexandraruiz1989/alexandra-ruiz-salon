@@ -5,11 +5,21 @@ import {
   buildFollowupWhatsAppMessage,
   buildWhatsAppUrl,
 } from "../../lib/manualWhatsApp";
+import {
+  buildClientRetentionReport,
+  buildFollowupSuppressionMap,
+  buildRetentionWhatsAppMessage,
+  formatRetentionDate,
+  getRetentionHistoryWindowStart,
+  shouldSuppressFollowupByUpcomingAppointment,
+} from "../../lib/clientRetentionReports";
 import { supabase } from "../../lib/supabaseClient";
 import AdminShell from "../components/AdminShell";
 
 const menuItems = [
   { key: "pendientes", label: "Pendientes" },
+  { key: "cinco-semanas", label: "5+ semanas" },
+  { key: "inactivas", label: "3+ meses" },
   { key: "vencidos", label: "Vencidos" },
   { key: "enviados", label: "Enviados" },
 ];
@@ -61,6 +71,7 @@ export default function SeguimientosPage() {
   const [message, setMessage] = useState("");
 
   const [followups, setFollowups] = useState([]);
+  const [retentionAppointments, setRetentionAppointments] = useState([]);
   const [editableMessages, setEditableMessages] = useState({});
 
   useEffect(() => {
@@ -89,16 +100,21 @@ export default function SeguimientosPage() {
     return () => clearTimeout(timer);
   }, [message]);
 
-  const loadFollowups = async () => {
+  async function loadFollowups() {
     setLoadingData(true);
     setMessage("");
 
-    const { data, error } = await supabase
-      .from("appointment_followups")
-      .select(
-        `
+    const today = todayISO();
+    const retentionStartDate = getRetentionHistoryWindowStart(today);
+
+    const [followupsResult, retentionResult] = await Promise.all([
+      supabase
+        .from("appointment_followups")
+        .select(
+          `
         *,
         clients (
+          id,
           full_name,
           phone
         ),
@@ -114,13 +130,63 @@ export default function SeguimientosPage() {
           start_time
         )
       `
-      )
-      .order("followup_date", { ascending: true });
+        )
+        .order("followup_date", { ascending: true }),
+      supabase
+        .from("appointments")
+        .select(
+          `
+          id,
+          client_id,
+          appointment_date,
+          start_time,
+          status,
+          attendance_status,
+          confirmation_status,
+          confirmation_deadline_at,
+          booking_source,
+          clients (
+            id,
+            full_name,
+            phone,
+            created_at
+          ),
+          payments (
+            id,
+            payment_date,
+            created_at,
+            paid_amount,
+            total_amount,
+            total,
+            payment_status
+          ),
+          appointment_services (
+            id,
+            service_id,
+            service_date,
+            start_time,
+            status,
+            custom_name,
+            total_price,
+            services (
+              id,
+              name,
+              category,
+              bot_service_group
+            )
+          )
+        `
+        )
+        .gte("appointment_date", retentionStartDate)
+        .order("appointment_date", { ascending: false }),
+    ]);
 
-    if (error) {
-      setMessage(`No se pudieron cargar seguimientos: ${error.message}`);
+    if (followupsResult.error) {
+      setMessage(
+        `No se pudieron cargar seguimientos: ${followupsResult.error.message}`
+      );
     } else {
-      const nextFollowups = data || [];
+      const nextFollowups = followupsResult.data || [];
       setFollowups(nextFollowups);
       setEditableMessages((current) => {
         const nextMessages = { ...current };
@@ -135,12 +201,35 @@ export default function SeguimientosPage() {
       });
     }
 
+    if (retentionResult.error) {
+      setMessage(
+        `No se pudo cargar retención: ${retentionResult.error.message}`
+      );
+    } else {
+      setRetentionAppointments(retentionResult.data || []);
+    }
+
     setLoadingData(false);
-  };
+  }
+
+  const followupSuppressionMap = useMemo(
+    () =>
+      buildFollowupSuppressionMap(retentionAppointments, {
+        asOfDate: todayISO(),
+      }),
+    [retentionAppointments]
+  );
 
   const pendingFollowups = useMemo(() => {
-    return followups.filter((item) => item.followup_status === "pendiente");
-  }, [followups]);
+    return followups.filter(
+      (item) =>
+        item.followup_status === "pendiente" &&
+        !shouldSuppressFollowupByUpcomingAppointment(
+          item,
+          followupSuppressionMap
+        )
+    );
+  }, [followups, followupSuppressionMap]);
 
   const expiredFollowups = useMemo(() => {
     const today = todayISO();
@@ -151,6 +240,17 @@ export default function SeguimientosPage() {
     );
   }, [followups]);
 
+  const retentionReport = useMemo(
+    () =>
+      buildClientRetentionReport({
+        appointments: retentionAppointments,
+        startDate: getRetentionHistoryWindowStart(todayISO()),
+        endDate: todayISO(),
+        asOfDate: todayISO(),
+      }),
+    [retentionAppointments]
+  );
+
   const sentFollowups = useMemo(() => {
     return followups.filter((item) => item.followup_status === "enviado");
   }, [followups]);
@@ -160,6 +260,13 @@ export default function SeguimientosPage() {
     if (activeSection === "enviados") return sentFollowups;
     return pendingFollowups;
   }, [activeSection, pendingFollowups, expiredFollowups, sentFollowups]);
+
+  const visibleRetentionAlerts =
+    activeSection === "cinco-semanas"
+      ? retentionReport.fiveWeekAlerts
+      : activeSection === "inactivas"
+      ? retentionReport.inactiveClients
+      : [];
 
   const markAsSent = async (followup) => {
     setMessage("Marcando seguimiento como enviado...");
@@ -239,6 +346,27 @@ export default function SeguimientosPage() {
         </Card>
       </div>
 
+      {(activeSection === "cinco-semanas" || activeSection === "inactivas") && (
+        <RetentionAlertsCard
+          loading={loadingData}
+          alerts={visibleRetentionAlerts}
+          title={
+            activeSection === "cinco-semanas"
+              ? "5+ semanas sin regresar"
+              : "3+ meses sin visitar"
+          }
+          description={
+            activeSection === "cinco-semanas"
+              ? "Clientas con servicios históricos de Manos o Pies, sin próxima cita activa de esa familia."
+              : "Clientas históricas sin visita válida en al menos 90 días y sin próxima cita activa."
+          }
+          editableMessages={editableMessages}
+          updateEditableMessage={updateEditableMessage}
+          setMessage={setMessage}
+        />
+      )}
+
+      {activeSection !== "cinco-semanas" && activeSection !== "inactivas" && (
       <Card>
         <SectionHeader
           eyebrow="Reagendado"
@@ -378,6 +506,123 @@ export default function SeguimientosPage() {
           </div>
         )}
       </Card>
+      )}
     </AdminShell>
+  );
+}
+
+function RetentionAlertsCard({
+  loading,
+  alerts,
+  title,
+  description,
+  editableMessages,
+  updateEditableMessage,
+  setMessage,
+}) {
+  return (
+    <Card>
+      <SectionHeader
+        eyebrow="Retención"
+        title={title}
+        description={`${description} El mensaje se prepara para envío manual por WhatsApp.`}
+      />
+
+      {loading ? (
+        <p className="text-sm text-[#68777c]">Cargando retención...</p>
+      ) : alerts.length === 0 ? (
+        <div className="rounded-2xl bg-[#f7f9fa] p-5 text-sm text-[#68777c]">
+          No hay clientas en esta alerta.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {alerts.map((alert) => {
+            const key = `${alert.type}:${alert.clientId}:${alert.family}`;
+            const currentMessage =
+              editableMessages[key] ?? buildRetentionWhatsAppMessage(alert);
+            const whatsappUrl = currentMessage.trim()
+              ? buildWhatsAppUrl(alert.phone, currentMessage)
+              : "";
+            const canOpenWhatsApp = Boolean(whatsappUrl);
+
+            return (
+              <div
+                key={key}
+                className="rounded-2xl border border-[#dde3e6] bg-[#fdfefe] p-5"
+              >
+                <div className="flex flex-col justify-between gap-4 lg:flex-row">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.25em] text-[#bd7b83]">
+                      {alert.alertLabel}
+                    </p>
+                    <h3 className="mt-2 text-xl font-light">
+                      {alert.clientName || "Clienta"}
+                    </h3>
+                    <div className="mt-3 grid gap-2 text-sm text-[#68777c] sm:grid-cols-2">
+                      <p>Familia: {alert.familyLabel}</p>
+                      <p>Última visita: {formatRetentionDate(alert.lastVisitDate)}</p>
+                      <p>
+                        Tiempo sin regresar: {alert.daysSinceLastVisit} días
+                        {alert.weeksSinceLastVisit
+                          ? ` · ${alert.weeksSinceLastVisit} semanas`
+                          : ""}
+                      </p>
+                      <p>Próxima cita: {alert.nextAppointmentText}</p>
+                      <p className="sm:col-span-2">
+                        Último servicio:{" "}
+                        {(alert.lastServiceNames || []).join(", ") || "Servicio"}
+                      </p>
+                      {alert.totalVisits ? (
+                        <p>Total histórico de visitas: {alert.totalVisits}</p>
+                      ) : null}
+                    </div>
+
+                    <label className="mt-4 block text-xs uppercase tracking-[0.2em] text-[#bd7b83]">
+                      Mensaje para WhatsApp
+                    </label>
+                    <textarea
+                      value={currentMessage}
+                      onChange={(event) =>
+                        updateEditableMessage(key, event.target.value)
+                      }
+                      rows={5}
+                      className="mt-2 w-full rounded-2xl border border-[#dde3e6] bg-white/80 px-4 py-3 text-sm leading-6 text-[#263238] outline-none transition focus:border-[#bd7b83] focus:ring-2 focus:ring-[#f2d6db]"
+                    />
+                  </div>
+
+                  <div className="flex min-w-52 flex-col gap-2">
+                    {canOpenWhatsApp ? (
+                      <a
+                        href={whatsappUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => setMessage("")}
+                        className="inline-flex cursor-pointer items-center justify-center rounded-full bg-[#25D366] px-5 py-3 text-sm text-white transition hover:opacity-90"
+                      >
+                        Enviar WhatsApp
+                      </a>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled
+                          className="rounded-full bg-[#25D366]/40 px-5 py-3 text-sm text-white disabled:cursor-not-allowed"
+                        >
+                          Enviar WhatsApp
+                        </button>
+                        <p className="text-xs leading-5 text-[#68777c]">
+                          Esta clienta no tiene un número de WhatsApp válido
+                          registrado o el mensaje está vacío.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }

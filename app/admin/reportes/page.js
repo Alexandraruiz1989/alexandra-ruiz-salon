@@ -5,14 +5,24 @@ import AdminShell from "../components/AdminShell";
 import { supabase } from "../../lib/supabaseClient";
 import {
   buildAppointmentReportWorkbook,
+  buildRetentionReportWorkbook,
   createAppointmentReportFileName,
+  createRetentionReportFileName,
   filterReportAppointments,
 } from "../../lib/reportesAppointmentExcel";
+import {
+  addYearsISO,
+  buildClientRetentionReport,
+  formatRetentionDate,
+  getRetentionHistoryWindowStart,
+  isRetentionRangeAllowed,
+} from "../../lib/clientRetentionReports";
 import { getReportCommissionAmount } from "../../lib/paymentEconomics";
 
 const menuItems = [
   { key: "comisiones", label: "Comisiones" },
   { key: "asistencia", label: "Asistencia" },
+  { key: "retencion", label: "Retención" },
   { key: "ajustes", label: "Faltas / Retardos / Vacaciones" },
   { key: "sueldos", label: "Sueldos semanales" },
   { key: "imprimible", label: "Recibo imprimible" },
@@ -161,6 +171,127 @@ function normalizeAdjustmentType(type) {
   return String(type || "").toLowerCase();
 }
 
+function MetricCard({ label, value, help }) {
+  return (
+    <div className="rounded-2xl bg-[#f7f9fa] p-4">
+      <p className="text-xs uppercase tracking-[0.18em] text-[#bd7b83]">
+        {label}
+      </p>
+      <p className="mt-2 text-3xl font-light text-[#263238]">
+        {Number(value || 0)}
+      </p>
+      {help && <p className="mt-2 text-xs leading-5 text-[#68777c]">{help}</p>}
+    </div>
+  );
+}
+
+function RetentionAlertList({ title, rows, emptyText }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-lg font-medium text-[#263238]">{title}</h4>
+        <span className="rounded-full bg-[#f7eeee] px-3 py-1 text-xs font-medium text-[#8a5f63]">
+          {rows.length}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="grid gap-3 xl:grid-cols-2">
+          {rows.slice(0, 20).map((row) => (
+            <div
+              key={`${row.type}:${row.clientId}:${row.family}`}
+              className="rounded-2xl border border-[#edf0f2] bg-[#fdfefe] p-4 text-sm"
+            >
+              <div className="flex flex-col justify-between gap-2 sm:flex-row">
+                <div>
+                  <p className="font-medium text-[#263238]">
+                    {row.clientName || "Clienta"}
+                  </p>
+                  <p className="mt-1 text-[#68777c]">
+                    {row.familyLabel} · {row.daysSinceLastVisit} días sin regresar
+                  </p>
+                </div>
+                <span className="self-start rounded-full bg-[#f7eeee] px-3 py-1 text-xs text-[#8a5f63]">
+                  {row.nextAppointmentText}
+                </span>
+              </div>
+
+              <p className="mt-3 text-[#68777c]">
+                Última visita: {formatRetentionDate(row.lastVisitDate)}
+              </p>
+              <p className="mt-1 text-[#68777c]">
+                Último servicio: {(row.lastServiceNames || []).join(", ") || "Servicio"}
+              </p>
+              {row.totalVisits ? (
+                <p className="mt-1 text-[#68777c]">
+                  Total histórico de visitas: {row.totalVisits}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FrequentClientsList({ rows }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-lg font-medium text-[#263238]">
+          Clientas frecuentes
+        </h4>
+        <span className="rounded-full bg-[#f7eeee] px-3 py-1 text-xs font-medium text-[#8a5f63]">
+          {rows.length}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="rounded-2xl bg-[#f7f9fa] p-4 text-sm text-[#68777c]">
+          No hay rachas de 3 meses consecutivos visibles en este corte.
+        </p>
+      ) : (
+        <div className="grid gap-3 xl:grid-cols-2">
+          {rows.slice(0, 20).map((row) => (
+            <div
+              key={row.clientId}
+              className="rounded-2xl border border-[#edf0f2] bg-[#fdfefe] p-4 text-sm"
+            >
+              <div className="flex flex-col justify-between gap-2 sm:flex-row">
+                <div>
+                  <p className="font-medium text-[#263238]">
+                    {row.clientName || "Clienta"}
+                  </p>
+                  <p className="mt-1 text-[#68777c]">
+                    Última visita: {formatRetentionDate(row.lastVisitDate)}
+                  </p>
+                </div>
+                <span className="self-start rounded-full bg-[#f7eeee] px-3 py-1 text-xs text-[#8a5f63]">
+                  {row.streakLabel}
+                </span>
+              </div>
+              <p className="mt-3 text-[#68777c]">
+                {row.visitsInPeriod} visita
+                {row.visitsInPeriod === 1 ? "" : "s"} en la racha.
+              </p>
+              {row.frequentFamilies?.length ? (
+                <p className="mt-1 text-[#68777c]">
+                  Familias: {row.frequentFamilies.join(", ")}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function ReportesPage() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
@@ -169,6 +300,7 @@ export default function ReportesPage() {
   const [salaryMessage, setSalaryMessage] = useState("");
 const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
   const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportingRetentionExcel, setExportingRetentionExcel] = useState(false);
 
   const [rangeType, setRangeType] = useState("week");
   const [baseDate, setBaseDate] = useState(todayISO());
@@ -180,6 +312,8 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
   const [paymentStaffTotals, setPaymentStaffTotals] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [attendanceAppointments, setAttendanceAppointments] = useState([]);
+  const [retentionAppointments, setRetentionAppointments] = useState([]);
+  const [retentionFollowups, setRetentionFollowups] = useState([]);
 
   const [salaryDrafts, setSalaryDrafts] = useState({});
   const [adjustmentForm, setAdjustmentForm] = useState({
@@ -264,12 +398,30 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
     setLoadingData(true);
     setMessage("");
 
+    const rangeValidation = isRetentionRangeAllowed(startDate, endDate);
+    if (!rangeValidation.ok) {
+      setStaff([]);
+      setPaymentStaffTotals([]);
+      setAdjustments([]);
+      setAttendanceAppointments([]);
+      setRetentionAppointments([]);
+      setRetentionFollowups([]);
+      setMessage(rangeValidation.message);
+      setLoadingData(false);
+      return;
+    }
+
+    const retentionHistoryStart = getRetentionHistoryWindowStart(endDate);
+    const retentionFutureEnd = addYearsISO(endDate, 1);
+
     const [
       staffResult,
       settingsResult,
       totalsResult,
       adjustmentsResult,
       attendanceResult,
+      retentionResult,
+      retentionFollowupsResult,
     ] =
       await Promise.all([
         supabase.from("staff").select("*").order("full_name"),
@@ -386,6 +538,60 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
           .lte("appointment_date", endDate)
           .order("appointment_date", { ascending: false })
           .order("start_time", { ascending: false }),
+
+        supabase
+          .from("appointments")
+          .select(
+            `
+            id,
+            client_id,
+            appointment_date,
+            start_time,
+            status,
+            attendance_status,
+            confirmation_status,
+            confirmation_deadline_at,
+            booking_source,
+            clients (
+              id,
+              full_name,
+              phone,
+              created_at
+            ),
+            payments (
+              id,
+              payment_date,
+              created_at,
+              paid_amount,
+              total_amount,
+              total,
+              payment_status
+            ),
+            appointment_services (
+              id,
+              service_id,
+              service_date,
+              start_time,
+              status,
+              custom_name,
+              services (
+                id,
+                name,
+                category,
+                bot_service_group
+              )
+            )
+          `
+          )
+          .gte("appointment_date", retentionHistoryStart)
+          .lte("appointment_date", retentionFutureEnd)
+          .order("appointment_date", { ascending: false }),
+        supabase
+          .from("appointment_followups")
+          .select("id, followup_date, created_at")
+          .gte("followup_date", retentionHistoryStart)
+          .lte("followup_date", retentionFutureEnd)
+          .order("followup_date", { ascending: true }),
       ]);
 
     if (staffResult.error) {
@@ -431,6 +637,22 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
       setAttendanceAppointments(attendanceResult.data || []);
     }
 
+    if (retentionResult.error) {
+      setMessage(
+        `No se pudo cargar reporte de retención: ${retentionResult.error.message}`
+      );
+    } else {
+      setRetentionAppointments(retentionResult.data || []);
+    }
+
+    if (retentionFollowupsResult.error) {
+      setMessage(
+        `No se pudo cargar histórico de seguimientos: ${retentionFollowupsResult.error.message}`
+      );
+    } else {
+      setRetentionFollowups(retentionFollowupsResult.data || []);
+    }
+
     setLoadingData(false);
   }
 
@@ -452,6 +674,18 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
     () =>
       filterReportAppointments(attendanceAppointments, appointmentExportFilters),
     [attendanceAppointments, appointmentExportFilters]
+  );
+
+  const retentionReport = useMemo(
+    () =>
+      buildClientRetentionReport({
+        appointments: retentionAppointments,
+        followups: retentionFollowups,
+        startDate,
+        endDate,
+        asOfDate: endDate,
+      }),
+    [retentionAppointments, retentionFollowups, startDate, endDate]
   );
 
   const downloadAppointmentsExcel = async () => {
@@ -482,6 +716,36 @@ const [activeSalaryMessageId, setActiveSalaryMessageId] = useState(null);
       );
     } finally {
       setExportingExcel(false);
+    }
+  };
+
+  const downloadRetentionExcel = async () => {
+    setMessage("");
+    setExportingRetentionExcel(true);
+
+    try {
+      const xlsxModule = await import("xlsx");
+      const XLSX = xlsxModule.default?.utils ? xlsxModule.default : xlsxModule;
+      const workbook = buildRetentionReportWorkbook(XLSX, {
+        retentionReport,
+        filters: {
+          startDate,
+          endDate,
+        },
+      });
+
+      XLSX.writeFile(workbook, createRetentionReportFileName(startDate, endDate), {
+        bookType: "xlsx",
+        cellDates: true,
+      });
+    } catch (error) {
+      setMessage(
+        `No se pudo generar el Excel de retención: ${
+          error?.message || "inténtalo nuevamente"
+        }`
+      );
+    } finally {
+      setExportingRetentionExcel(false);
     }
   };
 
@@ -815,7 +1079,7 @@ periodDays: getDaysBetween(startDate, endDate),
           <SectionHeader
             eyebrow="Periodo"
             title="Selecciona rango del reporte"
-            description="Puedes sacar comisiones por día, semana, mes o rango personalizado."
+            description="Puedes sacar comisiones por día, semana, mes o rango personalizado de hasta 3 años."
           />
 
           <div className="grid gap-4 lg:grid-cols-[0.6fr_1fr_1fr_1fr]">
@@ -931,6 +1195,29 @@ periodDays: getDaysBetween(startDate, endDate),
               className="rounded-full bg-[#263238] px-6 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {exportingExcel ? "Generando Excel..." : "Descargar Excel"}
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3 rounded-2xl bg-[#f7f9fa] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#263238]">
+                Exportar retención del periodo
+              </p>
+              <p className="mt-1 text-xs text-[#68777c]">
+                Incluye clientas activas, nuevas, recurrentes, 5+ semanas,
+                3+ meses, rachas mensuales y autoagendas del rango.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={downloadRetentionExcel}
+              disabled={loadingData || exportingRetentionExcel}
+              className="rounded-full bg-[#263238] px-6 py-3 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exportingRetentionExcel
+                ? "Generando retención..."
+                : "Descargar retención"}
             </button>
           </div>
         </Card>
@@ -1175,6 +1462,100 @@ periodDays: getDaysBetween(startDate, endDate),
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeSection === "retencion" && (
+        <Card>
+          <SectionHeader
+            eyebrow="Retención"
+            title="Clientas, regreso y oportunidades"
+            description="Solo cuenta visitas válidas: asistencia, finalización o cobro registrado. Canceladas, vencidas, pendientes sin confirmar y no asistencias no cuentan como visita."
+          />
+
+          {loadingData ? (
+            <p className="text-sm text-[#68777c]">Cargando retención...</p>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricCard
+                  label="Clientas activas"
+                  value={retentionReport.summary.activeClients}
+                  help="Con al menos una visita válida dentro del rango."
+                />
+                <MetricCard
+                  label="Clientas nuevas"
+                  value={retentionReport.summary.newClients}
+                  help="Primera visita válida detectada dentro del rango."
+                />
+                <MetricCard
+                  label="Clientas recurrentes"
+                  value={retentionReport.summary.recurringClients}
+                  help="Ya tenían una visita válida antes del rango."
+                />
+                <MetricCard
+                  label="Visitas válidas"
+                  value={retentionReport.summary.validVisits}
+                  help="Citas únicas con evidencia de asistencia, finalización o cobro."
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricCard
+                  label="5+ semanas"
+                  value={retentionReport.summary.fiveWeekAlerts}
+                  help="Manos/Pies con 35 días o más sin próxima cita activa."
+                />
+                <MetricCard
+                  label="3+ meses"
+                  value={retentionReport.summary.inactiveClients}
+                  help="Última visita válida hace 90 días o más y sin próxima cita."
+                />
+                <MetricCard
+                  label="Frecuentes 3 meses"
+                  value={retentionReport.summary.frequentThreeMonths}
+                  help="Al menos una visita válida en cada uno de 3 meses consecutivos."
+                />
+                <MetricCard
+                  label="Frecuentes 4+"
+                  value={retentionReport.summary.frequentFourPlusMonths}
+                  help="Racha de 4 o más meses calendario con visitas válidas."
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <MetricCard
+                  label="Autoagendas confirmadas"
+                  value={retentionReport.summary.autoBookingsConfirmed}
+                  help="Solicitudes del portal/clienta confirmadas o activas dentro del rango."
+                />
+                <MetricCard
+                  label="Autoagendas canceladas"
+                  value={retentionReport.summary.autoBookingsCancelled}
+                  help="Solicitudes del portal/clienta canceladas dentro del rango."
+                />
+                <MetricCard
+                  label="Autoagendas vencidas"
+                  value={retentionReport.summary.autoBookingsExpired}
+                  help="Solicitudes del portal/clienta vencidas dentro del rango."
+                />
+              </div>
+
+              <RetentionAlertList
+                title="5+ semanas sin regresar"
+                rows={retentionReport.fiveWeekAlerts}
+                emptyText="No hay alertas de Manos/Pies para este corte."
+              />
+
+              <RetentionAlertList
+                title="3+ meses sin visitar"
+                rows={retentionReport.inactiveClients}
+                emptyText="No hay clientas históricas inactivas para este corte."
+              />
+
+              <FrequentClientsList rows={retentionReport.frequentClients} />
             </div>
           )}
         </Card>
